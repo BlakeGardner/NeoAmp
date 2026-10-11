@@ -1,15 +1,23 @@
 //! UI state, window layout, hit testing and input handling.
 
+use std::fmt::Write as _;
 use std::time::Instant;
 
 use crate::canvas::{Image, Rect};
 use crate::font::TtfFont;
-use crate::skin::{Skin, region_mask};
+use crate::skin::{Mask, Skin};
 use crate::sprites::{eq as e, main as m, pl as p};
 use crate::vis::Vis;
 use crate::{eq_window, main_window, playlist_window};
 
+/// The marquee advances one character this often, like Winamp 2.x.
 pub const MARQUEE_STEP_MS: u128 = 220;
+/// Inserted between repeats of a scrolling title.
+const MARQUEE_SEPARATOR: &str = "  ***  ";
+/// Two clicks on the same control closer than this count as a double-click.
+const DOUBLE_CLICK_MS: u128 = 400;
+/// Time display blink period while paused (on for half, off for half).
+const BLINK_MS: u128 = 1000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlayState {
@@ -18,6 +26,7 @@ pub enum PlayState {
     Stopped,
 }
 
+/// Every clickable thing in the three windows.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Control {
     MainTitle,
@@ -74,6 +83,33 @@ pub enum Control {
     PlMiniEject,
 }
 
+/// The draggable value controls.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Slider {
+    Volume,
+    Balance,
+    PosBar,
+    EqPreamp,
+    EqBand(usize),
+}
+
+impl Control {
+    /// The slider behind this control, if it is one.
+    #[must_use]
+    pub fn slider(self) -> Option<Slider> {
+        match self {
+            Control::Volume => Some(Slider::Volume),
+            Control::Balance => Some(Slider::Balance),
+            Control::PosBar => Some(Slider::PosBar),
+            Control::EqPreamp => Some(Slider::EqPreamp),
+            Control::EqBand(i) => Some(Slider::EqBand(i)),
+            // Everything else is a button, a title bar or a list row.
+            _ => None,
+        }
+    }
+}
+
+/// Side effects the window layer must perform after input.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     DragWindow,
@@ -101,13 +137,14 @@ pub enum KeyCmd {
     SeekForward,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Track {
     pub title: String,
     pub seconds: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Where each window sits inside the single OS window, and the total canvas size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub main: Rect,
     pub eq: Option<Rect>,
@@ -115,6 +152,7 @@ pub struct Layout {
     pub size: (i32, i32),
 }
 
+#[derive(Debug)]
 pub struct Ui {
     pub state: PlayState,
     elapsed_base: f32,
@@ -145,9 +183,13 @@ pub struct Ui {
     pub double_size: bool,
     pub active: bool,
     pub cursor: (i32, i32),
+    /// Temporary marquee text shown while a slider is dragged.
     pub marquee_override: Option<String>,
     pub start: Instant,
     last_click: Option<(Control, Instant)>,
+    /// The current track's marquee text, rebuilt only when the track changes.
+    title_chars: Vec<char>,
+    title_scrolls: bool,
 }
 
 impl Default for Ui {
@@ -156,21 +198,56 @@ impl Default for Ui {
     }
 }
 
+/// Append formatted text to `buf`. Writing to a `String` cannot fail.
+pub fn push_fmt(buf: &mut String, args: std::fmt::Arguments<'_>) {
+    buf.write_fmt(args)
+        .expect("BUG: formatting into a String never fails");
+}
+
+/// Append `m:ss` to `buf`.
+pub fn write_time(buf: &mut String, secs: u32) {
+    push_fmt(buf, format_args!("{}:{:02}", secs / 60, secs % 60));
+}
+
 impl Ui {
+    #[must_use]
     pub fn new() -> Ui {
         let tracks = vec![
-            Track { title: "DJ Mike Llama - Llama Whippin' Intro".into(), seconds: 5 },
-            Track { title: "Nullsoft - Winamp 2.91 Theme".into(), seconds: 213 },
-            Track { title: "Justin F. - Rolling Llama (Radio Edit)".into(), seconds: 254 },
-            Track { title: "The Shoutcasters - Buffering...".into(), seconds: 187 },
-            Track { title: "MilkDrop Crew - Plasma Visions".into(), seconds: 312 },
-            Track { title: "Tom P. - Llama Country".into(), seconds: 198 },
-            Track { title: "Unknown Artist - Track 07".into(), seconds: 241 },
+            Track {
+                title: "DJ Mike Llama - Llama Whippin' Intro".into(),
+                seconds: 5,
+            },
+            Track {
+                title: "Nullsoft - Winamp 2.91 Theme".into(),
+                seconds: 213,
+            },
+            Track {
+                title: "Justin F. - Rolling Llama (Radio Edit)".into(),
+                seconds: 254,
+            },
+            Track {
+                title: "The Shoutcasters - Buffering...".into(),
+                seconds: 187,
+            },
+            Track {
+                title: "MilkDrop Crew - Plasma Visions".into(),
+                seconds: 312,
+            },
+            Track {
+                title: "Tom P. - Llama Country".into(),
+                seconds: 198,
+            },
+            Track {
+                title: "Unknown Artist - Track 07".into(),
+                seconds: 241,
+            },
         ];
         let mut selected = vec![false; tracks.len()];
-        selected[0] = true;
+        if let Some(first) = selected.first_mut() {
+            *first = true;
+        }
         let now = Instant::now();
-        Ui {
+        let mut ui = Ui {
             state: PlayState::Playing,
             elapsed_base: 0.0,
             resumed_at: Some(now),
@@ -203,50 +280,66 @@ impl Ui {
             marquee_override: None,
             start: now,
             last_click: None,
-        }
+            title_chars: Vec::new(),
+            title_scrolls: false,
+        };
+        ui.refresh_title();
+        ui
     }
 
     // ----- layout -------------------------------------------------------------------------
 
+    #[must_use]
     pub fn layout(&self) -> Layout {
         let main = Rect::new(0, 0, m::W, m::H);
         let mut y = m::H;
-        let eq = if self.eq_open {
+        let eq = self.eq_open.then(|| {
             let r = Rect::new(0, y, e::W, e::H);
             y += e::H;
-            Some(r)
-        } else {
-            None
-        };
-        let pl = if self.pl_open {
+            r
+        });
+        let pl = self.pl_open.then(|| {
             let r = Rect::new(0, y, self.pl_size.0, self.pl_size.1);
             y += self.pl_size.1;
-            Some(r)
+            r
+        });
+        let w = if self.pl_open {
+            m::W.max(self.pl_size.0)
         } else {
-            None
+            m::W
         };
-        let w = if self.pl_open { m::W.max(self.pl_size.0) } else { m::W };
-        Layout { main, eq, pl, size: (w, y) }
+        Layout {
+            main,
+            eq,
+            pl,
+            size: (w, y),
+        }
     }
 
-    pub fn scale(&self) -> u32 {
+    /// Window scale factor: 1, or 2 in double-size mode.
+    #[must_use]
+    pub fn scale(&self) -> u8 {
         if self.double_size { 2 } else { 1 }
     }
 
     // ----- playback model -----------------------------------------------------------------
 
-    pub fn track(&self) -> &Track {
-        &self.tracks[self.current]
+    /// The current track. The playlist is never empty, but fall back gracefully if it were.
+    #[must_use]
+    pub fn track(&self) -> Option<&Track> {
+        self.tracks.get(self.current)
     }
 
+    #[must_use]
     pub fn track_len(&self) -> f32 {
-        self.track().seconds as f32
+        self.track().map_or(0.0, |t| t.seconds as f32)
     }
 
+    #[must_use]
     pub fn elapsed(&self, now: Instant) -> f32 {
         let mut t = self.elapsed_base;
         if let Some(r) = self.resumed_at {
-            t += (now - r).as_secs_f32();
+            t += now.saturating_duration_since(r).as_secs_f32();
         }
         t.clamp(0.0, self.track_len())
     }
@@ -258,23 +351,42 @@ impl Ui {
         }
     }
 
+    /// Playback position in `0..=1`.
+    #[must_use]
     pub fn position(&self, now: Instant) -> f32 {
         let len = self.track_len();
-        if len <= 0.0 { 0.0 } else { self.elapsed(now) / len }
+        if len <= 0.0 {
+            0.0
+        } else {
+            self.elapsed(now) / len
+        }
     }
 
-    /// Minutes, seconds and sign for the LED display.
+    /// Minutes, seconds and whether a minus sign is shown (remaining-time mode).
+    #[must_use]
     pub fn display_time(&self, now: Instant) -> (u32, u32, bool) {
         let e = self.elapsed(now);
-        let secs = if self.remaining_mode { (self.track_len() - e).ceil() } else { e.floor() };
+        let secs = if self.remaining_mode {
+            (self.track_len() - e).ceil()
+        } else {
+            e.floor()
+        };
+        // Non-negative and far below u32::MAX, so the cast cannot truncate.
         let secs = secs.max(0.0) as u32;
         (secs / 60, secs % 60, self.remaining_mode)
+    }
+
+    /// True during the "off" half of the paused blink.
+    #[must_use]
+    pub fn blink_off(&self, now: Instant) -> bool {
+        self.state == PlayState::Paused
+            && (now.saturating_duration_since(self.start).as_millis() % BLINK_MS) >= BLINK_MS / 2
     }
 
     pub fn play(&mut self, now: Instant) {
         match self.state {
             PlayState::Paused => self.resumed_at = Some(now),
-            _ => {
+            PlayState::Playing | PlayState::Stopped => {
                 self.elapsed_base = 0.0;
                 self.resumed_at = Some(now);
             }
@@ -306,6 +418,8 @@ impl Ui {
 
     pub fn jump(&mut self, idx: usize, now: Instant) {
         if self.tracks.is_empty() {
+            self.current = 0;
+            self.refresh_title();
             return;
         }
         self.current = idx % self.tracks.len();
@@ -314,14 +428,19 @@ impl Ui {
             self.resumed_at = Some(now);
         }
         self.ensure_visible(self.current);
+        self.refresh_title();
     }
 
     pub fn next(&mut self, now: Instant) {
-        self.jump(self.current + 1, now);
+        self.jump(self.current.wrapping_add(1), now);
     }
 
     pub fn prev(&mut self, now: Instant) {
-        self.jump((self.current + self.tracks.len() - 1) % self.tracks.len(), now);
+        let len = self.tracks.len();
+        if len == 0 {
+            return;
+        }
+        self.jump((self.current + len - 1) % len, now);
     }
 
     fn update(&mut self, now: Instant) {
@@ -337,22 +456,58 @@ impl Ui {
 
     // ----- text ---------------------------------------------------------------------------
 
-    pub fn marquee_text(&self, now: Instant) -> String {
-        if let Some(s) = &self.marquee_override {
-            return s.clone();
+    /// Rebuild the cached marquee text (`"N. Title (m:ss)"`, padded when it scrolls).
+    fn refresh_title(&mut self) {
+        self.title_chars.clear();
+        let Some(t) = self.track() else { return };
+        let mut s = String::with_capacity(64);
+        push_fmt(&mut s, format_args!("{}. {} (", self.current + 1, t.title));
+        write_time(&mut s, t.seconds);
+        s.push(')');
+        self.title_scrolls = s.chars().count() > m::MARQUEE_CHARS;
+        if self.title_scrolls {
+            s.push_str(MARQUEE_SEPARATOR);
         }
-        let t = self.track();
-        let base = format!("{}. {} ({}:{:02})", self.current + 1, t.title, t.seconds / 60, t.seconds % 60);
-        if base.chars().count() <= m::MARQUEE_CHARS {
-            return base;
-        }
-        let full: Vec<char> = format!("{base}  ***  ").chars().collect();
-        let step = ((now - self.start).as_millis() / MARQUEE_STEP_MS) as usize % full.len();
-        full.iter().cycle().skip(step).take(m::MARQUEE_CHARS).collect()
+        self.title_chars.extend(s.chars());
     }
 
+    /// The characters the marquee shows for the current track at `now`, without allocating.
+    pub fn title_scroll_chars(&self, now: Instant) -> impl Iterator<Item = char> + '_ {
+        let len = self.title_chars.len().max(1);
+        let step = if self.title_scrolls {
+            // Reduce modulo the length first so the narrowing cast cannot truncate.
+            let steps = now.saturating_duration_since(self.start).as_millis() / MARQUEE_STEP_MS;
+            usize::try_from(steps % len as u128).unwrap_or(0)
+        } else {
+            0
+        };
+        let shown = if self.title_scrolls {
+            m::MARQUEE_CHARS
+        } else {
+            self.title_chars.len()
+        };
+        self.title_chars
+            .iter()
+            .copied()
+            .cycle()
+            .skip(step)
+            .take(shown)
+    }
+
+    /// The marquee text as a `String` (allocates; the renderer uses the iterator form).
+    #[must_use]
+    pub fn marquee_text(&self, now: Instant) -> String {
+        match &self.marquee_override {
+            Some(s) => s.clone(),
+            None => self.title_scroll_chars(now).collect(),
+        }
+    }
+
+    #[must_use]
     pub fn time_str(secs: u32) -> String {
-        format!("{}:{:02}", secs / 60, secs % 60)
+        let mut s = String::with_capacity(8);
+        write_time(&mut s, secs);
+        s
     }
 
     // ----- drawing ------------------------------------------------------------------------
@@ -368,16 +523,17 @@ impl Ui {
         if let Some(r) = lay.pl {
             playlist_window::draw(self, c, skin, font, r, now);
         }
-        if let Some(polys) = &skin.regions.normal {
-            apply_mask(c, lay.main, &region_mask(polys, lay.main.w, lay.main.h));
+        if let Some(mask) = &skin.main_mask {
+            apply_mask(c, lay.main, mask);
         }
-        if let (Some(polys), Some(r)) = (&skin.regions.equalizer, lay.eq) {
-            apply_mask(c, r, &region_mask(polys, r.w, r.h));
+        if let (Some(mask), Some(r)) = (&skin.eq_mask, lay.eq) {
+            apply_mask(c, r, mask);
         }
     }
 
     // ----- hit testing --------------------------------------------------------------------
 
+    #[must_use]
     pub fn hit(&self, x: i32, y: i32) -> Option<Control> {
         let lay = self.layout();
         if lay.main.contains(x, y) {
@@ -398,7 +554,7 @@ impl Ui {
 
     fn hit_main(&self, x: i32, y: i32) -> Option<Control> {
         use Control::*;
-        let table: &[(Rect, Control)] = &[
+        const TABLE: &[(Rect, Control)] = &[
             (m::OPTIONS, MainOptions),
             (m::MINIMIZE, MainMinimize),
             (m::SHADE, MainShade),
@@ -425,17 +581,18 @@ impl Ui {
             (m::TIME, TimeDisplay),
             (m::VIS, Control::Vis),
         ];
-        table.iter().find(|(r, _)| r.contains(x, y)).map(|(_, c)| *c)
+        TABLE
+            .iter()
+            .find(|(r, _)| r.contains(x, y))
+            .map(|(_, c)| *c)
     }
 
     fn hit_eq(&self, x: i32, y: i32) -> Option<Control> {
         use Control::*;
-        for i in 0..10 {
-            if e::band(i as i32).contains(x, y) {
-                return Some(EqBand(i));
-            }
+        if let Some(i) = (0..10).find(|&i| e::band(i).contains(x, y)) {
+            return usize::try_from(i).ok().map(EqBand);
         }
-        let table: &[(Rect, Control)] = &[
+        const TABLE: &[(Rect, Control)] = &[
             (e::CLOSE, EqClose),
             (e::SHADE, EqShade),
             (e::TITLE_RECT, EqTitle),
@@ -444,7 +601,10 @@ impl Ui {
             (e::PRESETS, EqPresets),
             (e::PREAMP, EqPreamp),
         ];
-        table.iter().find(|(r, _)| r.contains(x, y)).map(|(_, c)| *c)
+        TABLE
+            .iter()
+            .find(|(r, _)| r.contains(x, y))
+            .map(|(_, c)| *c)
     }
 
     fn hit_pl(&self, x: i32, y: i32, w: i32, h: i32) -> Option<Control> {
@@ -460,7 +620,7 @@ impl Ui {
         }
         let bl = (0, h - p::BOTTOM_H);
         let br = (w - 150, h - p::BOTTOM_H);
-        let table: &[(Rect, Control)] = &[
+        let table = [
             (p::ADD.offset(bl.0, bl.1), PlAdd),
             (p::REM.offset(bl.0, bl.1), PlRem),
             (p::SEL.offset(bl.0, bl.1), PlSel),
@@ -485,7 +645,8 @@ impl Ui {
         }
         let list = self.pl_list_rect(w, h);
         if list.contains(x, y) {
-            let idx = self.pl_scroll + ((y - list.y) / p::TRACK_H) as usize;
+            let row = usize::try_from((y - list.y) / p::TRACK_H).unwrap_or(0);
+            let idx = self.pl_scroll + row;
             if idx < self.tracks.len() {
                 return Some(PlTrack(idx));
             }
@@ -494,21 +655,31 @@ impl Ui {
     }
 
     /// The black list background between the frame pieces.
+    #[must_use]
     pub fn pl_content_rect(&self, w: i32, h: i32) -> Rect {
-        Rect::new(p::LEFT_W, p::TOP_H, w - p::LEFT_W - p::RIGHT_W, h - p::TOP_H - p::BOTTOM_H)
+        Rect::new(
+            p::LEFT_W,
+            p::TOP_H,
+            w - p::LEFT_W - p::RIGHT_W,
+            h - p::TOP_H - p::BOTTOM_H,
+        )
     }
 
     /// The area actually holding track rows (inset from the list background).
+    #[must_use]
     pub fn pl_list_rect(&self, w: i32, h: i32) -> Rect {
         let c = self.pl_content_rect(w, h);
         Rect::new(c.x, c.y + p::LIST_PAD, c.w, c.h - 2 * p::LIST_PAD)
     }
 
+    #[must_use]
     pub fn pl_visible_rows(&self) -> usize {
-        (self.pl_list_rect(self.pl_size.0, self.pl_size.1).h / p::TRACK_H).max(0) as usize
+        usize::try_from(self.pl_list_rect(self.pl_size.0, self.pl_size.1).h / p::TRACK_H)
+            .unwrap_or(0)
     }
 
-    fn max_scroll(&self) -> usize {
+    #[must_use]
+    pub fn max_scroll(&self) -> usize {
         self.tracks.len().saturating_sub(self.pl_visible_rows())
     }
 
@@ -524,174 +695,197 @@ impl Ui {
 
     // ----- slider helpers -----------------------------------------------------------------
 
-    fn local(&self, x: i32, y: i32, ctl: Control) -> (i32, i32) {
+    /// Convert canvas coordinates into the coordinates of the window owning `ctl`.
+    fn window_local(&self, x: i32, y: i32, ctl: Control) -> (i32, i32) {
         let lay = self.layout();
         let origin = match ctl {
-            Control::EqPreamp | Control::EqBand(_) => lay.eq.map(|r| (r.x, r.y)).unwrap_or((0, 0)),
-            Control::PlResize | Control::PlScroll => lay.pl.map(|r| (r.x, r.y)).unwrap_or((0, 0)),
+            Control::EqPreamp | Control::EqBand(_) => lay.eq.map_or((0, 0), |r| (r.x, r.y)),
+            Control::PlResize | Control::PlScroll => lay.pl.map_or((0, 0), |r| (r.x, r.y)),
             _ => (lay.main.x, lay.main.y),
         };
         (x - origin.0, y - origin.1)
     }
 
-    fn drag_slider(&mut self, ctl: Control, x: i32, y: i32, now: Instant) {
-        let (lx, ly) = self.local(x, y, ctl);
-        match ctl {
-            Control::Volume => {
-                let span = (m::VOLUME.w - m::SLIDER_THUMB_W) as f32;
-                self.volume = ((lx - m::VOLUME.x) as f32 - m::SLIDER_THUMB_W as f32 / 2.0) / span;
-                self.volume = self.volume.clamp(0.0, 1.0);
-                self.marquee_override = Some(format!("Volume: {}%", (self.volume * 100.0).round() as u32));
+    /// Fraction `0..=1` of a horizontal slider for a pointer at `lx`, centring the thumb on it.
+    fn h_fraction(rect: Rect, thumb_w: i32, lx: i32) -> f32 {
+        let span = (rect.w - thumb_w) as f32;
+        (((lx - rect.x) as f32 - thumb_w as f32 / 2.0) / span).clamp(0.0, 1.0)
+    }
+
+    fn drag_slider(&mut self, slider: Slider, x: i32, y: i32, now: Instant) {
+        let ctl = match slider {
+            Slider::Volume => Control::Volume,
+            Slider::Balance => Control::Balance,
+            Slider::PosBar => Control::PosBar,
+            Slider::EqPreamp => Control::EqPreamp,
+            Slider::EqBand(i) => Control::EqBand(i),
+        };
+        let (lx, ly) = self.window_local(x, y, ctl);
+        let mut text = self.marquee_override.take().unwrap_or_default();
+        text.clear();
+        match slider {
+            Slider::Volume => {
+                self.volume = Self::h_fraction(m::VOLUME, m::SLIDER_THUMB_W, lx);
+                push_fmt(
+                    &mut text,
+                    format_args!("Volume: {}%", (self.volume * 100.0).round()),
+                );
             }
-            Control::Balance => {
-                let span = (m::BALANCE.w - m::SLIDER_THUMB_W) as f32;
-                let v = ((lx - m::BALANCE.x) as f32 - m::SLIDER_THUMB_W as f32 / 2.0) / span;
+            Slider::Balance => {
+                let v = Self::h_fraction(m::BALANCE, m::SLIDER_THUMB_W, lx);
                 let mut b = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
                 if b.abs() < 0.08 {
                     b = 0.0;
                 }
                 self.balance = b;
-                let pct = (b.abs() * 100.0).round() as u32;
-                self.marquee_override = Some(if pct == 0 {
-                    "Balance: Center".to_string()
-                } else if b < 0.0 {
-                    format!("Balance: {pct}% Left")
+                let pct = (b.abs() * 100.0).round();
+                if pct == 0.0 {
+                    text.push_str("Balance: Center");
                 } else {
-                    format!("Balance: {pct}% Right")
-                });
+                    let side = if b < 0.0 { "Left" } else { "Right" };
+                    push_fmt(&mut text, format_args!("Balance: {pct}% {side}"));
+                }
             }
-            Control::PosBar => {
-                let span = (m::POSBAR.w - m::POSBAR_THUMB_W) as f32;
-                let pos = (((lx - m::POSBAR.x) as f32 - m::POSBAR_THUMB_W as f32 / 2.0) / span).clamp(0.0, 1.0);
+            Slider::PosBar => {
+                let pos = Self::h_fraction(m::POSBAR, m::POSBAR_THUMB_W, lx);
                 let secs = pos * self.track_len();
                 self.set_elapsed(secs, now);
-                self.marquee_override = Some(format!(
-                    "Seek to: {}/{} ({}%)",
-                    Self::time_str(secs as u32),
-                    Self::time_str(self.track().seconds),
-                    (pos * 100.0).round() as u32
-                ));
+                text.push_str("Seek to: ");
+                write_time(&mut text, secs as u32);
+                text.push('/');
+                write_time(&mut text, self.track().map_or(0, |t| t.seconds));
+                push_fmt(&mut text, format_args!(" ({}%)", (pos * 100.0).round()));
             }
-            Control::EqPreamp | Control::EqBand(_) => {
-                let rect = match ctl {
-                    Control::EqBand(i) => e::band(i as i32),
+            Slider::EqPreamp | Slider::EqBand(_) => {
+                let rect = match slider {
+                    Slider::EqBand(i) => e::band(i32::try_from(i).unwrap_or(0)),
                     _ => e::PREAMP,
                 };
                 let span = e::SLIDER_TRAVEL as f32;
-                let v = 1.0 - (((ly - rect.y) as f32 - e::SLIDER_THUMB_H as f32 / 2.0) / span);
-                let v = v.clamp(0.0, 1.0);
+                let v = (1.0 - (((ly - rect.y) as f32 - e::SLIDER_THUMB_H as f32 / 2.0) / span))
+                    .clamp(0.0, 1.0);
                 let db = (v - 0.5) * 24.0;
-                match ctl {
-                    Control::EqBand(i) => {
+                match slider {
+                    Slider::EqBand(i) if i < self.bands.len() => {
                         self.bands[i] = v;
-                        self.marquee_override = Some(format!("EQ: {} HZ: {:+.1} DB", e::BAND_LABELS[i], db));
+                        push_fmt(
+                            &mut text,
+                            format_args!("EQ: {} HZ: {db:+.1} DB", e::BAND_LABELS[i]),
+                        );
                     }
                     _ => {
                         self.preamp = v;
-                        self.marquee_override = Some(format!("EQ: PREAMP: {:+.1} DB", db));
+                        push_fmt(&mut text, format_args!("EQ: PREAMP: {db:+.1} DB"));
                     }
                 }
             }
-            _ => {}
         }
+        self.marquee_override = Some(text);
     }
 
     fn drag_scroll(&mut self, x: i32, y: i32) {
-        let (_, ly) = self.local(x, y, Control::PlScroll);
+        let (_, ly) = self.window_local(x, y, Control::PlScroll);
         let content = self.pl_content_rect(self.pl_size.0, self.pl_size.1);
         let span = (content.h - p::SCROLL_THUMB_H).max(1) as f32;
         let f = (((ly - content.y) as f32 - p::SCROLL_THUMB_H as f32 / 2.0) / span).clamp(0.0, 1.0);
         self.pl_scroll = (f * self.max_scroll() as f32).round() as usize;
     }
 
+    /// Resize the playlist by the drag delta, snapped to Winamp's 25x29 grid. True if it changed.
     fn drag_resize(&mut self, x: i32, y: i32) -> bool {
-        let dx = x - self.drag_start.0;
-        let dy = y - self.drag_start.1;
-        let w = self.drag_size.0 + dx;
-        let h = self.drag_size.1 + dy;
-        let snap = |v: i32, min: i32, step: i32| min + (((v - min) as f32 / step as f32).round().max(0.0) as i32) * step;
+        let snap = |v: i32, min: i32, step: i32| {
+            let steps = ((v - min) as f32 / step as f32).round().max(0.0) as i32;
+            min + steps * step
+        };
+        let w = self.drag_size.0 + (x - self.drag_start.0);
+        let h = self.drag_size.1 + (y - self.drag_start.1);
         let new = (snap(w, p::MIN_W, p::STEP_W), snap(h, p::MIN_H, p::STEP_H));
-        if new != self.pl_size {
-            self.pl_size = new;
-            self.pl_scroll = self.pl_scroll.min(self.max_scroll());
-            true
-        } else {
-            false
+        if new == self.pl_size {
+            return false;
         }
+        self.pl_size = new;
+        self.pl_scroll = self.pl_scroll.min(self.max_scroll());
+        true
     }
 
     // ----- input --------------------------------------------------------------------------
 
+    #[must_use = "the returned actions must be performed by the window layer"]
     pub fn mouse_down(&mut self, x: i32, y: i32, now: Instant) -> Vec<Action> {
         use Control::*;
         self.cursor = (x, y);
         let mut actions = Vec::new();
-        let Some(ctl) = self.hit(x, y) else { return actions };
-        match ctl {
-            MainTitle | EqTitle | PlTitle => {
-                actions.push(Action::DragWindow);
-            }
-            Volume | Balance | PosBar | EqPreamp | EqBand(_) => {
-                self.pressed = Some(ctl);
-                self.drag_slider(ctl, x, y, now);
-            }
-            PlScroll => {
-                self.pressed = Some(ctl);
-                self.drag_scroll(x, y);
-            }
-            PlResize => {
-                self.pressed = Some(ctl);
-                self.drag_start = (x, y);
-                self.drag_size = self.pl_size;
-            }
-            PlTrack(i) => {
-                let double = matches!(self.last_click, Some((PlTrack(j), t)) if j == i && (now - t).as_millis() < 400);
-                for s in self.selected.iter_mut() {
-                    *s = false;
+        let Some(ctl) = self.hit(x, y) else {
+            return actions;
+        };
+        if let Some(slider) = ctl.slider() {
+            self.pressed = Some(ctl);
+            self.drag_slider(slider, x, y, now);
+        } else {
+            match ctl {
+                MainTitle | EqTitle | PlTitle => actions.push(Action::DragWindow),
+                PlScroll => {
+                    self.pressed = Some(ctl);
+                    self.drag_scroll(x, y);
                 }
-                self.selected[i] = true;
-                if double {
-                    self.jump(i, now);
-                    if self.state != PlayState::Playing {
-                        self.play(now);
+                PlResize => {
+                    self.pressed = Some(ctl);
+                    self.drag_start = (x, y);
+                    self.drag_size = self.pl_size;
+                }
+                PlTrack(i) => {
+                    let double = matches!(self.last_click,
+                        Some((PlTrack(j), t)) if j == i && now.saturating_duration_since(t).as_millis() < DOUBLE_CLICK_MS);
+                    self.selected.iter_mut().for_each(|s| *s = false);
+                    if let Some(s) = self.selected.get_mut(i) {
+                        *s = true;
+                    }
+                    if double {
+                        self.jump(i, now);
+                        if self.state != PlayState::Playing {
+                            self.play(now);
+                        }
                     }
                 }
-            }
-            _ => {
-                self.pressed = Some(ctl);
+                // Every other control is a button: show it pressed until release.
+                _ => self.pressed = Some(ctl),
             }
         }
         self.last_click = Some((ctl, now));
         actions
     }
 
-    #[allow(clippy::collapsible_match)]
+    #[must_use = "the returned actions must be performed by the window layer"]
     pub fn mouse_move(&mut self, x: i32, y: i32, now: Instant) -> Vec<Action> {
-        use Control::*;
         self.cursor = (x, y);
         let mut actions = Vec::new();
-        match self.pressed {
-            Some(ctl @ (Volume | Balance | PosBar | EqPreamp | EqBand(_))) => self.drag_slider(ctl, x, y, now),
-            Some(PlScroll) => self.drag_scroll(x, y),
-            Some(PlResize) => {
-                if self.drag_resize(x, y) {
-                    actions.push(Action::Relayout);
-                }
-            }
-            _ => {}
+        let Some(ctl) = self.pressed else {
+            return actions;
+        };
+        if let Some(slider) = ctl.slider() {
+            self.drag_slider(slider, x, y, now);
+        } else if ctl == Control::PlScroll {
+            self.drag_scroll(x, y);
+        } else if ctl == Control::PlResize && self.drag_resize(x, y) {
+            actions.push(Action::Relayout);
         }
         actions
     }
 
+    #[must_use = "the returned actions must be performed by the window layer"]
     pub fn mouse_up(&mut self, x: i32, y: i32, now: Instant) -> Vec<Action> {
         use Control::*;
         self.cursor = (x, y);
         let mut actions = Vec::new();
-        let Some(ctl) = self.pressed.take() else { return actions };
+        let Some(ctl) = self.pressed.take() else {
+            return actions;
+        };
         self.marquee_override = None;
         let still_over = self.hit(x, y) == Some(ctl);
         match ctl {
+            // Drags finish silently.
             Volume | Balance | PosBar | EqPreamp | EqBand(_) | PlScroll | PlResize => {}
+            // Releasing outside the pressed button cancels it, as in Win32.
             _ if !still_over => {}
             MainClose => actions.push(Action::Close),
             MainMinimize => actions.push(Action::Minimize),
@@ -728,11 +922,15 @@ impl Ui {
             }
             EqOn => self.eq_on = !self.eq_on,
             EqAuto => self.eq_auto = !self.eq_auto,
-            _ => {}
+            // Press-only visuals: no behaviour in an interface-only build.
+            MainTitle | EqTitle | PlTitle | MainOptions | MainShade | Eject | ClutterO
+            | ClutterA | ClutterI | ClutterV | EqShade | EqPresets | PlShade | PlAdd | PlRem
+            | PlSel | PlMisc | PlListOpts | PlMiniEject | PlTrack(_) => {}
         }
         actions
     }
 
+    #[must_use = "the returned actions must be performed by the window layer"]
     pub fn key(&mut self, cmd: KeyCmd, now: Instant) -> Vec<Action> {
         let mut actions = Vec::new();
         match cmd {
@@ -758,41 +956,37 @@ impl Ui {
             KeyCmd::ToggleTimeMode => self.remaining_mode = !self.remaining_mode,
             KeyCmd::VolumeUp => self.volume = (self.volume + 0.02).min(1.0),
             KeyCmd::VolumeDown => self.volume = (self.volume - 0.02).max(0.0),
-            KeyCmd::SeekBack => {
-                let t = self.elapsed(now) - 5.0;
-                self.set_elapsed(t, now);
-            }
-            KeyCmd::SeekForward => {
-                let t = self.elapsed(now) + 5.0;
-                self.set_elapsed(t, now);
-            }
+            KeyCmd::SeekBack => self.set_elapsed(self.elapsed(now) - 5.0, now),
+            KeyCmd::SeekForward => self.set_elapsed(self.elapsed(now) + 5.0, now),
         }
         actions
     }
 }
 
-fn apply_mask(c: &mut Image, r: Rect, mask: &[bool]) {
-    for y in 0..r.h {
-        for x in 0..r.w {
-            if !mask[(y * r.w + x) as usize] {
-                c.put(r.x + x, r.y + y, [0, 0, 0, 0]);
-            }
+/// Make every pixel of `r` outside `mask` fully transparent.
+fn apply_mask(c: &mut Image, r: Rect, mask: &Mask) {
+    let w = usize::try_from(r.w).unwrap_or(0);
+    for (i, visible) in mask.iter().enumerate() {
+        if !visible && w > 0 {
+            let (x, y) = (i % w, i / w);
+            c.put(r.x + x as i32, r.y + y as i32, [0, 0, 0, 0]);
         }
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn layout_stacks_the_three_windows() {
-        let ui = Ui::new();
+        let mut ui = Ui::new();
         let l = ui.layout();
         assert_eq!(l.size, (275, 348));
         assert_eq!(l.eq.unwrap().y, 116);
         assert_eq!(l.pl.unwrap().y, 232);
-        let mut ui = ui;
         ui.eq_open = false;
         assert_eq!(ui.layout().pl.unwrap().y, 116);
         assert_eq!(ui.layout().size, (275, 232));
@@ -832,12 +1026,12 @@ mod tests {
     fn volume_drag_updates_value_and_marquee() {
         let mut ui = Ui::new();
         let now = Instant::now();
-        ui.mouse_down(107 + 7, 60, now);
+        let _ = ui.mouse_down(107 + 7, 60, now);
         assert!(ui.volume < 0.01);
         assert_eq!(ui.marquee_override.as_deref(), Some("Volume: 0%"));
-        ui.mouse_move(107 + 68 - 7, 60, now);
+        let _ = ui.mouse_move(107 + 68 - 7, 60, now);
         assert!(ui.volume > 0.99);
-        ui.mouse_up(107 + 68 - 7, 60, now);
+        let _ = ui.mouse_up(107 + 68 - 7, 60, now);
         assert!(ui.pressed.is_none());
         assert!(ui.marquee_override.is_none());
     }
@@ -847,16 +1041,26 @@ mod tests {
         let mut ui = Ui::new();
         let now = Instant::now();
         let (px, py) = (85 + 5, 88 + 5); // stop
-        ui.mouse_down(px, py, now);
+        let _ = ui.mouse_down(px, py, now);
         assert_eq!(ui.pressed, Some(Control::Stop));
-        ui.mouse_up(px, py, now);
+        let _ = ui.mouse_up(px, py, now);
         assert_eq!(ui.state, PlayState::Stopped);
-        ui.key(KeyCmd::Play, now);
+        let _ = ui.key(KeyCmd::Play, now);
         assert_eq!(ui.state, PlayState::Playing);
-        ui.key(KeyCmd::Pause, now);
+        let _ = ui.key(KeyCmd::Pause, now);
         assert_eq!(ui.state, PlayState::Paused);
-        ui.key(KeyCmd::Next, now);
+        let _ = ui.key(KeyCmd::Next, now);
         assert_eq!(ui.current, 1);
+    }
+
+    #[test]
+    fn releasing_outside_the_pressed_button_cancels_it() {
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        let _ = ui.mouse_down(85 + 5, 88 + 5, now); // stop
+        let actions = ui.mouse_up(5, 5, now);
+        assert!(actions.is_empty());
+        assert_eq!(ui.state, PlayState::Playing);
     }
 
     #[test]
@@ -864,7 +1068,7 @@ mod tests {
         let mut ui = Ui::new();
         let now = Instant::now();
         let grip = (275 - 8, 232 + 116 - 8);
-        ui.mouse_down(grip.0, grip.1, now);
+        let _ = ui.mouse_down(grip.0, grip.1, now);
         assert_eq!(ui.pressed, Some(Control::PlResize));
         let actions = ui.mouse_move(grip.0 + 30, grip.1 + 40, now);
         assert_eq!(actions, vec![Action::Relayout]);
@@ -877,8 +1081,44 @@ mod tests {
         let mut ui = Ui::new();
         ui.start = Instant::now();
         let t0 = ui.marquee_text(ui.start);
-        let t1 = ui.marquee_text(ui.start + std::time::Duration::from_millis(MARQUEE_STEP_MS as u64));
+        let t1 = ui.marquee_text(ui.start + Duration::from_millis(MARQUEE_STEP_MS as u64));
         assert_eq!(t0.chars().count(), m::MARQUEE_CHARS);
         assert_eq!(&t0[1..], &t1[..t1.len() - 1]);
+        assert!(t0.starts_with("1. DJ Mike Llama"));
+    }
+
+    #[test]
+    fn short_titles_do_not_scroll_and_track_changes_refresh_the_title() {
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        ui.jump(5, now); // "6. Tom P. - Llama Country (3:18)" is 32 chars: scrolls
+        assert!(ui.title_scrolls);
+        ui.tracks[5].title = "Short".into();
+        ui.jump(5, now);
+        assert!(!ui.title_scrolls);
+        assert_eq!(
+            ui.marquee_text(now + Duration::from_secs(5)),
+            "6. Short (3:18)"
+        );
+    }
+
+    #[test]
+    fn empty_playlist_never_panics() {
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        ui.tracks.clear();
+        ui.selected.clear();
+        ui.prev(now);
+        ui.next(now);
+        let _ = ui.key(KeyCmd::SeekForward, now);
+        assert_eq!(ui.track_len(), 0.0);
+        assert_eq!(ui.display_time(now), (0, 0, false));
+        assert_eq!(ui.marquee_text(now), "");
+    }
+
+    #[test]
+    fn time_formatting() {
+        assert_eq!(Ui::time_str(5), "0:05");
+        assert_eq!(Ui::time_str(3661), "61:01");
     }
 }

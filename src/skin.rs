@@ -4,12 +4,15 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
-use crate::canvas::Image;
-use crate::sprites::{Sheet, Sprite};
+use crate::canvas::{Image, Rect};
+use crate::sprites::{Sheet, Sprite, eq, main};
 
-#[derive(Clone, Debug)]
+/// Largest sheet dimension we accept from an untrusted archive (real sheets are under 400px).
+const MAX_SHEET_SIDE: u32 = 4096;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PleditColors {
     pub normal: [u8; 4],
     pub current: [u8; 4],
@@ -33,11 +36,14 @@ impl Default for PleditColors {
 /// Polygons in window pixel-edge coordinates; a pixel is visible if its centre is inside any polygon.
 pub type Polygons = Vec<Vec<(f32, f32)>>;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Regions {
     pub normal: Option<Polygons>,
     pub equalizer: Option<Polygons>,
 }
+
+/// A visibility mask the size of a window: `true` where the window is drawn.
+pub type Mask = Box<[bool]>;
 
 pub const DEFAULT_VIS_COLORS: [[u8; 4]; 24] = [
     [0, 0, 0, 255],
@@ -83,6 +89,7 @@ const SHEET_FILES: &[(Sheet, &str)] = &[
     (Sheet::PlEdit, "pledit"),
 ];
 
+/// A loaded classic skin: decoded sprite sheets plus the parsed text configuration.
 #[derive(Clone)]
 pub struct Skin {
     pub name: String,
@@ -91,10 +98,32 @@ pub struct Skin {
     pub vis_colors: [[u8; 4]; 24],
     pub pledit: PleditColors,
     pub regions: Regions,
+    /// Window-shape masks rasterised once from `regions`, if the skin defines any.
+    pub main_mask: Option<Mask>,
+    pub eq_mask: Option<Mask>,
+}
+
+impl std::fmt::Debug for Skin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Skin")
+            .field("name", &self.name)
+            .field("sheets", &self.sheets.keys().collect::<Vec<_>>())
+            .field("pledit", &self.pledit)
+            .field(
+                "has_regions",
+                &(self.main_mask.is_some() || self.eq_mask.is_some()),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl Skin {
-    pub fn from_path(path: &Path) -> Result<Skin> {
+    /// Load a `.wsz` file from disk.
+    ///
+    /// # Errors
+    /// Fails if the file cannot be read, is not a zip archive, or contains no usable sheets.
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Skin> {
+        let path = path.as_ref();
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         let name = path
             .file_stem()
@@ -103,9 +132,15 @@ impl Skin {
         Self::from_wsz(&bytes, &name)
     }
 
+    /// Parse a `.wsz` archive held in memory.
+    ///
+    /// # Errors
+    /// Fails if `bytes` is not a zip archive or contains no usable sheets. Individual
+    /// undecodable entries are logged and skipped, as Winamp did.
     pub fn from_wsz(bytes: &[u8], name: &str) -> Result<Skin> {
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("skin is not a zip archive")?;
-        let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut archive =
+            zip::ZipArchive::new(Cursor::new(bytes)).context("skin is not a zip archive")?;
+        let mut files: HashMap<String, Vec<u8>> = HashMap::with_capacity(archive.len());
         for i in 0..archive.len() {
             let mut f = match archive.by_index(i) {
                 Ok(f) => f,
@@ -121,39 +156,54 @@ impl Skin {
                 Ok(n) => n.into_owned(),
                 Err(_) => continue,
             };
-            let base = full_name.rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+            let base = full_name
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
             let mut buf = Vec::new();
             if f.read_to_end(&mut buf).is_ok() {
                 files.entry(base).or_insert(buf);
             }
         }
-        Self::from_files(files, name)
+        Self::from_files(&files, name)
     }
 
-    fn from_files(files: HashMap<String, Vec<u8>>, name: &str) -> Result<Skin> {
-        let mut sheets = HashMap::new();
+    fn from_files(files: &HashMap<String, Vec<u8>>, name: &str) -> Result<Skin> {
+        let mut sheets = HashMap::with_capacity(SHEET_FILES.len());
         for (sheet, base) in SHEET_FILES {
-            for ext in ["bmp", "png", "BMP"] {
-                if let Some(bytes) = files.get(&format!("{base}.{}", ext.to_ascii_lowercase())) {
-                    match decode_image(bytes) {
-                        Ok(img) => {
-                            sheets.insert(*sheet, img);
-                            break;
-                        }
-                        Err(e) => log::warn!("{name}: cannot decode {base}.{ext}: {e}"),
+            for ext in ["bmp", "png"] {
+                let Some(bytes) = files.get(&format!("{base}.{ext}")) else {
+                    continue;
+                };
+                match decode_image(bytes) {
+                    Ok(img) => {
+                        sheets.insert(*sheet, img);
+                        break;
                     }
+                    Err(e) => log::warn!("{name}: cannot decode {base}.{ext}: {e}"),
                 }
             }
         }
         if sheets.is_empty() {
-            anyhow::bail!("{name}: no skin bitmaps found in archive");
+            bail!("{name}: no skin bitmaps found in archive");
         }
-        let text = |key: &str| files.get(key).map(|b| String::from_utf8_lossy(b).into_owned());
-        let vis_colors = text("viscolor.txt")
-            .map(|t| parse_viscolor(&t))
-            .unwrap_or(DEFAULT_VIS_COLORS);
-        let pledit = text("pledit.txt").map(|t| parse_pledit(&t)).unwrap_or_default();
-        let regions = text("region.txt").map(|t| parse_region(&t)).unwrap_or_default();
+        let text = |key: &str| files.get(key).map(|b| String::from_utf8_lossy(b));
+        let vis_colors = text("viscolor.txt").map_or(DEFAULT_VIS_COLORS, |t| parse_viscolor(&t));
+        let pledit = text("pledit.txt")
+            .map(|t| parse_pledit(&t))
+            .unwrap_or_default();
+        let regions = text("region.txt")
+            .map(|t| parse_region(&t))
+            .unwrap_or_default();
+        let main_mask = regions
+            .normal
+            .as_ref()
+            .map(|p| region_mask(p, main::W, main::H));
+        let eq_mask = regions
+            .equalizer
+            .as_ref()
+            .map(|p| region_mask(p, eq::W, eq::H));
         Ok(Skin {
             name: name.to_string(),
             sheets,
@@ -161,6 +211,8 @@ impl Skin {
             vis_colors,
             pledit,
             regions,
+            main_mask,
+            eq_mask,
         })
     }
 
@@ -180,32 +232,39 @@ impl Skin {
         }
     }
 
-    pub fn has(&self, s: Sheet) -> bool {
+    #[must_use]
+    pub fn has_sheet(&self, s: Sheet) -> bool {
         self.sheets.contains_key(&s)
     }
 
+    /// The decoded sheet, or an empty image (so blits draw nothing) when it is missing.
+    #[must_use]
     pub fn sheet(&self, s: Sheet) -> &Image {
         self.sheets.get(&s).unwrap_or(&self.empty)
     }
 
     pub fn blit(&self, dst: &mut Image, s: Sprite, x: i32, y: i32) {
-        dst.blit(self.sheet(s.sheet), s.x, s.y, s.w, s.h, x, y);
+        dst.blit(self.sheet(s.sheet), s.rect(), x, y);
     }
 
-    pub fn blit_clipped(&self, dst: &mut Image, s: Sprite, x: i32, y: i32, clip: crate::canvas::Rect) {
-        dst.blit_clipped(self.sheet(s.sheet), s.x, s.y, s.w, s.h, x, y, clip);
+    pub fn blit_clipped(&self, dst: &mut Image, s: Sprite, x: i32, y: i32, clip: Rect) {
+        dst.blit_clipped(self.sheet(s.sheet), s.rect(), x, y, clip);
     }
 }
 
 fn decode_image(bytes: &[u8]) -> Result<Image> {
-    let img = image::load_from_memory(bytes)?.to_rgba8();
-    let (w, h) = (img.width() as i32, img.height() as i32);
-    let mut data = img.into_raw();
+    let img = image::load_from_memory(bytes)?;
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 || w > MAX_SHEET_SIDE || h > MAX_SHEET_SIDE {
+        bail!("unreasonable sheet size {w}x{h}");
+    }
+    let mut data = img.into_rgba8().into_raw();
     // Skins are opaque bitmaps; normalise alpha so blits never leak transparency.
     for px in data.chunks_exact_mut(4) {
         px[3] = 255;
     }
-    Ok(Image::from_rgba(w, h, data))
+    Image::from_rgba(i32::try_from(w)?, i32::try_from(h)?, data)
+        .context("pixel buffer size mismatch")
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -219,25 +278,26 @@ fn strip_comment(line: &str) -> &str {
     s.trim()
 }
 
+/// Parse `viscolor.txt`: up to 24 lines of `r,g,b`, comments allowed. Missing entries keep the defaults.
+#[must_use]
 pub fn parse_viscolor(text: &str) -> [[u8; 4]; 24] {
     let mut colors = DEFAULT_VIS_COLORS;
     let mut n = 0;
     for line in text.lines() {
-        if n >= 24 {
+        if n >= colors.len() {
             break;
         }
         let s = strip_comment(line);
         if s.is_empty() {
             continue;
         }
-        let parts: Vec<u8> = s
+        let mut parts = s
             .split([',', ' ', '\t'])
             .filter(|p| !p.is_empty())
-            .filter_map(|p| p.trim().parse::<i64>().ok())
-            .map(|v| v.clamp(0, 255) as u8)
-            .collect();
-        if parts.len() >= 3 {
-            colors[n] = [parts[0], parts[1], parts[2], 255];
+            .filter_map(|p| p.parse::<i64>().ok())
+            .map(|v| u8::try_from(v.clamp(0, 255)).unwrap_or(0));
+        if let (Some(r), Some(g), Some(b)) = (parts.next(), parts.next(), parts.next()) {
+            colors[n] = [r, g, b, 255];
             n += 1;
         }
     }
@@ -246,7 +306,7 @@ pub fn parse_viscolor(text: &str) -> [[u8; 4]; 24] {
 
 fn parse_color(s: &str) -> Option<[u8; 4]> {
     let s = s.trim().trim_start_matches('#');
-    if s.len() < 6 {
+    if s.len() < 6 || !s.is_char_boundary(6) {
         return None;
     }
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
@@ -255,14 +315,16 @@ fn parse_color(s: &str) -> Option<[u8; 4]> {
     Some([r, g, b, 255])
 }
 
+/// Parse `pledit.txt` (`[Text]` section with `Normal=#RRGGBB` style keys).
+#[must_use]
 pub fn parse_pledit(text: &str) -> PleditColors {
     let mut c = PleditColors::default();
     for line in text.lines() {
-        let line = line.trim();
-        let Some((k, v)) = line.split_once('=') else { continue };
-        let k = k.trim().to_ascii_lowercase();
+        let Some((k, v)) = line.trim().split_once('=') else {
+            continue;
+        };
         let v = v.trim();
-        match k.as_str() {
+        match k.trim().to_ascii_lowercase().as_str() {
             "normal" => c.normal = parse_color(v).unwrap_or(c.normal),
             "current" => c.current = parse_color(v).unwrap_or(c.current),
             "normalbg" => c.normal_bg = parse_color(v).unwrap_or(c.normal_bg),
@@ -274,6 +336,8 @@ pub fn parse_pledit(text: &str) -> PleditColors {
     c
 }
 
+/// Parse `region.txt`: `[Normal]` / `[Equalizer]` sections with `NumPoints` and `PointList`.
+#[must_use]
 pub fn parse_region(text: &str) -> Regions {
     let mut regions = Regions::default();
     let mut section = String::new();
@@ -301,13 +365,15 @@ pub fn parse_region(text: &str) -> Regions {
             section = line.trim_matches(['[', ']']).trim().to_ascii_lowercase();
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         let ints = v
             .split([',', ' ', '\t'])
             .filter(|p| !p.is_empty())
             .filter_map(|p| p.parse::<i32>().ok());
         match k.trim().to_ascii_lowercase().as_str() {
-            "numpoints" => num_points = ints.map(|n| n.max(0) as usize).collect(),
+            "numpoints" => num_points = ints.map(|n| usize::try_from(n).unwrap_or(0)).collect(),
             "pointlist" => points = ints.collect(),
             _ => {}
         }
@@ -321,11 +387,10 @@ fn build_polygons(num_points: &[usize], points: &[i32]) -> Polygons {
         .chunks_exact(2)
         .map(|p| (p[0] as f32, p[1] as f32))
         .collect();
-    let mut polys = Vec::new();
     if num_points.is_empty() {
-        polys.push(pts);
-        return polys;
+        return vec![pts];
     }
+    let mut polys = Vec::with_capacity(num_points.len());
     let mut i = 0;
     for &n in num_points {
         if n < 3 || i + n > pts.len() {
@@ -341,31 +406,94 @@ fn build_polygons(num_points: &[usize], points: &[i32]) -> Polygons {
 }
 
 /// Rasterise polygons into a visibility mask of `w`x`h` (true = visible).
-pub fn region_mask(polys: &Polygons, w: i32, h: i32) -> Vec<bool> {
-    let mut mask = vec![false; (w * h) as usize];
-    for poly in polys {
-        if poly.len() < 3 {
-            continue;
-        }
-        for y in 0..h {
+#[must_use]
+pub fn region_mask(polys: &Polygons, w: i32, h: i32) -> Mask {
+    let (uw, uh) = (
+        usize::try_from(w).unwrap_or(0),
+        usize::try_from(h).unwrap_or(0),
+    );
+    let mut mask = vec![false; uw * uh];
+    let mut xs: Vec<f32> = Vec::new();
+    for poly in polys.iter().filter(|p| p.len() >= 3) {
+        for y in 0..uh {
             let cy = y as f32 + 0.5;
-            let mut xs: Vec<f32> = Vec::new();
-            for i in 0..poly.len() {
-                let (x1, y1) = poly[i];
+            xs.clear();
+            for (i, &(x1, y1)) in poly.iter().enumerate() {
                 let (x2, y2) = poly[(i + 1) % poly.len()];
                 if (y1 <= cy && y2 > cy) || (y2 <= cy && y1 > cy) {
                     xs.push(x1 + (cy - y1) * (x2 - x1) / (y2 - y1));
                 }
             }
-            xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            xs.sort_by(f32::total_cmp);
             for pair in xs.chunks_exact(2) {
-                let x0 = pair[0].round().max(0.0) as i32;
-                let x1 = pair[1].round().min(w as f32) as i32;
-                for x in x0..x1 {
-                    mask[(y * w + x) as usize] = true;
-                }
+                let x0 = pair[0].round().clamp(0.0, uw as f32) as usize;
+                let x1 = pair[1].round().clamp(0.0, uw as f32) as usize;
+                mask[y * uw + x0..y * uw + x1].fill(true);
             }
         }
     }
-    mask
+    mask.into_boxed_slice()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viscolor_parses_lines_with_comments_and_keeps_defaults_for_the_rest() {
+        let colors = parse_viscolor("1,2,3, // first\n; a comment line\n  4 , 5 , 6\n300,-1,7\n");
+        assert_eq!(colors[0], [1, 2, 3, 255]);
+        assert_eq!(colors[1], [4, 5, 6, 255]);
+        assert_eq!(colors[2], [255, 0, 7, 255]);
+        assert_eq!(colors[3], DEFAULT_VIS_COLORS[3]);
+    }
+
+    #[test]
+    fn pledit_keys_are_case_insensitive_and_bad_values_keep_defaults() {
+        let c =
+            parse_pledit("[Text]\nNORMAL=#102030\ncurrent=404040\nNormalBG=oops\nFont=Tahoma\n");
+        assert_eq!(c.normal, [0x10, 0x20, 0x30, 255]);
+        assert_eq!(c.current, [0x40, 0x40, 0x40, 255]);
+        assert_eq!(c.normal_bg, PleditColors::default().normal_bg);
+        assert_eq!(c.font, "Tahoma");
+    }
+
+    #[test]
+    fn region_rectangles_rasterise_to_their_exact_pixel_area() {
+        let r = parse_region(
+            "; comment\n[Normal]\nNumPoints=4,4\nPointList=0,0, 4,0, 4,2, 0,2,   6,0, 8,0, 8,1, 6,1\n[Equalizer]\nNumPoints=4\nPointList=1,1,3,1,3,3,1,3\n",
+        );
+        let main = region_mask(r.normal.as_ref().unwrap(), 10, 4);
+        assert_eq!(main.iter().filter(|v| **v).count(), 4 * 2 + 2);
+        assert!(main[0] && main[3] && !main[4] && main[6] && main[7] && !main[8]);
+        assert!(!main[2 * 10]);
+        let eq = region_mask(r.equalizer.as_ref().unwrap(), 4, 4);
+        assert_eq!(eq.iter().filter(|v| **v).count(), 4);
+        assert!(eq[4 + 1] && !eq[0]);
+    }
+
+    #[test]
+    fn region_file_with_only_comments_defines_nothing() {
+        let r = parse_region(";[Normal]\n;NumPoints=4\n;PointList=0,0,1,0,1,1,0,1\n");
+        assert_eq!(r, Regions::default());
+    }
+
+    #[test]
+    fn embedded_base_skin_loads_with_every_sheet() {
+        let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        for (sheet, _) in SHEET_FILES {
+            if *sheet != Sheet::NumsEx {
+                assert!(skin.has_sheet(*sheet), "missing {sheet:?}");
+            }
+        }
+        assert_eq!(skin.sheet(Sheet::Main).w, main::W);
+        assert_eq!(skin.sheet(Sheet::Main).h, main::H);
+        assert!(skin.main_mask.is_none());
+    }
+
+    #[test]
+    fn garbage_is_rejected_not_panicked_on() {
+        assert!(Skin::from_wsz(b"not a zip", "x").is_err());
+    }
 }

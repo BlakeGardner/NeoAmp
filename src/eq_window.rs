@@ -12,7 +12,16 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
 
     skin.blit(c, e::BACKGROUND, ox, oy);
-    skin.blit(c, if ui.active { e::TITLEBAR } else { e::TITLEBAR_INACTIVE }, ox, oy);
+    skin.blit(
+        c,
+        if ui.active {
+            e::TITLEBAR
+        } else {
+            e::TITLEBAR_INACTIVE
+        },
+        ox,
+        oy,
+    );
     if pressed(Control::EqClose) {
         skin.blit(c, e::CLOSE_PRESSED, ox + e::CLOSE.x, oy + e::CLOSE.y);
     }
@@ -20,43 +29,72 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
         skin.blit(c, e::SHADE_PRESSED, ox + e::SHADE.x, oy + e::SHADE.y);
     }
 
-    skin.blit(c, e::on_sprite(ui.eq_on, pressed(Control::EqOn)), ox + e::ON.x, oy + e::ON.y);
-    skin.blit(c, e::auto_sprite(ui.eq_auto, pressed(Control::EqAuto)), ox + e::AUTO.x, oy + e::AUTO.y);
     skin.blit(
         c,
-        if pressed(Control::EqPresets) { e::PRESETS_DOWN } else { e::PRESETS_UP },
-        ox + e::PRESETS.x,
-        oy + e::PRESETS.y,
+        e::on_sprite(ui.eq_on, pressed(Control::EqOn)),
+        ox + e::ON.x,
+        oy + e::ON.y,
     );
+    skin.blit(
+        c,
+        e::auto_sprite(ui.eq_auto, pressed(Control::EqAuto)),
+        ox + e::AUTO.x,
+        oy + e::AUTO.y,
+    );
+    let presets = if pressed(Control::EqPresets) {
+        e::PRESETS_DOWN
+    } else {
+        e::PRESETS_UP
+    };
+    skin.blit(c, presets, ox + e::PRESETS.x, oy + e::PRESETS.y);
 
     draw_graph(ui, c, skin, e::GRAPH.offset(ox, oy));
 
-    draw_slider(c, skin, e::PREAMP.offset(ox, oy), ui.preamp, pressed(Control::EqPreamp));
+    draw_slider(
+        c,
+        skin,
+        e::PREAMP.offset(ox, oy),
+        ui.preamp,
+        pressed(Control::EqPreamp),
+    );
     for (i, v) in ui.bands.iter().enumerate() {
-        draw_slider(c, skin, e::band(i as i32).offset(ox, oy), *v, pressed(Control::EqBand(i)));
+        let band = i32::try_from(i).unwrap_or(0);
+        draw_slider(
+            c,
+            skin,
+            e::band(band).offset(ox, oy),
+            *v,
+            pressed(Control::EqBand(i)),
+        );
     }
 }
 
 fn draw_slider(c: &mut Image, skin: &Skin, r: Rect, value: f32, pressed: bool) {
+    // `value` is clamped to 0..=1, so these casts stay in range.
     let frame = (value * (e::SLIDER_FRAMES - 1) as f32).round() as i32;
     skin.blit(c, e::slider_frame(frame), r.x, r.y);
     let ty = ((1.0 - value) * e::SLIDER_TRAVEL as f32) as i32;
-    let thumb = if pressed { e::SLIDER_THUMB_PRESSED } else { e::SLIDER_THUMB };
+    let thumb = if pressed {
+        e::SLIDER_THUMB_PRESSED
+    } else {
+        e::SLIDER_THUMB
+    };
     skin.blit(c, thumb, r.x + 1, r.y + ty);
 }
 
 /// The 113x19 response curve: a spline through the ten band values, coloured by height.
 fn draw_graph(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
+    const ROWS: usize = 19;
     skin.blit(c, e::GRAPH_BG, r.x, r.y);
     let gradient = skin.sheet(e::GRAPH_GRADIENT.sheet);
-    let colors: Vec<[u8; 4]> = (0..19).map(|i| gradient.get(e::GRAPH_GRADIENT.x, e::GRAPH_GRADIENT.y + i)).collect();
+    let colors: [[u8; 4]; ROWS] =
+        std::array::from_fn(|i| gradient.get(e::GRAPH_GRADIENT.x, e::GRAPH_GRADIENT.y + i as i32));
 
-    // Preamp line.
-    let py = ((1.0 - ui.preamp) * 18.0).round() as i32;
+    let py = ((1.0 - ui.preamp) * (ROWS - 1) as f32).round() as i32;
     skin.blit(c, e::PREAMP_LINE, r.x, r.y + py);
 
-    let n = ui.bands.len();
-    let ys: Vec<f32> = ui.bands.iter().map(|v| (1.0 - v) * 18.0).collect();
+    let ys: [f32; 10] = ui.bands.map(|v| (1.0 - v) * (ROWS - 1) as f32);
+    let n = ys.len();
     let step = (r.w - 1) as f32 / (n - 1) as f32;
     for x in 0..r.w {
         let fx = x as f32 / step;
@@ -72,7 +110,7 @@ fn draw_graph(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
                 + (-p0 + p2) * t
                 + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
                 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t);
-        let yi = y.round().clamp(0.0, 18.0) as i32;
-        c.put(r.x + x, r.y + yi, colors[yi as usize]);
+        let yi = y.round().clamp(0.0, (ROWS - 1) as f32) as usize;
+        c.put(r.x + x, r.y + yi as i32, colors[yi]);
     }
 }

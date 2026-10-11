@@ -42,10 +42,13 @@ pub fn glyph_pos(ch: char) -> (i32, i32) {
     }
 }
 
-/// Draw `text` with the skin bitmap font at (x, y), clipped to `clip`.
-pub fn draw_bitmap_text(c: &mut Image, skin: &Skin, text: &str, x: i32, y: i32, clip: Rect) {
+/// Draw a sequence of characters with the skin bitmap font at (x, y), clipped to `clip`.
+pub fn draw_bitmap_chars<I>(c: &mut Image, skin: &Skin, chars: I, x: i32, y: i32, clip: Rect)
+where
+    I: IntoIterator<Item = char>,
+{
     let mut px = x;
-    for ch in text.chars() {
+    for ch in chars {
         if px >= clip.right() {
             break;
         }
@@ -55,8 +58,16 @@ pub fn draw_bitmap_text(c: &mut Image, skin: &Skin, text: &str, x: i32, y: i32, 
     }
 }
 
+/// Draw `text` with the skin bitmap font at (x, y), clipped to `clip`.
+pub fn draw_bitmap_text(c: &mut Image, skin: &Skin, text: &str, x: i32, y: i32, clip: Rect) {
+    draw_bitmap_chars(c, skin, text.chars(), x, y, clip);
+}
+
+#[must_use]
 pub fn bitmap_text_width(text: &str) -> i32 {
-    text.chars().count() as i32 * f::GLYPH_W
+    i32::try_from(text.chars().count())
+        .unwrap_or(i32::MAX / 2)
+        .saturating_mul(f::GLYPH_W)
 }
 
 /// A small TrueType font for the playlist, rendered antialiased with half-pixel letter spacing
@@ -83,6 +94,16 @@ const CANDIDATES: &[&str] = &[
     "C:\\Windows\\Fonts\\arial.ttf",
 ];
 
+impl std::fmt::Debug for TtfFont {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TtfFont")
+            .field("px", &self.px)
+            .field("ascent", &self.ascent)
+            .field("letter_spacing", &self.letter_spacing)
+            .finish_non_exhaustive()
+    }
+}
+
 impl TtfFont {
     /// The playlist font as Winamp rendered it: a 9px Arial-like face.
     pub const DEFAULT_PX: f32 = 9.0;
@@ -101,25 +122,42 @@ impl TtfFont {
     }
 
     pub fn from_bytes(bytes: Vec<u8>, px: f32) -> Option<TtfFont> {
-        let settings = fontdue::FontSettings { scale: px, ..Default::default() };
+        let settings = fontdue::FontSettings {
+            scale: px,
+            ..Default::default()
+        };
         let font = fontdue::Font::from_bytes(bytes, settings).ok()?;
         let ascent = font
             .horizontal_line_metrics(px)
             .map(|m| m.ascent.round() as i32)
             .unwrap_or(px.round() as i32);
-        Some(TtfFont { font, px, ascent, letter_spacing: 0.5 })
+        Some(TtfFont {
+            font,
+            px,
+            ascent,
+            letter_spacing: 0.5,
+        })
     }
 
     fn advance(&self, ch: char) -> f32 {
         self.font.metrics(ch, self.px).advance_width + self.letter_spacing
     }
 
+    #[must_use]
     pub fn width(&self, text: &str) -> i32 {
         text.chars().map(|ch| self.advance(ch)).sum::<f32>().round() as i32
     }
 
     /// Draw `text` with its top at `top`, returning the advance in pixels.
-    pub fn draw(&self, c: &mut Image, text: &str, x: i32, top: i32, color: [u8; 4], clip: Rect) -> i32 {
+    pub fn draw(
+        &self,
+        c: &mut Image,
+        text: &str,
+        x: i32,
+        top: i32,
+        color: [u8; 4],
+        clip: Rect,
+    ) -> i32 {
         let baseline = top + self.ascent;
         let mut pen = x as f32;
         for ch in text.chars() {
@@ -148,5 +186,45 @@ impl TtfFont {
 fn blend(dst: [u8; 4], src: [u8; 4], cov: u8) -> [u8; 4] {
     let a = cov as u32;
     let mix = |d: u8, s: u8| ((d as u32 * (255 - a) + s as u32 * a) / 255) as u8;
-    [mix(dst[0], src[0]), mix(dst[1], src[1]), mix(dst[2], src[2]), 255]
+    [
+        mix(dst[0], src[0]),
+        mix(dst[1], src[1]),
+        mix(dst[2], src[2]),
+        255,
+    ]
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glyph_lookup_is_case_insensitive_and_falls_back_to_space() {
+        assert_eq!(glyph_pos('a'), glyph_pos('A'));
+        assert_eq!(glyph_pos('A'), (0, 0));
+        assert_eq!(glyph_pos('0'), (0, 1));
+        assert_eq!(glyph_pos(':'), (12, 1));
+        assert_eq!(glyph_pos('?'), (3, 2));
+        assert_eq!(glyph_pos('€'), glyph_pos(' '));
+    }
+
+    #[test]
+    fn bitmap_width_is_five_pixels_per_character() {
+        assert_eq!(bitmap_text_width("abc"), 15);
+        assert_eq!(bitmap_text_width(""), 0);
+    }
+
+    #[test]
+    fn blend_is_a_linear_mix() {
+        assert_eq!(
+            blend([0, 0, 0, 255], [255, 255, 255, 255], 0),
+            [0, 0, 0, 255]
+        );
+        assert_eq!(
+            blend([0, 0, 0, 255], [255, 255, 255, 255], 255),
+            [255, 255, 255, 255]
+        );
+        assert_eq!(blend([0, 0, 0, 255], [200, 100, 0, 255], 51)[0], 40);
+    }
 }

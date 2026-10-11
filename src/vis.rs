@@ -5,6 +5,9 @@ use std::time::Instant;
 use crate::canvas::{Image, Rect};
 use crate::skin::Skin;
 
+/// Each analyser bar is this wide, followed by a one pixel gap.
+const BAR_W: i32 = 3;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VisMode {
     Analyzer,
@@ -15,6 +18,7 @@ pub enum VisMode {
 pub const BARS: usize = 19;
 pub const H: i32 = 16;
 
+#[derive(Debug)]
 pub struct Vis {
     pub mode: VisMode,
     bars: [f32; BARS],
@@ -25,7 +29,14 @@ pub struct Vis {
     rng: u32,
 }
 
+impl Default for Vis {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Vis {
+    #[must_use]
     pub fn new() -> Vis {
         Vis {
             mode: VisMode::Analyzer,
@@ -65,7 +76,11 @@ impl Vis {
 
     /// Advance the fake analyser by one frame while playing.
     pub fn update(&mut self, now: Instant, playing: bool) {
-        let dt = self.last.map(|l| (now - l).as_secs_f32()).unwrap_or(0.0).min(0.1);
+        let dt = self
+            .last
+            .map(|l| (now - l).as_secs_f32())
+            .unwrap_or(0.0)
+            .min(0.1);
         self.last = Some(now);
         if !playing {
             return;
@@ -79,7 +94,11 @@ impl Vis {
             let hit = if self.rand() < 0.12 { self.rand() } else { 0.0 };
             let target = (H as f32) * env * (0.25 + 0.55 * wobble * self.rand() + hit).min(1.0);
             // Bars jump up instantly and fall about one pixel per frame.
-            self.bars[i] = if target > self.bars[i] { target } else { (self.bars[i] - 1.0 * frames).max(0.0) };
+            self.bars[i] = if target > self.bars[i] {
+                target
+            } else {
+                (self.bars[i] - 1.0 * frames).max(0.0)
+            };
             // Peaks hold, then fall with acceleration.
             if self.bars[i] >= self.peaks[i] {
                 self.peaks[i] = self.bars[i];
@@ -100,7 +119,7 @@ impl Vis {
             return;
         }
         let colors = &skin.vis_colors;
-        c.fill_rect(r.x, r.y, r.w, r.h, colors[0]);
+        c.fill_rect(r, colors[0]);
         for y in (1..r.h).step_by(2) {
             for x in (0..r.w).step_by(2) {
                 c.put(r.x + x, r.y + y, colors[1]);
@@ -108,16 +127,17 @@ impl Vis {
         }
         match self.mode {
             VisMode::Analyzer => {
-                for i in 0..BARS {
-                    let x = r.x + i as i32 * 4;
-                    let h = self.bars[i].round().clamp(0.0, H as f32) as i32;
+                for (i, (bar, peak)) in self.bars.iter().zip(&self.peaks).enumerate() {
+                    let x = r.x + i32::try_from(i).unwrap_or(0) * (BAR_W + 1);
+                    // Heights are clamped to 0..=16, so the casts cannot truncate.
+                    let h = bar.round().clamp(0.0, H as f32) as i32;
                     for row in (H - h)..H {
-                        let color = colors[2 + row as usize];
-                        c.fill_rect(x, r.y + row, 3, 1, color);
+                        let color = colors[2 + row.unsigned_abs() as usize];
+                        c.fill_rect(Rect::new(x, r.y + row, BAR_W, 1), color);
                     }
-                    let p = self.peaks[i].round().clamp(0.0, H as f32) as i32;
+                    let p = peak.round().clamp(0.0, H as f32) as i32;
                     if p > 0 {
-                        c.fill_rect(x, r.y + H - p, 3, 1, colors[23]);
+                        c.fill_rect(Rect::new(x, r.y + H - p, BAR_W, 1), colors[23]);
                     }
                 }
             }

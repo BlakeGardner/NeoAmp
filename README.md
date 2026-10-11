@@ -22,8 +22,11 @@ program does the same:
   base skin for anything a skin leaves out.
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
   three windows; `src/ui.rs` holds state, hit testing and input.
-- `src/main.rs` runs a borderless, transparent `winit` window and presents the
+- `src/app.rs` runs a borderless, transparent `winit` window and presents the
   framebuffer with `pixels` (wgpu), scaled 1x or 2x with no filtering.
+- `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
+  parses the command line. `cargo test` covers layout, hit testing, input,
+  the skin parsers and the blitter.
 
 The three windows live in one OS window stacked the classic way
 (main, equalizer, playlist). Wayland does not let applications position

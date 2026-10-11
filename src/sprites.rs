@@ -3,8 +3,6 @@
 //! Every classic skin is a fixed set of bitmaps with fixed sprite positions; only the
 //! pixels change. These tables are the de-facto skin specification.
 
-#![allow(dead_code)]
-
 use crate::canvas::Rect;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -32,6 +30,14 @@ pub struct Sprite {
     pub y: i32,
     pub w: i32,
     pub h: i32,
+}
+
+impl Sprite {
+    /// The sprite's rectangle inside its sheet.
+    #[must_use]
+    pub const fn rect(&self) -> Rect {
+        Rect::new(self.x, self.y, self.w, self.h)
+    }
 }
 
 const fn sp(sheet: Sheet, x: i32, y: i32, w: i32, h: i32) -> Sprite {
@@ -187,10 +193,22 @@ pub mod main {
     pub const EQ_BTN: Rect = Rect::new(219, 58, 23, 12);
     pub const PL_BTN: Rect = Rect::new(242, 58, 23, 12);
     pub const fn eq_btn_sprite(on: bool, pressed: bool) -> Sprite {
-        sp(Sheet::ShufRep, if pressed { 46 } else { 0 }, if on { 73 } else { 61 }, 23, 12)
+        sp(
+            Sheet::ShufRep,
+            if pressed { 46 } else { 0 },
+            if on { 73 } else { 61 },
+            23,
+            12,
+        )
     }
     pub const fn pl_btn_sprite(on: bool, pressed: bool) -> Sprite {
-        sp(Sheet::ShufRep, if pressed { 69 } else { 23 }, if on { 73 } else { 61 }, 23, 12)
+        sp(
+            Sheet::ShufRep,
+            if pressed { 69 } else { 23 },
+            if on { 73 } else { 61 },
+            23,
+            12,
+        )
     }
 }
 
@@ -243,7 +261,13 @@ pub mod eq {
         Rect::new(78 + 18 * i, 38, 14, 63)
     }
     pub const fn slider_frame(i: i32) -> Sprite {
-        sp(Sheet::EqMain, 13 + (i % 14) * 15, 164 + (i / 14) * 65, 14, 63)
+        sp(
+            Sheet::EqMain,
+            13 + (i % 14) * 15,
+            164 + (i / 14) * 65,
+            14,
+            63,
+        )
     }
     pub const SLIDER_FRAMES: i32 = 28;
     pub const SLIDER_THUMB: Sprite = sp(Sheet::EqMain, 0, 164, 11, 11);
@@ -251,7 +275,9 @@ pub mod eq {
     pub const SLIDER_THUMB_H: i32 = 11;
     /// Thumb travel in pixels (the 63px track minus a 1px bottom margin and the thumb).
     pub const SLIDER_TRAVEL: i32 = 51;
-    pub const BAND_LABELS: [&str; 10] = ["60", "170", "310", "600", "1K", "3K", "6K", "12K", "14K", "16K"];
+    pub const BAND_LABELS: [&str; 10] = [
+        "60", "170", "310", "600", "1K", "3K", "6K", "12K", "14K", "16K",
+    ];
 }
 
 /// Playlist editor (resizable; 275x116 minimum, grows in 25x29 steps).
@@ -329,7 +355,13 @@ pub mod pl {
     pub const MENU_ITEM_W: i32 = 22;
     pub const MENU_ITEM_H: i32 = 18;
     pub const fn menu_item(x: i32, idx: i32, selected: bool) -> Sprite {
-        sp(Sheet::PlEdit, x + if selected { 23 } else { 0 }, 111 + idx * 19, 22, 18)
+        sp(
+            Sheet::PlEdit,
+            x + if selected { 23 } else { 0 },
+            111 + idx * 19,
+            22,
+            18,
+        )
     }
     pub const fn menu_bar(x: i32, items: i32) -> Sprite {
         sp(Sheet::PlEdit, x, 111, 3, items * 18)
