@@ -1,0 +1,26 @@
+[package]
+name = "winamp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A pixel-exact Winamp 2.x classic interface, skinnable with .wsz skins"
+
+[dependencies]
+winit = "0.30"
+pixels = "0.17"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "png"] }
+fontdue = "0.9"
+anyhow = "1"
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
