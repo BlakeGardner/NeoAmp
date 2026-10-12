@@ -4,6 +4,10 @@
 //! Docking needs to read and set window positions. X11 (including XWayland) allows that, so
 //! the X11 backend is preferred whenever `DISPLAY` is set; pure Wayland forbids it, in which
 //! case title-bar drags are handed to the compositor and no snapping happens.
+//!
+//! Windows are sized in physical pixels: skin size times the UI scale times the desktop's
+//! scale factor, rounded. `upscale::Upscaler` stretches each canvas over its whole window: exact
+//! squares at whole-number scales, sharp-bilinear in between.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,7 +17,7 @@ use anyhow::{Context, Result};
 use pixels::wgpu;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -24,6 +28,8 @@ use crate::dock::{self, SNAP_DISTANCE};
 use crate::font::TtfFont;
 use crate::skin::Skin;
 use crate::ui::{Action, KeyCmd, Ui, WindowKind};
+use crate::upscale::{Upscaler, window_to_canvas};
+use crate::zoom::Zoom;
 
 /// The stock Winamp 2.91 skin, embedded as the fallback for every missing sheet.
 pub const BASE_SKIN: &[u8] = include_bytes!("../skins/base-2.91.wsz");
@@ -65,11 +71,39 @@ fn kind_index(kind: WindowKind) -> usize {
     }
 }
 
-/// What to run: an optional skin to load and an optional screenshot-and-exit path.
+/// What to run: an optional skin to load, an optional screenshot-and-exit path and an
+/// optional zoom (otherwise chosen from the screen size).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
+    /// A `.wsz` skin to show instead of the embedded base skin.
     pub skin: Option<PathBuf>,
+    /// Render one frame to this PNG and exit instead of opening windows.
     pub screenshot: Option<PathBuf>,
+    /// The zoom to start at; `None` picks one from the screen height.
+    pub zoom: Option<Zoom>,
+}
+
+/// Round a length in screen pixels to whole pixels. Window geometry stays far inside `i32`,
+/// so the range check only guards against nonsense input; within it the cast is exact.
+fn round_px(v: f64) -> i32 {
+    let r = v.round();
+    if r.is_nan() {
+        0
+    } else {
+        r.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+    }
+}
+
+/// Window size in physical pixels for a `(w, h)` skin-pixel canvas at `scale`.
+fn scaled_size((w, h): (i32, i32), scale: f64) -> PhysicalSize<u32> {
+    let px = |v: i32| round_px(f64::from(v) * scale).max(1).unsigned_abs();
+    PhysicalSize::new(px(w), px(h))
+}
+
+/// Carry a physical offset taken at scale `from` over to scale `to`, going through whole skin
+/// pixels so docked edges land where the rounded window sizes put them.
+fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
+    round_px((f64::from(offset) / from).round() * to)
 }
 
 /// Load the base skin, apply the options and either render a screenshot or open the windows.
@@ -104,7 +138,8 @@ pub fn run(opts: Options) -> Result<()> {
         unmanaged: unmanaged_preference() == Some(true),
         probe: None,
         probe_done: unmanaged_preference().is_some(),
-        applied_scale: 1,
+        startup_zoom: opts.zoom,
+        applied_scale: 1.0,
         modifiers: ModifiersState::empty(),
         next_frame: Instant::now(),
         stats: FrameStats::new(Instant::now()),
@@ -189,6 +224,7 @@ fn unmanaged_preference() -> Option<bool> {
 /// One OS window hosting one Winamp window.
 struct Pane {
     kind: WindowKind,
+    upscaler: Upscaler,
     /// Declared before `window` so the GPU surface is dropped first.
     pixels: Pixels<'static>,
     window: Arc<Window>,
@@ -211,16 +247,18 @@ impl Pane {
         ))
     }
 
+    /// Screen pixels per skin pixel: the UI scale times the desktop's scale for this window.
+    fn scale(&self, ui_scale: f64) -> f64 {
+        ui_scale * self.window.scale_factor()
+    }
+
     /// The last pointer position in canvas (skin pixel) coordinates.
     fn canvas_pos(&self) -> (i32, i32) {
-        let pos = (self.cursor.x as f32, self.cursor.y as f32);
-        let (x, y) = match self.pixels.window_pos_to_pixel(pos) {
-            Ok(xy) => xy,
-            Err(xy) => self.pixels.clamp_pixel_pos(xy),
-        };
-        (
-            i32::try_from(x).unwrap_or(i32::MAX),
-            i32::try_from(y).unwrap_or(i32::MAX),
+        let size = self.window.inner_size();
+        window_to_canvas(
+            (self.cursor.x, self.cursor.y),
+            (size.width, size.height),
+            (self.canvas.w, self.canvas.h),
         )
     }
 
@@ -265,8 +303,10 @@ struct App {
     /// A re-dock whose outcome is still to be checked: (window, expected position, when).
     probe: Option<(WindowKind, PhysicalPosition<i32>, Instant)>,
     probe_done: bool,
-    /// The scale the panes were last sized for (to re-dock after a double-size toggle).
-    applied_scale: u8,
+    /// The zoom asked for on the command line; `None` picks one from the screen size.
+    startup_zoom: Option<Zoom>,
+    /// The main window's scale when the panes were last sized (to re-dock after a change).
+    applied_scale: f64,
     modifiers: ModifiersState,
     next_frame: Instant,
     stats: FrameStats,
@@ -298,11 +338,20 @@ impl App {
         }
     }
 
-    /// Logical window size for `kind` at the current UI scale.
-    fn logical_size(&self, kind: WindowKind) -> LogicalSize<f64> {
-        let (w, h) = self.ui.window_size(kind);
-        let scale = i32::from(self.ui.scale());
-        LogicalSize::new(f64::from(w * scale), f64::from(h * scale))
+    /// Set the zoom from the command line or, failing that, from the height of the screen the
+    /// main window opens on.
+    fn choose_zoom(&mut self, el: &ActiveEventLoop) {
+        let zoom = self.startup_zoom.unwrap_or_else(|| {
+            let monitor = el
+                .primary_monitor()
+                .or_else(|| el.available_monitors().next());
+            monitor.map_or(Zoom::MIN, |m| {
+                Zoom::for_screen_height(f64::from(m.size().height) / m.scale_factor())
+            })
+        });
+        log::info!("zoom {zoom} (Ctrl+= and Ctrl+- change it, Ctrl+0 resets)");
+        self.ui.zoom = zoom;
+        self.ui.default_zoom = zoom;
     }
 
     fn open_pane(
@@ -316,9 +365,16 @@ impl App {
             WindowKind::Eq => "Winamp Equalizer",
             WindowKind::Playlist => "Winamp Playlist",
         };
+        // The desktop's scale factor is only known once the window exists; `sync_panes`
+        // then trims the size to exactly what `scaled_size` asks for.
+        let (w, h) = self.ui.window_size(kind);
+        let ui_scale = self.ui.scale();
         let mut attrs = Window::default_attributes()
             .with_title(title)
-            .with_inner_size(self.logical_size(kind))
+            .with_inner_size(LogicalSize::new(
+                f64::from(w) * ui_scale,
+                f64::from(h) * ui_scale,
+            ))
             .with_decorations(false)
             .with_resizable(false)
             .with_transparent(true);
@@ -342,7 +398,6 @@ impl App {
         if let Some(p) = at {
             window.set_outer_position(p);
         }
-        let (w, h) = self.ui.window_size(kind);
         let (bw, bh) = (u32::try_from(w)?, u32::try_from(h)?);
         let size = window.inner_size();
         let make_surface =
@@ -360,6 +415,7 @@ impl App {
             .context("creating the GPU surface")?;
         self.panes.push(Pane {
             kind,
+            upscaler: Upscaler::new(&pixels),
             pixels,
             window,
             canvas: Image::new(w, h),
@@ -481,7 +537,13 @@ impl App {
     /// Create, destroy and resize OS windows to match the UI state.
     fn sync_panes(&mut self, el: &ActiveEventLoop) {
         // Remember how the cluster hangs off the main window before anything resizes.
-        let scale_changed = self.ui.scale() != self.applied_scale;
+        let ui_scale = self.ui.scale();
+        let main_scale = self
+            .pane(WindowKind::Main)
+            .map_or(self.applied_scale, |p| p.scale(ui_scale));
+        // Bit-exact on purpose: this asks whether the value changed since it was stored, and
+        // both sides come from the same computation.
+        let scale_changed = main_scale != self.applied_scale;
         let cluster = if scale_changed {
             self.cluster_offsets()
         } else {
@@ -503,39 +565,36 @@ impl App {
         }
 
         for kind in WindowKind::ALL {
-            let wanted = self.logical_size(kind);
             let (w, h) = self.ui.window_size(kind);
             let Some(pane) = self.pane_mut(kind) else {
                 continue;
             };
             if pane.canvas.w != w || pane.canvas.h != h {
                 pane.canvas = Image::new(w, h);
-                if let (Ok(bw), Ok(bh)) = (u32::try_from(w), u32::try_from(h))
-                    && let Err(e) = pane.pixels.resize_buffer(bw, bh)
-                {
-                    log::error!("resize_buffer: {e}");
+                if let (Ok(bw), Ok(bh)) = (u32::try_from(w), u32::try_from(h)) {
+                    match pane.pixels.resize_buffer(bw, bh) {
+                        Ok(()) => pane.upscaler.rebind(&pane.pixels),
+                        Err(e) => log::error!("resize_buffer: {e}"),
+                    }
                 }
             }
-            let current = pane
-                .window
-                .inner_size()
-                .to_logical::<f64>(pane.window.scale_factor());
-            if (current.width - wanted.width).abs() > 0.5
-                || (current.height - wanted.height).abs() > 0.5
-            {
+            let scale = pane.scale(ui_scale);
+            let wanted = scaled_size((w, h), scale);
+            if pane.window.inner_size() != wanted {
                 let _ = pane.window.request_inner_size(wanted);
             }
             pane.window.request_redraw();
         }
 
         if scale_changed {
-            let ratio = f64::from(self.ui.scale()) / f64::from(self.applied_scale);
-            self.applied_scale = self.ui.scale();
+            log::info!("interface scale {main_scale}x");
+            let from = self.applied_scale;
+            self.applied_scale = main_scale;
             if let Some(main) = self.pane(WindowKind::Main).and_then(Pane::rect) {
                 for (kind, dx, dy) in cluster {
                     if let Some(p) = self.pane(kind) {
-                        let x = main.x + (f64::from(dx) * ratio).round() as i32;
-                        let y = main.y + (f64::from(dy) * ratio).round() as i32;
+                        let x = main.x.saturating_add(rescale_offset(dx, from, main_scale));
+                        let y = main.y.saturating_add(rescale_offset(dy, from, main_scale));
                         p.window.set_outer_position(PhysicalPosition::new(x, y));
                     }
                 }
@@ -597,6 +656,8 @@ impl App {
         let Some(pane) = self.pane(kind) else { return };
         let Some(rect) = pane.rect() else { return };
         let screen = pane.screen();
+        // Winamp snapped at 10 skin pixels, which is more screen pixels when zoomed.
+        let snap = round_px(f64::from(SNAP_DISTANCE) * pane.scale(self.ui.scale()));
         // Pointer and grab offset in whole screen pixels.
         let pointer = (
             (f64::from(rect.x) + pointer.x).round() as i32,
@@ -623,15 +684,7 @@ impl App {
             .filter(|p| p.kind != kind && !followers.iter().any(|(fk, ..)| *fk == p.kind))
             .filter_map(Pane::rect)
             .collect();
-        let (nx, ny) = dock::drag_target(
-            rect,
-            &offsets,
-            pointer,
-            grab,
-            &statics,
-            screen,
-            SNAP_DISTANCE,
-        );
+        let (nx, ny) = dock::drag_target(rect, &offsets, pointer, grab, &statics, screen, snap);
 
         if (nx, ny) != (rect.x, rect.y) {
             pane.window
@@ -666,6 +719,9 @@ impl App {
         Some(match key {
             Key::Character(s) => match (s.to_ascii_lowercase().as_str(), ctrl, alt) {
                 ("d", true, _) => KeyCmd::ToggleDoubleSize,
+                ("=" | "+", true, _) => KeyCmd::ZoomIn,
+                ("-" | "_", true, _) => KeyCmd::ZoomOut,
+                ("0", true, _) => KeyCmd::ZoomReset,
                 ("t", true, _) => KeyCmd::ToggleTimeMode,
                 ("g", _, true) => KeyCmd::ToggleEq,
                 ("e", _, true) => KeyCmd::TogglePl,
@@ -703,7 +759,7 @@ impl App {
             frame.copy_from_slice(&pane.canvas.data);
         }
         let started = Instant::now();
-        if let Err(e) = pane.pixels.render() {
+        if let Err(e) = pane.upscaler.render(&pane.pixels) {
             log::error!("render: {e}");
         }
         let took = started.elapsed();
@@ -739,6 +795,7 @@ impl ApplicationHandler for App {
             .map(|m| m.position())
             .unwrap_or(PhysicalPosition::new(0, 0));
         let at = PhysicalPosition::new(origin.x + INITIAL_OFFSET.0, origin.y + INITIAL_OFFSET.1);
+        self.choose_zoom(el);
         if let Err(e) = self.open_pane(el, WindowKind::Main, Some(at)) {
             log::error!("cannot open a window: {e:#}");
             el.exit();
@@ -750,7 +807,9 @@ impl ApplicationHandler for App {
         if !self.docking {
             log::info!("this backend cannot position windows; docking is disabled");
         }
-        self.applied_scale = self.ui.scale();
+        self.applied_scale = self
+            .pane(WindowKind::Main)
+            .map_or(1.0, |p| p.scale(self.ui.scale()));
         self.sync_panes(el);
     }
 
@@ -774,6 +833,18 @@ impl ApplicationHandler for App {
                 {
                     log::error!("resize_surface: {e}");
                 }
+            }
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                mut inner_size_writer,
+            } => {
+                // Moved to a monitor with a different desktop scale. Answer with our own size,
+                // or winit applies its rounding of the old logical size after this returns.
+                let wanted = scaled_size(self.ui.window_size(kind), self.ui.scale() * scale_factor);
+                if let Err(e) = inner_size_writer.request_inner_size(wanted) {
+                    log::warn!("keeping winit's size after a scale change: {e}");
+                }
+                self.sync_panes(el);
             }
             WindowEvent::Focused(f) => {
                 if let Some(p) = self.pane_mut(kind) {
@@ -841,5 +912,41 @@ impl ApplicationHandler for App {
             }
         }
         el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_are_sized_to_the_nearest_screen_pixel() {
+        assert_eq!(scaled_size((275, 116), 1.0), PhysicalSize::new(275, 116));
+        assert_eq!(scaled_size((275, 116), 1.5), PhysicalSize::new(413, 174));
+        assert_eq!(scaled_size((275, 116), 3.0), PhysicalSize::new(825, 348));
+        assert_eq!(scaled_size((0, 0), 2.0), PhysicalSize::new(1, 1));
+    }
+
+    #[test]
+    fn pixel_rounding_stays_in_range() {
+        assert_eq!(round_px(412.5), 413);
+        assert_eq!(round_px(-0.4), 0);
+        assert_eq!(round_px(f64::NAN), 0);
+        assert_eq!(round_px(1e12), i32::MAX);
+        assert_eq!(scaled_size((275, 116), f64::NAN), PhysicalSize::new(1, 1));
+    }
+
+    #[test]
+    fn docked_offsets_follow_the_rounded_window_sizes() {
+        // A window docked right of a 275-pixel main window, at 1.5x and then 2x.
+        let at_1_5 = rescale_offset(275, 1.0, 1.5);
+        assert_eq!(
+            u32::try_from(at_1_5),
+            Ok(scaled_size((275, 116), 1.5).width)
+        );
+        assert_eq!(rescale_offset(at_1_5, 1.5, 2.0), 550);
+        assert_eq!(rescale_offset(550, 2.0, 1.5), 413);
+        // Under the main window and the equalizer.
+        assert_eq!(rescale_offset(232, 1.0, 2.5), 580);
     }
 }

@@ -9,6 +9,7 @@ use crate::font::TtfFont;
 use crate::skin::{Mask, Skin};
 use crate::sprites::{eq as e, main as m, pl as p};
 use crate::vis::Vis;
+use crate::zoom::Zoom;
 use crate::{eq_window, main_window, playlist_window};
 
 /// The marquee advances one character this often, like Winamp 2.x.
@@ -177,6 +178,12 @@ pub enum Action {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KeyCmd {
     ToggleDoubleSize,
+    /// One half step larger, e.g. 1.5x to 2x.
+    ZoomIn,
+    /// One half step smaller.
+    ZoomOut,
+    /// Back to the zoom chosen at startup.
+    ZoomReset,
     ToggleEq,
     TogglePl,
     Prev,
@@ -237,6 +244,10 @@ pub struct Ui {
     pub stereo: bool,
     pub vis: Vis,
     pub double_size: bool,
+    /// How far the windows are enlarged; double size doubles it again (see [`Ui::scale`]).
+    pub zoom: Zoom,
+    /// The zoom chosen at startup, restored by [`KeyCmd::ZoomReset`].
+    pub default_zoom: Zoom,
     /// Any of the app's windows has focus: title bars draw in their active state.
     pub active: bool,
     /// Last pointer position inside the playlist window (menu highlight).
@@ -333,6 +344,8 @@ impl Ui {
             stereo: true,
             vis: Vis::new(),
             double_size: false,
+            zoom: Zoom::MIN,
+            default_zoom: Zoom::MIN,
             active: true,
             cursor: (-1, -1),
             marquee_override: None,
@@ -403,10 +416,20 @@ impl Ui {
         }
     }
 
-    /// Window scale factor: 1, or 2 in double-size mode.
+    /// Screen pixels per skin pixel before the desktop's own scaling: the zoom, doubled in
+    /// double-size mode. Always a multiple of 0.5.
     #[must_use]
-    pub fn scale(&self) -> u8 {
-        if self.double_size { 2 } else { 1 }
+    pub fn scale(&self) -> f64 {
+        let double = if self.double_size { 2.0 } else { 1.0 };
+        self.zoom.factor() * double
+    }
+
+    /// Change the zoom, asking for a relayout only if it actually changed.
+    fn set_zoom(&mut self, zoom: Zoom, actions: &mut Vec<Action>) {
+        if zoom != self.zoom {
+            self.zoom = zoom;
+            actions.push(Action::Relayout);
+        }
     }
 
     // ----- playback model -----------------------------------------------------------------
@@ -1045,6 +1068,9 @@ impl Ui {
                 self.double_size = !self.double_size;
                 actions.push(Action::Relayout);
             }
+            KeyCmd::ZoomIn => self.set_zoom(self.zoom.larger(), &mut actions),
+            KeyCmd::ZoomOut => self.set_zoom(self.zoom.smaller(), &mut actions),
+            KeyCmd::ZoomReset => self.set_zoom(self.default_zoom, &mut actions),
             KeyCmd::ToggleEq => {
                 self.eq_open = !self.eq_open;
                 actions.push(Action::Relayout);
@@ -1223,6 +1249,31 @@ mod tests {
         assert!(ui.eq_open);
         ui.set_open(Playlist, false);
         assert!(!ui.is_open(Playlist));
+    }
+
+    #[test]
+    fn zoom_keys_step_and_reset_and_double_size_multiplies() {
+        fn assert_scale(ui: &Ui, expected: f64) {
+            let got = ui.scale();
+            assert!(
+                (got - expected).abs() < 1e-9,
+                "scale {got}, expected {expected}"
+            );
+        }
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        ui.default_zoom = Zoom::try_from(1.5).unwrap();
+        assert_scale(&ui, 1.0);
+        assert_eq!(ui.key(KeyCmd::ZoomOut, now), vec![], "already at 1x");
+        assert_eq!(ui.key(KeyCmd::ZoomIn, now), vec![Action::Relayout]);
+        assert_scale(&ui, 1.5);
+        let _ = ui.key(KeyCmd::ToggleDoubleSize, now);
+        assert_scale(&ui, 3.0);
+        let _ = ui.key(KeyCmd::ZoomIn, now);
+        assert_scale(&ui, 4.0);
+        assert_eq!(ui.key(KeyCmd::ZoomReset, now), vec![Action::Relayout]);
+        assert_eq!(ui.zoom, ui.default_zoom);
+        assert_eq!(ui.key(KeyCmd::ZoomReset, now), vec![]);
     }
 
     #[test]

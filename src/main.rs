@@ -6,13 +6,15 @@ use anyhow::{Result, bail};
 use winamp::app::{self, Options};
 
 const USAGE: &str = "\
-usage: winamp [--skin <file.wsz>] [--screenshot <out.png>] [<file.wsz>]
+usage: winamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>] [<file.wsz>]
 
   <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto the window)
-  --screenshot <png>   render one frame to a PNG and exit
+  --scale <factor>     zoom the windows (default: from the screen height, 1.5 at 1440p)
+  --screenshot <png>   render one frame at 1x to a PNG and exit
 
 keys: Z/X/C/V/B transport, S shuffle, R repeat, Ctrl+T time mode,
-      Ctrl+D double size, Alt+G equalizer, Alt+E playlist, arrows volume/seek";
+      Ctrl+D double size, Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
+      Alt+G equalizer, Alt+E playlist, arrows volume/seek";
 
 /// Parse the command line; `Ok(None)` means help was requested.
 fn parse_args(args: &[String]) -> Result<Option<Options>> {
@@ -24,6 +26,10 @@ fn parse_args(args: &[String]) -> Result<Option<Options>> {
             "--screenshot" => match it.next() {
                 Some(v) => opts.screenshot = Some(PathBuf::from(v)),
                 None => bail!("--screenshot needs an output path"),
+            },
+            "--scale" => match it.next() {
+                Some(v) => opts.zoom = Some(v.parse()?),
+                None => bail!("--scale needs a factor: 1, 1.5, 2, 2.5 or 3"),
             },
             "--skin" => match it.next() {
                 Some(v) => opts.skin = Some(PathBuf::from(v)),
@@ -75,9 +81,18 @@ mod tests {
     }
 
     #[test]
+    fn scale_is_parsed() {
+        let opts = parse_args(&args(&["--scale", "1.5"])).unwrap().unwrap();
+        assert_eq!(opts.zoom, winamp::zoom::Zoom::try_from(1.5).ok());
+        assert_eq!(parse_args(&args(&[])).unwrap().unwrap().zoom, None);
+    }
+
+    #[test]
     fn help_and_errors_are_reported() {
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
         assert!(parse_args(&args(&["--screenshot"])).is_err());
+        assert!(parse_args(&args(&["--scale"])).is_err());
+        assert!(parse_args(&args(&["--scale", "1.25"])).is_err());
         assert!(parse_args(&args(&["--bogus"])).is_err());
     }
 }

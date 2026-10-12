@@ -8,7 +8,8 @@
 //! - [`dock`]: the magnetic snapping and window-attachment geometry.
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`).
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
-//! - [`app`]: the winit + pixels desktop window.
+//! - [`zoom`]: how far the skin is enlarged for today's screens.
+//! - [`app`]: the winit + pixels desktop windows, presented through `upscale`.
 
 pub mod app;
 pub mod canvas;
@@ -20,4 +21,6 @@ mod playlist_window;
 pub mod skin;
 pub mod sprites;
 pub mod ui;
+mod upscale;
 pub mod vis;
+pub mod zoom;

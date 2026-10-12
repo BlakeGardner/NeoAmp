@@ -23,8 +23,9 @@ program does the same:
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
   three windows; `src/ui.rs` holds state, hit testing and input.
 - `src/app.rs` runs one borderless `winit` window per Winamp window, presents
-  each framebuffer with `pixels` (wgpu) scaled 1x or 2x with no filtering, and
-  drives the title-bar drags and docking.
+  each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
+  docking. `src/upscale.rs` draws the framebuffer over the whole window (see
+  [Scaling](#scaling)), and `src/zoom.rs` picks the zoom.
 - `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
   parses the command line. `cargo test` covers layout, hit testing, input,
   the skin parsers and the blitter.
@@ -48,6 +49,29 @@ Winamp's "always on top") and take keyboard focus when clicked.
 - `WINAMP_UNMANAGED=1|0` forces or forbids override-redirect windows instead
   of probing.
 
+## Scaling
+
+Classic skins were drawn for one screen pixel per skin pixel on 800x600 and
+1024x768 screens, which looks tiny on a modern monitor. The windows are zoomed
+in half steps from 1x to 3x:
+
+- **Default:** chosen from the height of the screen (in the desktop's logical
+  pixels). 1080 lines stay at 1x, 1440 get 1.5x, 2160 get 2x. On a 27"
+  1440p monitor, 1.5x is about the physical size Winamp had on a 15" CRT.
+- **Ctrl+=** / **Ctrl+-** step the zoom, **Ctrl+0** goes back to the default,
+  and `--scale 1|1.5|2|2.5|3` overrides it at startup.
+- **Double size** (`D` in the clutter bar, Ctrl+D) doubles whatever the zoom
+  is, as in Winamp, so 1.5x becomes 3x.
+- The desktop's own scale factor applies on top, so a 200% desktop shows a 1x
+  zoom at 2x.
+
+Whole-number scales draw every skin pixel as an exact square of screen pixels.
+Scales in between use a sharp-bilinear filter: each skin pixel keeps its flat
+colour and only its edges blend over one screen pixel. Plain nearest-neighbour
+at those scales would make some rows and columns a pixel wider than others,
+which garbles the bitmap fonts. Windows are sized to whole screen pixels and the
+image is stretched to fill them exactly, so docked windows meet without gaps.
+
 ## Building and running
 
 The stock `base-2.91.wsz` skin must be present at `skins/base-2.91.wsz`; it is
@@ -64,7 +88,13 @@ Load another classic skin by passing it on the command line or by dropping a
 cargo run --release -- ~/Downloads/Classic.wsz
 ```
 
-Render a frame to a PNG without opening a window:
+Pick the zoom yourself instead of letting the screen size decide:
+
+```bash
+cargo run --release -- --scale 2
+```
+
+Render a frame to a PNG (always at 1x) without opening a window:
 
 ```bash
 cargo run --release -- --screenshot shot.png
@@ -78,7 +108,8 @@ cargo run --release -- --screenshot shot.png
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
 | Equalizer / Playlist windows | EQ / PL buttons, window close buttons | Alt+G / Alt+E |
-| Double size | the `D` in the clutter bar | Ctrl+D |
+| Double size (doubles the zoom) | the `D` in the clutter bar | Ctrl+D |
+| Zoom in / out / back to default | | Ctrl+= / Ctrl+- / Ctrl+0 |
 | Volume, balance, seek, EQ bands | drag the sliders (the marquee shows the value) | arrows: volume and seek |
 | Visualizer mode (analyzer, scope, off) | click the visualizer | |
 | Move a window (docked ones follow the main window) | drag its title bar | |
