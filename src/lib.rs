@@ -5,12 +5,14 @@
 //!
 //! - [`canvas`]: the RGBA framebuffer and clipped blits.
 //! - [`sprites`]: sprite coordinates and window layout shared by every classic skin.
+//! - [`dock`]: the magnetic snapping and window-attachment geometry.
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`).
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
 //! - [`app`]: the winit + pixels desktop window.
 
 pub mod app;
 pub mod canvas;
+pub mod dock;
 mod eq_window;
 pub mod font;
 mod main_window;

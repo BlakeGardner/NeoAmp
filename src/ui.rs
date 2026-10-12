@@ -1,4 +1,5 @@
-//! UI state, window layout, hit testing and input handling.
+//! UI state, hit testing and input handling, expressed per Winamp window so each window can
+//! live in its own OS window.
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -18,6 +19,18 @@ const MARQUEE_SEPARATOR: &str = "  ***  ";
 const DOUBLE_CLICK_MS: u128 = 400;
 /// Time display blink period while paused (on for half, off for half).
 const BLINK_MS: u128 = 1000;
+
+/// The three classic windows.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum WindowKind {
+    Main,
+    Eq,
+    Playlist,
+}
+
+impl WindowKind {
+    pub const ALL: [WindowKind; 3] = [WindowKind::Main, WindowKind::Eq, WindowKind::Playlist];
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlayState {
@@ -107,14 +120,57 @@ impl Control {
             _ => None,
         }
     }
+
+    /// The window this control lives in.
+    #[must_use]
+    pub fn window(self) -> WindowKind {
+        use Control::*;
+        match self {
+            MainTitle
+            | MainOptions
+            | MainMinimize
+            | MainShade
+            | MainClose
+            | ClutterO
+            | ClutterA
+            | ClutterI
+            | ClutterD
+            | ClutterV
+            | Prev
+            | Play
+            | Pause
+            | Stop
+            | Next
+            | Eject
+            | Shuffle
+            | Repeat
+            | EqToggle
+            | PlToggle
+            | Volume
+            | Balance
+            | PosBar
+            | TimeDisplay
+            | Control::Vis => WindowKind::Main,
+            EqTitle | EqClose | EqShade | EqOn | EqAuto | EqPresets | EqPreamp | EqBand(_) => {
+                WindowKind::Eq
+            }
+            PlTitle | PlClose | PlShade | PlAdd | PlRem | PlSel | PlMisc | PlListOpts
+            | PlResize | PlScroll | PlScrollUp | PlScrollDown | PlTrack(_) | PlMiniPrev
+            | PlMiniPlay | PlMiniPause | PlMiniStop | PlMiniNext | PlMiniEject => {
+                WindowKind::Playlist
+            }
+        }
+    }
 }
 
 /// Side effects the window layer must perform after input.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
-    DragWindow,
+    /// The user grabbed this window's title bar: start moving it.
+    DragWindow(WindowKind),
     Close,
     Minimize,
+    /// Window visibility, size or scale changed: re-sync the OS windows.
     Relayout,
 }
 
@@ -143,7 +199,7 @@ pub struct Track {
     pub seconds: u32,
 }
 
-/// Where each window sits inside the single OS window, and the total canvas size.
+/// Where each window sits when the three are composed into one canvas (screenshots).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub main: Rect,
@@ -181,7 +237,9 @@ pub struct Ui {
     pub stereo: bool,
     pub vis: Vis,
     pub double_size: bool,
+    /// Any of the app's windows has focus: title bars draw in their active state.
     pub active: bool,
+    /// Last pointer position inside the playlist window (menu highlight).
     pub cursor: (i32, i32),
     /// Temporary marquee text shown while a slider is dragged.
     pub marquee_override: Option<String>,
@@ -287,8 +345,37 @@ impl Ui {
         ui
     }
 
-    // ----- layout -------------------------------------------------------------------------
+    // ----- windows ------------------------------------------------------------------------
 
+    /// Size of a window's canvas in skin pixels.
+    #[must_use]
+    pub fn window_size(&self, kind: WindowKind) -> (i32, i32) {
+        match kind {
+            WindowKind::Main => (m::W, m::H),
+            WindowKind::Eq => (e::W, e::H),
+            WindowKind::Playlist => self.pl_size,
+        }
+    }
+
+    #[must_use]
+    pub fn is_open(&self, kind: WindowKind) -> bool {
+        match kind {
+            WindowKind::Main => true,
+            WindowKind::Eq => self.eq_open,
+            WindowKind::Playlist => self.pl_open,
+        }
+    }
+
+    /// Open or close the equalizer or playlist (the main window is always open).
+    pub fn set_open(&mut self, kind: WindowKind, open: bool) {
+        match kind {
+            WindowKind::Main => {}
+            WindowKind::Eq => self.eq_open = open,
+            WindowKind::Playlist => self.pl_open = open,
+        }
+    }
+
+    /// The classic stacked arrangement, used when composing all windows into one canvas.
     #[must_use]
     pub fn layout(&self) -> Layout {
         let main = Rect::new(0, 0, m::W, m::H);
@@ -443,7 +530,8 @@ impl Ui {
         self.jump((self.current + len - 1) % len, now);
     }
 
-    fn update(&mut self, now: Instant) {
+    /// Advance the fake playback and the visualiser. Call once per frame before drawing.
+    pub fn tick(&mut self, now: Instant) {
         if self.state == PlayState::Playing && self.elapsed(now) >= self.track_len() {
             if self.repeat || self.current + 1 < self.tracks.len() {
                 self.next(now);
@@ -512,47 +600,78 @@ impl Ui {
 
     // ----- drawing ------------------------------------------------------------------------
 
-    pub fn draw(&mut self, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, now: Instant) {
-        self.update(now);
+    /// Draw one window into `c`, which must be sized by [`Ui::window_size`].
+    pub fn draw_window(
+        &self,
+        kind: WindowKind,
+        c: &mut Image,
+        skin: &Skin,
+        font: Option<&TtfFont>,
+        now: Instant,
+    ) {
+        let (w, h) = self.window_size(kind);
+        let r = Rect::new(0, 0, w, h);
+        c.clear([0, 0, 0, 0]);
+        match kind {
+            WindowKind::Main => {
+                main_window::draw(self, c, skin, r, now);
+                if let Some(mask) = &skin.main_mask {
+                    apply_mask(c, r, mask);
+                }
+            }
+            WindowKind::Eq => {
+                eq_window::draw(self, c, skin, r, now);
+                if let Some(mask) = &skin.eq_mask {
+                    apply_mask(c, r, mask);
+                }
+            }
+            WindowKind::Playlist => playlist_window::draw(self, c, skin, font, r, now),
+        }
+    }
+
+    /// Advance one frame and draw every open window stacked into a single canvas.
+    pub fn draw_stacked(
+        &mut self,
+        c: &mut Image,
+        skin: &Skin,
+        font: Option<&TtfFont>,
+        now: Instant,
+    ) {
+        self.tick(now);
         let lay = self.layout();
         c.clear([0, 0, 0, 0]);
         main_window::draw(self, c, skin, lay.main, now);
-        if let Some(r) = lay.eq {
-            eq_window::draw(self, c, skin, r, now);
-        }
-        if let Some(r) = lay.pl {
-            playlist_window::draw(self, c, skin, font, r, now);
-        }
         if let Some(mask) = &skin.main_mask {
             apply_mask(c, lay.main, mask);
         }
-        if let (Some(mask), Some(r)) = (&skin.eq_mask, lay.eq) {
-            apply_mask(c, r, mask);
+        if let Some(r) = lay.eq {
+            eq_window::draw(self, c, skin, r, now);
+            if let Some(mask) = &skin.eq_mask {
+                apply_mask(c, r, mask);
+            }
+        }
+        if let Some(r) = lay.pl {
+            playlist_window::draw(self, c, skin, font, r, now);
         }
     }
 
     // ----- hit testing --------------------------------------------------------------------
 
+    /// The control under window-local point (`x`, `y`) of `kind`.
     #[must_use]
-    pub fn hit(&self, x: i32, y: i32) -> Option<Control> {
-        let lay = self.layout();
-        if lay.main.contains(x, y) {
-            return self.hit_main(x - lay.main.x, y - lay.main.y);
+    pub fn hit(&self, kind: WindowKind, x: i32, y: i32) -> Option<Control> {
+        let (w, h) = self.window_size(kind);
+        if !Rect::new(0, 0, w, h).contains(x, y) {
+            return None;
         }
-        if let Some(r) = lay.eq
-            && r.contains(x, y)
-        {
-            return self.hit_eq(x - r.x, y - r.y);
+        match kind {
+            WindowKind::Main => Self::hit_main(x, y),
+            WindowKind::Eq => Self::hit_eq(x, y),
+            WindowKind::Playlist => self.hit_pl(x, y, w, h),
         }
-        if let Some(r) = lay.pl
-            && r.contains(x, y)
-        {
-            return self.hit_pl(x - r.x, y - r.y, r.w, r.h);
-        }
-        None
     }
 
-    fn hit_main(&self, x: i32, y: i32) -> Option<Control> {
+    fn hit_main(x: i32, y: i32) -> Option<Control> {
         use Control::*;
         const TABLE: &[(Rect, Control)] = &[
             (m::OPTIONS, MainOptions),
@@ -587,7 +706,7 @@ impl Ui {
             .map(|(_, c)| *c)
     }
 
-    fn hit_eq(&self, x: i32, y: i32) -> Option<Control> {
+    fn hit_eq(x: i32, y: i32) -> Option<Control> {
         use Control::*;
         if let Some(i) = (0..10).find(|&i| e::band(i).contains(x, y)) {
             return usize::try_from(i).ok().map(EqBand);
@@ -695,32 +814,14 @@ impl Ui {
 
     // ----- slider helpers -----------------------------------------------------------------
 
-    /// Convert canvas coordinates into the coordinates of the window owning `ctl`.
-    fn window_local(&self, x: i32, y: i32, ctl: Control) -> (i32, i32) {
-        let lay = self.layout();
-        let origin = match ctl {
-            Control::EqPreamp | Control::EqBand(_) => lay.eq.map_or((0, 0), |r| (r.x, r.y)),
-            Control::PlResize | Control::PlScroll => lay.pl.map_or((0, 0), |r| (r.x, r.y)),
-            _ => (lay.main.x, lay.main.y),
-        };
-        (x - origin.0, y - origin.1)
-    }
-
     /// Fraction `0..=1` of a horizontal slider for a pointer at `lx`, centring the thumb on it.
     fn h_fraction(rect: Rect, thumb_w: i32, lx: i32) -> f32 {
         let span = (rect.w - thumb_w) as f32;
         (((lx - rect.x) as f32 - thumb_w as f32 / 2.0) / span).clamp(0.0, 1.0)
     }
 
-    fn drag_slider(&mut self, slider: Slider, x: i32, y: i32, now: Instant) {
-        let ctl = match slider {
-            Slider::Volume => Control::Volume,
-            Slider::Balance => Control::Balance,
-            Slider::PosBar => Control::PosBar,
-            Slider::EqPreamp => Control::EqPreamp,
-            Slider::EqBand(i) => Control::EqBand(i),
-        };
-        let (lx, ly) = self.window_local(x, y, ctl);
+    /// Update a slider from a window-local pointer position and show its value in the marquee.
+    fn drag_slider(&mut self, slider: Slider, lx: i32, ly: i32, now: Instant) {
         let mut text = self.marquee_override.take().unwrap_or_default();
         text.clear();
         match slider {
@@ -783,8 +884,7 @@ impl Ui {
         self.marquee_override = Some(text);
     }
 
-    fn drag_scroll(&mut self, x: i32, y: i32) {
-        let (_, ly) = self.window_local(x, y, Control::PlScroll);
+    fn drag_scroll(&mut self, ly: i32) {
         let content = self.pl_content_rect(self.pl_size.0, self.pl_size.1);
         let span = (content.h - p::SCROLL_THUMB_H).max(1) as f32;
         let f = (((ly - content.y) as f32 - p::SCROLL_THUMB_H as f32 / 2.0) / span).clamp(0.0, 1.0);
@@ -808,14 +908,20 @@ impl Ui {
         true
     }
 
-    // ----- input --------------------------------------------------------------------------
+    // ----- input (all coordinates are local to the window of `kind`) ----------------------
+
+    fn note_cursor(&mut self, kind: WindowKind, x: i32, y: i32) {
+        if kind == WindowKind::Playlist {
+            self.cursor = (x, y);
+        }
+    }
 
     #[must_use = "the returned actions must be performed by the window layer"]
-    pub fn mouse_down(&mut self, x: i32, y: i32, now: Instant) -> Vec<Action> {
+    pub fn mouse_down(&mut self, kind: WindowKind, x: i32, y: i32, now: Instant) -> Vec<Action> {
         use Control::*;
-        self.cursor = (x, y);
+        self.note_cursor(kind, x, y);
         let mut actions = Vec::new();
-        let Some(ctl) = self.hit(x, y) else {
+        let Some(ctl) = self.hit(kind, x, y) else {
             return actions;
         };
         if let Some(slider) = ctl.slider() {
@@ -823,10 +929,10 @@ impl Ui {
             self.drag_slider(slider, x, y, now);
         } else {
             match ctl {
-                MainTitle | EqTitle | PlTitle => actions.push(Action::DragWindow),
+                MainTitle | EqTitle | PlTitle => actions.push(Action::DragWindow(kind)),
                 PlScroll => {
                     self.pressed = Some(ctl);
-                    self.drag_scroll(x, y);
+                    self.drag_scroll(y);
                 }
                 PlResize => {
                     self.pressed = Some(ctl);
@@ -856,16 +962,17 @@ impl Ui {
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
-    pub fn mouse_move(&mut self, x: i32, y: i32, now: Instant) -> Vec<Action> {
-        self.cursor = (x, y);
+    pub fn mouse_move(&mut self, kind: WindowKind, x: i32, y: i32, now: Instant) -> Vec<Action> {
+        self.note_cursor(kind, x, y);
         let mut actions = Vec::new();
-        let Some(ctl) = self.pressed else {
+        // A drag only follows pointer motion reported by the window it started in.
+        let Some(ctl) = self.pressed.filter(|c| c.window() == kind) else {
             return actions;
         };
         if let Some(slider) = ctl.slider() {
             self.drag_slider(slider, x, y, now);
         } else if ctl == Control::PlScroll {
-            self.drag_scroll(x, y);
+            self.drag_scroll(y);
         } else if ctl == Control::PlResize && self.drag_resize(x, y) {
             actions.push(Action::Relayout);
         }
@@ -873,15 +980,15 @@ impl Ui {
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
-    pub fn mouse_up(&mut self, x: i32, y: i32, now: Instant) -> Vec<Action> {
+    pub fn mouse_up(&mut self, kind: WindowKind, x: i32, y: i32, now: Instant) -> Vec<Action> {
         use Control::*;
-        self.cursor = (x, y);
+        self.note_cursor(kind, x, y);
         let mut actions = Vec::new();
         let Some(ctl) = self.pressed.take() else {
             return actions;
         };
         self.marquee_override = None;
-        let still_over = self.hit(x, y) == Some(ctl);
+        let still_over = ctl.window() == kind && self.hit(kind, x, y) == Some(ctl);
         match ctl {
             // Drags finish silently.
             Volume | Balance | PosBar | EqPreamp | EqBand(_) | PlScroll | PlResize => {}
@@ -966,8 +1073,11 @@ impl Ui {
 /// Make every pixel of `r` outside `mask` fully transparent.
 fn apply_mask(c: &mut Image, r: Rect, mask: &Mask) {
     let w = usize::try_from(r.w).unwrap_or(0);
+    if w == 0 {
+        return;
+    }
     for (i, visible) in mask.iter().enumerate() {
-        if !visible && w > 0 {
+        if !visible {
             let (x, y) = (i % w, i / w);
             c.put(r.x + x as i32, r.y + y as i32, [0, 0, 0, 0]);
         }
@@ -978,10 +1088,11 @@ fn apply_mask(c: &mut Image, r: Rect, mask: &Mask) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use WindowKind::{Eq, Main, Playlist};
     use std::time::Duration;
 
     #[test]
-    fn layout_stacks_the_three_windows() {
+    fn stacked_layout_places_the_three_windows() {
         let mut ui = Ui::new();
         let l = ui.layout();
         assert_eq!(l.size, (275, 348));
@@ -990,48 +1101,82 @@ mod tests {
         ui.eq_open = false;
         assert_eq!(ui.layout().pl.unwrap().y, 116);
         assert_eq!(ui.layout().size, (275, 232));
+        assert_eq!(ui.window_size(Playlist), (275, 116));
+        assert!(!ui.is_open(Eq) && ui.is_open(Main));
     }
 
     #[test]
     fn hit_testing_main_window() {
         let ui = Ui::new();
-        assert_eq!(ui.hit(40, 95), Some(Control::Play));
-        assert_eq!(ui.hit(268, 5), Some(Control::MainClose));
-        assert_eq!(ui.hit(100, 5), Some(Control::MainTitle));
-        assert_eq!(ui.hit(120, 60), Some(Control::Volume));
-        assert_eq!(ui.hit(190, 60), Some(Control::Balance));
-        assert_eq!(ui.hit(100, 75), Some(Control::PosBar));
-        assert_eq!(ui.hit(50, 50), Some(Control::Vis));
-        assert_eq!(ui.hit(12, 49), Some(Control::ClutterD));
-        assert_eq!(ui.hit(150, 110), None);
+        assert_eq!(ui.hit(Main, 40, 95), Some(Control::Play));
+        assert_eq!(ui.hit(Main, 268, 5), Some(Control::MainClose));
+        assert_eq!(ui.hit(Main, 100, 5), Some(Control::MainTitle));
+        assert_eq!(ui.hit(Main, 120, 60), Some(Control::Volume));
+        assert_eq!(ui.hit(Main, 190, 60), Some(Control::Balance));
+        assert_eq!(ui.hit(Main, 100, 75), Some(Control::PosBar));
+        assert_eq!(ui.hit(Main, 50, 50), Some(Control::Vis));
+        assert_eq!(ui.hit(Main, 12, 49), Some(Control::ClutterD));
+        assert_eq!(ui.hit(Main, 150, 110), None);
+        assert_eq!(ui.hit(Main, -1, 5), None);
+        assert_eq!(ui.hit(Main, 40, 200), None);
     }
 
     #[test]
     fn hit_testing_eq_and_playlist() {
         let ui = Ui::new();
-        assert_eq!(ui.hit(80, 116 + 50), Some(Control::EqBand(0)));
-        assert_eq!(ui.hit(245, 116 + 50), Some(Control::EqBand(9)));
-        assert_eq!(ui.hit(25, 116 + 50), Some(Control::EqPreamp));
-        assert_eq!(ui.hit(20, 116 + 20), Some(Control::EqOn));
-        assert_eq!(ui.hit(100, 232 + 30), Some(Control::PlTrack(0)));
-        assert_eq!(ui.hit(100, 232 + 43), Some(Control::PlTrack(1)));
-        assert_eq!(ui.hit(275 - 10, 232 + 5), Some(Control::PlClose));
-        assert_eq!(ui.hit(275 - 20, 232 + 5), Some(Control::PlShade));
-        assert_eq!(ui.hit(275 - 12, 232 + 40), Some(Control::PlScroll));
-        assert_eq!(ui.hit(20, 232 + 116 - 25), Some(Control::PlAdd));
-        assert_eq!(ui.hit(275 - 10, 232 + 116 - 10), Some(Control::PlResize));
+        assert_eq!(ui.hit(Eq, 80, 50), Some(Control::EqBand(0)));
+        assert_eq!(ui.hit(Eq, 245, 50), Some(Control::EqBand(9)));
+        assert_eq!(ui.hit(Eq, 25, 50), Some(Control::EqPreamp));
+        assert_eq!(ui.hit(Eq, 20, 20), Some(Control::EqOn));
+        assert_eq!(ui.hit(Eq, 100, 5), Some(Control::EqTitle));
+        assert_eq!(ui.hit(Playlist, 100, 30), Some(Control::PlTrack(0)));
+        assert_eq!(ui.hit(Playlist, 100, 43), Some(Control::PlTrack(1)));
+        assert_eq!(ui.hit(Playlist, 275 - 10, 5), Some(Control::PlClose));
+        assert_eq!(ui.hit(Playlist, 275 - 20, 5), Some(Control::PlShade));
+        assert_eq!(ui.hit(Playlist, 275 - 12, 40), Some(Control::PlScroll));
+        assert_eq!(ui.hit(Playlist, 20, 116 - 25), Some(Control::PlAdd));
+        assert_eq!(
+            ui.hit(Playlist, 275 - 10, 116 - 10),
+            Some(Control::PlResize)
+        );
+    }
+
+    #[test]
+    fn every_control_reports_its_window() {
+        assert_eq!(Control::Play.window(), Main);
+        assert_eq!(Control::EqBand(3).window(), Eq);
+        assert_eq!(Control::PlTrack(0).window(), Playlist);
+    }
+
+    #[test]
+    fn title_bars_request_a_window_drag() {
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        assert_eq!(
+            ui.mouse_down(Main, 100, 5, now),
+            vec![Action::DragWindow(Main)]
+        );
+        assert_eq!(ui.mouse_down(Eq, 100, 5, now), vec![Action::DragWindow(Eq)]);
+        assert_eq!(
+            ui.mouse_down(Playlist, 100, 5, now),
+            vec![Action::DragWindow(Playlist)]
+        );
+        assert!(ui.pressed.is_none());
     }
 
     #[test]
     fn volume_drag_updates_value_and_marquee() {
         let mut ui = Ui::new();
         let now = Instant::now();
-        let _ = ui.mouse_down(107 + 7, 60, now);
+        let _ = ui.mouse_down(Main, 107 + 7, 60, now);
         assert!(ui.volume < 0.01);
         assert_eq!(ui.marquee_override.as_deref(), Some("Volume: 0%"));
-        let _ = ui.mouse_move(107 + 68 - 7, 60, now);
+        let _ = ui.mouse_move(Main, 107 + 68 - 7, 60, now);
         assert!(ui.volume > 0.99);
-        let _ = ui.mouse_up(107 + 68 - 7, 60, now);
+        // Motion reported by another window does not steer the drag.
+        let _ = ui.mouse_move(Eq, 107, 60, now);
+        assert!(ui.volume > 0.99);
+        let _ = ui.mouse_up(Main, 107 + 68 - 7, 60, now);
         assert!(ui.pressed.is_none());
         assert!(ui.marquee_override.is_none());
     }
@@ -1041,9 +1186,9 @@ mod tests {
         let mut ui = Ui::new();
         let now = Instant::now();
         let (px, py) = (85 + 5, 88 + 5); // stop
-        let _ = ui.mouse_down(px, py, now);
+        let _ = ui.mouse_down(Main, px, py, now);
         assert_eq!(ui.pressed, Some(Control::Stop));
-        let _ = ui.mouse_up(px, py, now);
+        let _ = ui.mouse_up(Main, px, py, now);
         assert_eq!(ui.state, PlayState::Stopped);
         let _ = ui.key(KeyCmd::Play, now);
         assert_eq!(ui.state, PlayState::Playing);
@@ -1057,22 +1202,40 @@ mod tests {
     fn releasing_outside_the_pressed_button_cancels_it() {
         let mut ui = Ui::new();
         let now = Instant::now();
-        let _ = ui.mouse_down(85 + 5, 88 + 5, now); // stop
-        let actions = ui.mouse_up(5, 5, now);
+        let _ = ui.mouse_down(Main, 85 + 5, 88 + 5, now); // stop
+        let actions = ui.mouse_up(Main, 5, 5, now);
         assert!(actions.is_empty());
         assert_eq!(ui.state, PlayState::Playing);
+        let _ = ui.mouse_down(Main, 85 + 5, 88 + 5, now);
+        let actions = ui.mouse_up(Eq, 85 + 5, 88 + 5, now);
+        assert!(actions.is_empty());
+        assert_eq!(ui.state, PlayState::Playing);
+    }
+
+    #[test]
+    fn closing_and_toggling_windows_relayouts() {
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        let _ = ui.mouse_down(Eq, 268, 5, now);
+        assert_eq!(ui.mouse_up(Eq, 268, 5, now), vec![Action::Relayout]);
+        assert!(!ui.eq_open);
+        assert_eq!(ui.key(KeyCmd::ToggleEq, now), vec![Action::Relayout]);
+        assert!(ui.eq_open);
+        ui.set_open(Playlist, false);
+        assert!(!ui.is_open(Playlist));
     }
 
     #[test]
     fn playlist_resize_snaps_to_grid() {
         let mut ui = Ui::new();
         let now = Instant::now();
-        let grip = (275 - 8, 232 + 116 - 8);
-        let _ = ui.mouse_down(grip.0, grip.1, now);
+        let grip = (275 - 8, 116 - 8);
+        let _ = ui.mouse_down(Playlist, grip.0, grip.1, now);
         assert_eq!(ui.pressed, Some(Control::PlResize));
-        let actions = ui.mouse_move(grip.0 + 30, grip.1 + 40, now);
+        let actions = ui.mouse_move(Playlist, grip.0 + 30, grip.1 + 40, now);
         assert_eq!(actions, vec![Action::Relayout]);
         assert_eq!(ui.pl_size, (300, 145));
+        assert_eq!(ui.window_size(Playlist), (300, 145));
         assert_eq!(ui.layout().size, (300, 232 + 145));
     }
 
@@ -1114,6 +1277,43 @@ mod tests {
         assert_eq!(ui.track_len(), 0.0);
         assert_eq!(ui.display_time(now), (0, 0, false));
         assert_eq!(ui.marquee_text(now), "");
+    }
+
+    #[test]
+    fn per_window_drawing_matches_the_stacked_composition() {
+        let skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        ui.tick(now);
+        let mut singles = Vec::new();
+        for kind in WindowKind::ALL {
+            let (w, h) = ui.window_size(kind);
+            let mut c = Image::new(w, h);
+            ui.draw_window(kind, &mut c, &skin, None, now);
+            singles.push(c);
+        }
+        let lay = ui.layout();
+        let mut stacked = Image::new(lay.size.0, lay.size.1);
+        ui.draw_stacked(&mut stacked, &skin, None, now);
+        let vis = m::VIS; // time-seeded, so excluded from the comparison
+        for (i, origin) in [lay.main, lay.eq.unwrap(), lay.pl.unwrap()]
+            .into_iter()
+            .enumerate()
+        {
+            let single = &singles[i];
+            for y in 0..single.h {
+                for x in 0..single.w {
+                    if i == 0 && vis.contains(x, y) {
+                        continue;
+                    }
+                    assert_eq!(
+                        single.get(x, y),
+                        stacked.get(origin.x + x, origin.y + y),
+                        "window {i} pixel ({x},{y})"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
