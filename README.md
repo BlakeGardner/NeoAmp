@@ -40,7 +40,9 @@ Each Winamp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
 equalizer and playlist leave on their own. Windows snap to each other's
 edges and to the screen edges when they come within 10 pixels, like the
-original. `src/dock.rs` holds that geometry.
+original. Resizing the playlist from its grip leaves the other windows where
+they are, even ones docked to it, as Webamp does (how Winamp itself behaved
+here is undocumented). `src/dock.rs` holds that geometry.
 
 Docking needs to read and set window positions, which Wayland forbids, so
 the app prefers the X11 backend (XWayland on a Wayland desktop) whenever

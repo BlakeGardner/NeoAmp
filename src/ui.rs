@@ -172,6 +172,9 @@ impl Control {
 pub enum Action {
     /// The user grabbed this window's title bar: start moving it.
     DragWindow(WindowKind),
+    /// The user grabbed the playlist's resize grip: resize it as the pointer moves, through
+    /// [`Ui::resize_playlist`].
+    ResizePlaylist,
     Close,
     Minimize,
     /// Window visibility, size or scale changed: re-sync the OS windows.
@@ -261,8 +264,6 @@ pub struct Ui {
     pub bands: [f32; 10],
     pub remaining_mode: bool,
     pub pressed: Option<Control>,
-    drag_start: (i32, i32),
-    drag_size: (i32, i32),
     pub pl_size: (i32, i32),
     pub tracks: Vec<Track>,
     pub current: usize,
@@ -334,8 +335,6 @@ impl Ui {
             bands: [0.5; 10],
             remaining_mode: false,
             pressed: None,
-            drag_start: (0, 0),
-            drag_size: (0, 0),
             pl_size: (p::MIN_W, p::MIN_H),
             tracks: Vec::new(),
             current: 0,
@@ -1079,15 +1078,19 @@ impl Ui {
         self.pl_scroll = (f * self.max_scroll() as f32).round() as usize;
     }
 
-    /// Resize the playlist by the drag delta, snapped to Winamp's 25x29 grid. True if it changed.
-    fn drag_resize(&mut self, x: i32, y: i32) -> bool {
+    /// Resize the playlist to the size on Winamp's 25x29 grid nearest to `size` (skin pixels),
+    /// never below the minimum. The window layer works `size` out from the grip's travel, since
+    /// the pointer leaves the window as it grows. True if the size changed.
+    pub fn resize_playlist(&mut self, size: (i32, i32)) -> bool {
+        // Rounds to the nearest step (the steps are odd, so there are no ties).
         let snap = |v: i32, min: i32, step: i32| {
-            let steps = ((v - min) as f32 / step as f32).round().max(0.0) as i32;
-            min + steps * step
+            let steps = v.saturating_sub(min).max(0).saturating_add(step / 2) / step;
+            min.saturating_add(steps.saturating_mul(step))
         };
-        let w = self.drag_size.0 + (x - self.drag_start.0);
-        let h = self.drag_size.1 + (y - self.drag_start.1);
-        let new = (snap(w, p::MIN_W, p::STEP_W), snap(h, p::MIN_H, p::STEP_H));
+        let new = (
+            snap(size.0, p::MIN_W, p::STEP_W),
+            snap(size.1, p::MIN_H, p::STEP_H),
+        );
         if new == self.pl_size {
             return false;
         }
@@ -1125,11 +1128,7 @@ impl Ui {
                     self.pressed = Some(ctl);
                     self.drag_scroll(y);
                 }
-                PlResize => {
-                    self.pressed = Some(ctl);
-                    self.drag_start = (x, y);
-                    self.drag_size = self.pl_size;
-                }
+                PlResize => actions.push(Action::ResizePlaylist),
                 PlTrack(i) => {
                     let double = matches!(self.last_click,
                         Some((PlTrack(j), t)) if j == i && now.saturating_duration_since(t).as_millis() < DOUBLE_CLICK_MS);
@@ -1152,19 +1151,16 @@ impl Ui {
     #[must_use = "the returned actions must be performed by the window layer"]
     pub fn mouse_move(&mut self, kind: WindowKind, x: i32, y: i32) -> Vec<Action> {
         self.note_cursor(kind, x, y);
-        let mut actions = Vec::new();
         // A drag only follows pointer motion reported by the window it started in.
         let Some(ctl) = self.pressed.filter(|c| c.window() == kind) else {
-            return actions;
+            return Vec::new();
         };
         if let Some(slider) = ctl.slider() {
             self.drag_slider(slider, x, y);
         } else if ctl == Control::PlScroll {
             self.drag_scroll(y);
-        } else if ctl == Control::PlResize && self.drag_resize(x, y) {
-            actions.push(Action::Relayout);
         }
-        actions
+        Vec::new()
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
@@ -1651,17 +1647,39 @@ mod tests {
     }
 
     #[test]
+    fn playlist_grip_hands_the_resize_to_the_window_layer() {
+        let mut ui = Ui::new();
+        let grip = (275 - 8, 116 - 8);
+        let actions = ui.mouse_down(Playlist, grip.0, grip.1, Instant::now());
+        assert_eq!(actions, vec![Action::ResizePlaylist]);
+        assert_eq!(ui.pressed, None);
+        assert_eq!(ui.mouse_move(Playlist, grip.0 + 30, grip.1 + 40), vec![]);
+        assert_eq!(ui.pl_size, (p::MIN_W, p::MIN_H));
+    }
+
+    #[test]
     fn playlist_resize_snaps_to_grid() {
         let mut ui = Ui::new();
-        let now = Instant::now();
-        let grip = (275 - 8, 116 - 8);
-        let _ = ui.mouse_down(Playlist, grip.0, grip.1, now);
-        assert_eq!(ui.pressed, Some(Control::PlResize));
-        let actions = ui.mouse_move(Playlist, grip.0 + 30, grip.1 + 40);
-        assert_eq!(actions, vec![Action::Relayout]);
+        // Half a step (12 of 25, 14 of 29) is not enough; one pixel more is.
+        assert!(!ui.resize_playlist((275 + 12, 116 + 14)));
+        assert!(ui.resize_playlist((275 + 13, 116 + 15)));
         assert_eq!(ui.pl_size, (300, 145));
         assert_eq!(ui.window_size(Playlist), (300, 145));
         assert_eq!(ui.layout().size, (300, 232 + 145));
+        assert!(!ui.resize_playlist((300 + 10, 145 - 10)), "same grid cell");
+        assert!(ui.resize_playlist((-500, i32::MIN)));
+        assert_eq!(ui.pl_size, (p::MIN_W, p::MIN_H), "never below the minimum");
+    }
+
+    #[test]
+    fn a_taller_playlist_scrolls_back_into_range() {
+        let mut ui = Ui::demo();
+        // 7 tracks, 4 rows visible at the minimum size, 8 two steps taller.
+        ui.pl_scroll = ui.max_scroll();
+        assert_eq!(ui.pl_scroll, 3);
+        assert!(ui.resize_playlist((275, 116 + 2 * 29)));
+        assert_eq!(ui.pl_visible_rows(), 8);
+        assert_eq!(ui.pl_scroll, 0);
     }
 
     #[test]

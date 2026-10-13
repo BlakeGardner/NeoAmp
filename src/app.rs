@@ -21,7 +21,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::audio::{self, Player, Scanner};
 use crate::canvas::{Image, Rect};
@@ -29,7 +29,7 @@ use crate::dock::{self, SNAP_DISTANCE};
 use crate::font::TtfFont;
 use crate::open_dialog::OpenDialog;
 use crate::skin::Skin;
-use crate::ui::{Action, KeyCmd, PlayState, Transport, Ui, WindowKind};
+use crate::ui::{Action, Control, KeyCmd, PlayState, Transport, Ui, WindowKind};
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::vis;
 use crate::zoom::Zoom;
@@ -155,6 +155,7 @@ pub fn run(opts: Options) -> Result<()> {
         font,
         panes: Vec::with_capacity(3),
         drag: None,
+        resize: None,
         redock: Vec::new(),
         docking: false,
         unmanaged: unmanaged_preference() == Some(true),
@@ -262,6 +263,8 @@ struct Pane {
     window: Arc<Window>,
     canvas: Image,
     cursor: PhysicalPosition<f64>,
+    /// The diagonal resize cursor is showing instead of the default arrow.
+    resize_cursor: bool,
     focused: bool,
     opened_at: Instant,
 }
@@ -317,6 +320,15 @@ struct Drag {
     followers: Vec<(WindowKind, i32, i32)>,
 }
 
+/// A playlist resize from its grip in progress.
+struct Resize {
+    /// Where the grip was pressed, in physical pixels from the playlist window's top-left
+    /// corner, which stays put while the window changes size.
+    start: PhysicalPosition<f64>,
+    /// The playlist's size in skin pixels at that moment.
+    size: (i32, i32),
+}
+
 struct App {
     ui: Ui,
     /// `None` when no audio device could be opened.
@@ -328,6 +340,7 @@ struct App {
     font: Option<TtfFont>,
     panes: Vec<Pane>,
     drag: Option<Drag>,
+    resize: Option<Resize>,
     /// Windows opened recently whose docked position must be re-applied once mapped.
     redock: Vec<WindowKind>,
     /// The backend reports window positions, so magnetic docking is possible.
@@ -574,6 +587,7 @@ impl App {
             window,
             canvas: Image::new(w, h),
             cursor: PhysicalPosition::new(0.0, 0.0),
+            resize_cursor: false,
             focused: false,
             opened_at: Instant::now(),
         });
@@ -588,6 +602,9 @@ impl App {
         self.redock.retain(|k| *k != kind);
         if self.drag.as_ref().is_some_and(|d| d.kind == kind) {
             self.drag = None;
+        }
+        if kind == WindowKind::Playlist {
+            self.resize = None;
         }
     }
 
@@ -653,6 +670,7 @@ impl App {
         self.panes.clear();
         self.redock.clear();
         self.drag = None;
+        self.resize = None;
         if let Err(e) = self.open_pane(el, WindowKind::Main, main_at) {
             log::error!("cannot reopen the main window: {e:#}");
             el.exit();
@@ -852,10 +870,67 @@ impl App {
         }
     }
 
+    /// Start resizing the playlist from the grip under the pointer.
+    fn begin_resize(&mut self) {
+        let Some(pane) = self.pane(WindowKind::Playlist) else {
+            return;
+        };
+        self.resize = Some(Resize {
+            start: pane.cursor,
+            size: self.ui.pl_size,
+        });
+    }
+
+    /// Resize the playlist so its grip follows the pointer, a whole grid step at a time. Other
+    /// windows stay where they are, even those docked to it, as in Webamp.
+    ///
+    /// This measures how far the pointer has travelled in screen pixels instead of mapping it
+    /// onto the canvas: the pointer leaves the window as it grows, and the canvas changes size
+    /// before the window manager has resized the window.
+    fn resize_to(&mut self, pointer: PhysicalPosition<f64>, el: &ActiveEventLoop) {
+        let Some(resize) = self.resize.as_ref() else {
+            return;
+        };
+        let Some(pane) = self.pane(WindowKind::Playlist) else {
+            return;
+        };
+        let scale = pane.scale(self.ui.scale());
+        let travel = |now: f64, then: f64| round_px((now - then) / scale);
+        let (w, h) = resize.size;
+        let size = (
+            w.saturating_add(travel(pointer.x, resize.start.x)),
+            h.saturating_add(travel(pointer.y, resize.start.y)),
+        );
+        if self.ui.resize_playlist(size) {
+            self.sync_panes(el);
+        }
+    }
+
+    /// Show the diagonal resize cursor over the playlist's grip and while resizing, as Winamp
+    /// did with its skins' `PSIZE.CUR`. `pos` is the pointer in canvas coordinates.
+    fn update_cursor(&mut self, kind: WindowKind, pos: (i32, i32)) {
+        let resizing = kind == WindowKind::Playlist && self.resize.is_some();
+        // While another control or a window is being dragged, the cursor stays as it is.
+        let idle = self.ui.pressed.is_none() && self.drag.is_none() && self.resize.is_none();
+        let want = resizing || (idle && self.ui.hit(kind, pos.0, pos.1) == Some(Control::PlResize));
+        let Some(pane) = self.pane_mut(kind) else {
+            return;
+        };
+        if pane.resize_cursor != want {
+            pane.resize_cursor = want;
+            pane.window.set_cursor(if want {
+                CursorIcon::NwseResize
+            } else {
+                CursorIcon::Default
+            });
+        }
+    }
+
     fn handle(&mut self, actions: Vec<Action>, el: &ActiveEventLoop) {
         for a in actions {
             match a {
                 Action::DragWindow(kind) => self.begin_drag(kind),
+                Action::ResizePlaylist => self.begin_resize(),
                 Action::Close => el.exit(),
                 Action::Minimize => {
                     for p in &self.panes {
@@ -1016,10 +1091,13 @@ impl ApplicationHandler for App {
                 let (x, y) = p.canvas_pos();
                 if self.drag.as_ref().is_some_and(|d| d.kind == kind) {
                     self.drag_to(kind, position);
+                } else if kind == WindowKind::Playlist && self.resize.is_some() {
+                    self.resize_to(position, el);
                 } else {
                     let actions = self.ui.mouse_move(kind, x, y);
                     self.handle(actions, el);
                 }
+                self.update_cursor(kind, (x, y));
             }
             WindowEvent::MouseInput {
                 state,
@@ -1036,10 +1114,12 @@ impl ApplicationHandler for App {
                     ElementState::Pressed => self.ui.mouse_down(kind, x, y, now),
                     ElementState::Released => {
                         self.drag = None;
+                        self.resize = None;
                         self.ui.mouse_up(kind, x, y)
                     }
                 };
                 self.handle(actions, el);
+                self.update_cursor(kind, (x, y));
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
