@@ -27,6 +27,8 @@ program does the same:
   each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
   docking. `src/upscale.rs` draws the framebuffer over the whole window (see
   [Scaling](#scaling)), and `src/zoom.rs` picks the zoom.
+- `src/open_dialog.rs` shows the platform's file dialog behind the eject
+  button (see [Opening files](#opening-files)).
 - `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
   the samples being played into the spectrum analyzer and oscilloscope.
 - `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
@@ -107,6 +109,30 @@ at those scales would make some rows and columns a pixel wider than others,
 which garbles the bitmap fonts. Windows are sized to whole screen pixels and the
 image is stretched to fill them exactly, so docked windows meet without gaps.
 
+## Opening files
+
+Eject (in the main window, or the small one in the playlist's bottom bar) or
+**L** opens the platform's own file dialog, through
+[rfd](https://crates.io/crates/rfd). Pick one file or several: as with
+Winamp's "Open file(s)", they replace the playlist and the first one plays.
+Cancelling changes nothing. The windows keep drawing while the dialog is open.
+
+The dialog starts on "All supported types" and also offers MP3, WAV, FLAC and
+Ogg Vorbis one at a time. The platforms differ a little:
+
+- **Windows:** the standard Open dialog, with the file types in its drop-down.
+- **macOS:** an open panel that slides down from the main window as a sheet.
+  macOS panels have no file type drop-down, so it always shows every
+  supported type.
+- **Linux:** the desktop's own file chooser, reached through the XDG desktop
+  portal (GNOME, KDE, COSMIC and most other desktops run one). The portal is
+  reached over D-Bus with the system's `libdbus`, which is loaded at runtime,
+  so building needs no extra packages. Some choosers match file types
+  case-sensitively, so both `*.mp3` and `*.MP3` are listed; a mixed-case name
+  such as `song.Mp3` may be hidden there. Without a portal, rfd runs `zenity`
+  instead if it is installed. With neither, eject does nothing and rfd logs
+  why.
+
 ## Building and running
 
 The stock `base-2.91.wsz` skin must be present at `skins/base-2.91.wsz`; it is
@@ -126,7 +152,8 @@ cargo run --release
 Play files or whole folders (folders add their MP3, WAV, FLAC and Ogg Vorbis
 files, sorted by name); the first one starts playing. Dropping files or
 folders onto any window adds them to the playlist too, and starts them if
-nothing is playing:
+nothing is playing. Eject picks files in a dialog (see
+[Opening files](#opening-files)):
 
 ```bash
 cargo run --release -- ~/Music/some-album
@@ -157,6 +184,7 @@ cargo run --release -- --screenshot shot.png
 | Action | Mouse | Keyboard |
 | --- | --- | --- |
 | Previous / Play / Pause / Stop / Next | transport buttons | Z X C V B |
+| Open files (they replace the playlist) | either eject button | L |
 | Play a playlist entry | double-click it | |
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
@@ -176,9 +204,10 @@ cargo run --release -- --screenshot shot.png
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
 - Windowshade mode, the options menus, cursors (`.cur`) and the minibrowser
   window are not implemented.
-- Files come from the command line or drag and drop. Eject opens no file
-  dialog, the playlist cannot be edited, and shuffle does not change the
-  order yet. EQ presets and AUTO are not implemented.
+- The playlist can be replaced (eject) or added to (command line, drag and
+  drop) but not edited, and shuffle does not change the order yet. Winamp's
+  Shift+L (open a folder) and Ctrl+L (open a URL) are not implemented, nor
+  are EQ presets and AUTO.
 - Tracks play back to back with a short gap, not gaplessly.
 - The output device is opened once, at startup, and never reopened. On Linux
   that device is PipeWire's or PulseAudio's, which move the stream to another

@@ -27,6 +27,7 @@ use crate::audio::{self, Player, Scanner};
 use crate::canvas::{Image, Rect};
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::font::TtfFont;
+use crate::open_dialog::OpenDialog;
 use crate::skin::Skin;
 use crate::ui::{Action, KeyCmd, PlayState, Transport, Ui, WindowKind};
 use crate::upscale::{Upscaler, window_to_canvas};
@@ -164,6 +165,7 @@ pub fn run(opts: Options) -> Result<()> {
         modifiers: ModifiersState::empty(),
         next_frame: Instant::now(),
         stats: FrameStats::new(Instant::now()),
+        open_dialog: None,
     };
     let mut actions = Vec::new();
     app.add_files(audio::audio_files(opts.files), &mut actions);
@@ -343,6 +345,8 @@ struct App {
     modifiers: ModifiersState,
     next_frame: Instant,
     stats: FrameStats,
+    /// The eject button's file dialog, while it is showing.
+    open_dialog: Option<OpenDialog>,
 }
 
 impl App {
@@ -394,6 +398,36 @@ impl App {
         }
         let mut actions = Vec::new();
         self.add_files(audio::audio_files([path]), &mut actions);
+        self.handle(actions, el);
+    }
+
+    /// Eject: show the file dialog over the main window, unless it is already showing.
+    fn show_open_dialog(&mut self) {
+        if self.open_dialog.is_some() {
+            return;
+        }
+        let Some(main) = self.pane(WindowKind::Main) else {
+            return;
+        };
+        match OpenDialog::show(&main.window) {
+            Ok(dialog) => self.open_dialog = Some(dialog),
+            Err(e) => log::error!("cannot show the file dialog: {e:#}"),
+        }
+    }
+
+    /// Once the file dialog closes, the files chosen replace the playlist and the first one
+    /// plays, as in Winamp. Cancelling it changes nothing.
+    fn finish_open_dialog(&mut self, el: &ActiveEventLoop) {
+        let Some(files) = self.open_dialog.as_ref().and_then(OpenDialog::poll) else {
+            return;
+        };
+        self.open_dialog = None;
+        if files.is_empty() {
+            return;
+        }
+        let mut actions = Vec::new();
+        self.ui.clear_playlist(&mut actions);
+        self.add_files(files, &mut actions);
         self.handle(actions, el);
     }
 
@@ -829,6 +863,7 @@ impl App {
                     }
                 }
                 Action::Relayout => self.sync_panes(el),
+                Action::OpenFiles => self.show_open_dialog(),
                 Action::Audio(t) => self.transport(t),
             }
         }
@@ -851,6 +886,7 @@ impl App {
                 ("c", false, false) => KeyCmd::Pause,
                 ("v", false, false) => KeyCmd::Stop,
                 ("b", false, false) => KeyCmd::Next,
+                ("l", false, false) => KeyCmd::OpenFiles,
                 ("r", false, false) => KeyCmd::ToggleRepeat,
                 ("s", false, false) => KeyCmd::ToggleShuffle,
                 _ => return None,
@@ -1027,6 +1063,7 @@ impl ApplicationHandler for App {
             self.next_frame = now + FRAME;
             self.apply_pending_docks(now);
             self.check_probe(el, now);
+            self.finish_open_dialog(el);
             self.sync_audio(el);
             self.ui.tick(now);
             for p in &self.panes {

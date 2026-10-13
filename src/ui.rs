@@ -176,6 +176,8 @@ pub enum Action {
     Minimize,
     /// Window visibility, size or scale changed: re-sync the OS windows.
     Relayout,
+    /// Eject: ask for files to play. They replace the playlist (see [`Ui::clear_playlist`]).
+    OpenFiles,
     /// Tell the audio engine.
     Audio(Transport),
 }
@@ -208,6 +210,8 @@ pub enum KeyCmd {
     Pause,
     Stop,
     Next,
+    /// Same as the eject button.
+    OpenFiles,
     ToggleShuffle,
     ToggleRepeat,
     ToggleTimeMode,
@@ -674,6 +678,18 @@ impl Ui {
         start..self.tracks.len()
     }
 
+    /// Empty the playlist, stopping whatever is playing. Winamp's "Open file(s)" (eject) did
+    /// this before adding the files chosen.
+    pub fn clear_playlist(&mut self, actions: &mut Vec<Action>) {
+        self.stop(actions);
+        self.tracks.clear();
+        self.selected.clear();
+        self.current = 0;
+        self.pl_scroll = 0;
+        self.failures = 0;
+        self.refresh_title();
+    }
+
     /// Fill in a playlist entry's title and length once its file has been read. Ignored if the
     /// entry no longer plays `path`.
     pub fn set_track_info(&mut self, idx: usize, path: &Path, info: &TrackInfo) {
@@ -712,6 +728,7 @@ impl Ui {
     /// Rebuild the cached marquee text (`"N. Title (m:ss)"`, padded when it scrolls).
     fn refresh_title(&mut self) {
         self.title_chars.clear();
+        self.title_scrolls = false;
         let Some(t) = self.track() else { return };
         let mut s = String::with_capacity(64);
         push_fmt(&mut s, format_args!("{}. {}", self.current + 1, t.title));
@@ -1184,6 +1201,7 @@ impl Ui {
             Pause | PlMiniPause => self.pause(&mut actions),
             Stop | PlMiniStop => self.stop(&mut actions),
             Next | PlMiniNext => self.next(&mut actions),
+            Eject | PlMiniEject => actions.push(Action::OpenFiles),
             Shuffle => self.shuffle = !self.shuffle,
             Repeat => self.repeat = !self.repeat,
             EqToggle => {
@@ -1207,9 +1225,9 @@ impl Ui {
             EqOn => self.eq_on = !self.eq_on,
             EqAuto => self.eq_auto = !self.eq_auto,
             // Press-only visuals: menus, dialogs and window shading are not implemented.
-            MainTitle | EqTitle | PlTitle | MainOptions | MainShade | Eject | ClutterO
-            | ClutterA | ClutterI | ClutterV | EqShade | EqPresets | PlShade | PlAdd | PlRem
-            | PlSel | PlMisc | PlListOpts | PlMiniEject | PlTrack(_) => {}
+            MainTitle | EqTitle | PlTitle | MainOptions | MainShade | ClutterO | ClutterA
+            | ClutterI | ClutterV | EqShade | EqPresets | PlShade | PlAdd | PlRem | PlSel
+            | PlMisc | PlListOpts | PlTrack(_) => {}
         }
         actions
     }
@@ -1238,6 +1256,7 @@ impl Ui {
             KeyCmd::Pause => self.pause(&mut actions),
             KeyCmd::Stop => self.stop(&mut actions),
             KeyCmd::Next => self.next(&mut actions),
+            KeyCmd::OpenFiles => actions.push(Action::OpenFiles),
             KeyCmd::ToggleShuffle => self.shuffle = !self.shuffle,
             KeyCmd::ToggleRepeat => self.repeat = !self.repeat,
             KeyCmd::ToggleTimeMode => self.remaining_mode = !self.remaining_mode,
@@ -1388,6 +1407,50 @@ mod tests {
         // Changing track while paused plays the new one.
         assert_eq!(ui.state, PlayState::Playing);
         assert_eq!(ui.key(KeyCmd::Prev), vec![audio(Transport::Open(1))]);
+    }
+
+    #[test]
+    fn both_eject_buttons_and_l_ask_for_files() {
+        let mut ui = Ui::demo();
+        let now = Instant::now();
+        let (ex, ey) = (m::EJECT.x + 5, m::EJECT.y + 5);
+        let _ = ui.mouse_down(Main, ex, ey, now);
+        assert_eq!(ui.pressed, Some(Control::Eject));
+        assert_eq!(ui.mouse_up(Main, ex, ey), vec![Action::OpenFiles]);
+        // Letting go somewhere else cancels, as with every button.
+        let _ = ui.mouse_down(Main, ex, ey, now);
+        assert!(ui.mouse_up(Main, ex, ey + 40).is_empty());
+        let mini = p::MINI_EJECT.offset(p::MIN_W - 150, p::MIN_H - p::BOTTOM_H);
+        let _ = ui.mouse_down(Playlist, mini.x + 2, mini.y + 2, now);
+        assert_eq!(ui.pressed, Some(Control::PlMiniEject));
+        assert_eq!(
+            ui.mouse_up(Playlist, mini.x + 2, mini.y + 2),
+            vec![Action::OpenFiles]
+        );
+        assert_eq!(ui.key(KeyCmd::OpenFiles), vec![Action::OpenFiles]);
+        assert_eq!(
+            ui.state,
+            PlayState::Playing,
+            "nothing changes until files are chosen"
+        );
+    }
+
+    #[test]
+    fn clearing_the_playlist_stops_and_starts_over() {
+        let mut ui = Ui::demo();
+        let now = Instant::now();
+        ui.play_track(3, &mut Vec::new());
+        let mut actions = Vec::new();
+        ui.clear_playlist(&mut actions);
+        assert_eq!(actions, vec![audio(Transport::Stop)]);
+        assert!(ui.tracks.is_empty() && ui.selected.is_empty());
+        assert_eq!(
+            (ui.current, ui.pl_scroll, ui.state),
+            (0, 0, PlayState::Stopped)
+        );
+        assert_eq!(ui.marquee_text(now), "");
+        assert_eq!(ui.add_files([PathBuf::from("new.flac")]), 0..1);
+        assert_eq!(ui.marquee_text(now), "1. new");
     }
 
     #[test]

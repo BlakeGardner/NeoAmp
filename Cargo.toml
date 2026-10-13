@@ -24,6 +24,11 @@ cpal = "0.18"
 rtrb = "0.4"
 rubato = "5"
 realfft = "3"
+# Native file dialogs: Windows' common dialog, macOS's NSOpenPanel, the XDG desktop portal on
+# Linux (libdbus is loaded at runtime, so building needs no extra packages).
+rfd = "0.17"
+# Waits for the file dialog's future; already used by pixels.
+pollster = "0.4"
 
 [profile.dev]
 opt-level = 1

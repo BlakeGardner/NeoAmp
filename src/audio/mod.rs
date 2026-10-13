@@ -35,9 +35,41 @@ use anyhow::{Context, Result};
 pub use eq::{BAND_HZ, BANDS, EqSettings, RANGE_DB as EQ_RANGE_DB};
 pub use scan::Scanner;
 
-/// File extensions picked up when a folder is added to the playlist. Files named explicitly
-/// are always tried, whatever their extension: symphonia probes the contents.
-pub const EXTENSIONS: [&str; 6] = ["mp3", "wav", "wave", "flac", "ogg", "oga"];
+/// A kind of file the player decodes, as the open dialog lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Format {
+    /// What the open dialog's file type list calls it.
+    pub name: &'static str,
+    /// File name extensions, lowercase and without the dot.
+    pub extensions: &'static [&'static str],
+}
+
+/// The formats symphonia is built to decode. Their extensions decide which files a folder adds
+/// to the playlist and which files the open dialog shows. Files named explicitly are always
+/// tried, whatever their extension: symphonia probes the contents.
+pub const FORMATS: [Format; 4] = [
+    Format {
+        name: "MP3 audio",
+        extensions: &["mp3"],
+    },
+    Format {
+        name: "WAV audio",
+        extensions: &["wav", "wave"],
+    },
+    Format {
+        name: "FLAC audio",
+        extensions: &["flac"],
+    },
+    Format {
+        name: "Ogg Vorbis audio",
+        extensions: &["ogg", "oga"],
+    },
+];
+
+/// Every extension in [`FORMATS`], in order.
+pub fn extensions() -> impl Iterator<Item = &'static str> {
+    FORMATS.iter().flat_map(|f| f.extensions.iter().copied())
+}
 
 /// What a file turned out to contain, read when it is opened or scanned.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -305,12 +337,12 @@ impl Player {
     }
 }
 
-/// Whether `path` has one of the [`EXTENSIONS`] (case-insensitively).
+/// Whether `path` has one of the [`extensions`] (case-insensitively).
 #[must_use]
 pub fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+        .is_some_and(|e| extensions().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Expand `paths` for the playlist: folders become the audio files inside them (recursively,
@@ -368,6 +400,8 @@ mod tests {
         assert!(is_audio_file(Path::new("a/b/Song.MP3")));
         assert!(is_audio_file(Path::new("x.wav")));
         assert!(is_audio_file(Path::new("x.flac")));
+        assert!(is_audio_file(Path::new("x.Wave")));
+        assert!(is_audio_file(Path::new("x.oga")));
         assert!(!is_audio_file(Path::new("skin.wsz")));
         assert!(!is_audio_file(Path::new("noext")));
     }

@@ -15,7 +15,7 @@ usage: winamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.p
   --scale <factor>     zoom the windows (default: from the screen height, 1.5 at 1440p)
   --screenshot <png>   render one frame at 1x to a PNG and exit
 
-keys: Z/X/C/V/B transport, S shuffle, R repeat, Ctrl+T time mode,
+keys: Z/X/C/V/B transport, L open files, S shuffle, R repeat, Ctrl+T time mode,
       Ctrl+D double size, Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
       Alt+G equalizer, Alt+E playlist, arrows volume/seek";
 
