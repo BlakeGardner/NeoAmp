@@ -1,9 +1,10 @@
 # Winamp 2.x classic interface in Rust
 
 A pixel-exact reproduction of the classic Winamp 2.x interface (main window,
-equalizer and playlist editor), drawn with real Winamp skins. It is an
-interface only: nothing plays audio, but every button, slider and toggle
-reacts the way the original did.
+equalizer and playlist editor), drawn with real Winamp skins, that plays
+MP3, WAV, FLAC and Ogg Vorbis files. The transport buttons, position bar,
+volume, balance and ten-band equalizer all act on the audio, and the
+visualizer shows what is actually playing.
 
 ![Winamp 2.x classic interface](docs/screenshot@2x.png)
 
@@ -26,9 +27,12 @@ program does the same:
   each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
   docking. `src/upscale.rs` draws the framebuffer over the whole window (see
   [Scaling](#scaling)), and `src/zoom.rs` picks the zoom.
+- `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
+  the samples being played into the spectrum analyzer and oscilloscope.
 - `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
   parses the command line. `cargo test` covers layout, hit testing, input,
-  the skin parsers and the blitter.
+  the skin parsers, the blitter and the audio pipeline (decoding, resampling,
+  the equalizer, and the decoder and mixer threads working together).
 
 Each Winamp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
@@ -48,6 +52,37 @@ Winamp's "always on top") and take keyboard focus when clicked.
   drags are handed to the compositor and nothing snaps.
 - `WINAMP_UNMANAGED=1|0` forces or forbids override-redirect windows instead
   of probing.
+
+## Audio
+
+Playback follows Winamp's own input plugin, DSP, output plugin chain, spread
+over three threads:
+
+- A decoder thread reads the file with [symphonia](https://crates.io/crates/symphonia)
+  (pure Rust: MP3, WAV, FLAC, Ogg Vorbis), converts it to stereo, resamples it
+  to the sound card's rate with [rubato](https://crates.io/crates/rubato), and
+  keeps about half a second queued in a lock-free ring buffer.
+- The sound card's callback, through [cpal](https://crates.io/crates/cpal),
+  takes audio from the ring and runs the equalizer, volume and balance. It
+  also copies what it plays to the visualizer.
+- The UI thread sends commands (open, seek, stop, pause) and reads back the
+  position, bitrate and "track finished" events.
+
+The callback never blocks or allocates, so the threads share only atomics and
+ring buffers. Each command carries a generation number: before the decoder
+queues audio for a seek or a new track, the callback drops whatever is still
+queued from the old one and confirms, so stale audio never plays.
+
+All three platforms behave the same:
+
+- symphonia is pure Rust and needs no system libraries.
+- cpal uses WASAPI on Windows, CoreAudio on macOS and ALSA on Linux, which
+  reaches PipeWire and PulseAudio through their ALSA plugins.
+- Resampling in the app means a 44.1 kHz file plays correctly on a 48 kHz
+  device even where the system mixer would not convert it.
+
+A background thread reads tags ("Artist - Title") and lengths for the
+playlist as files are added.
 
 ## Scaling
 
@@ -77,8 +112,24 @@ image is stretched to fill them exactly, so docked windows meet without gaps.
 The stock `base-2.91.wsz` skin must be present at `skins/base-2.91.wsz`; it is
 embedded into the binary at build time.
 
+On Linux, cpal needs the ALSA development files (Windows and macOS need
+nothing extra):
+
+```bash
+sudo apt install libasound2-dev
+```
+
 ```bash
 cargo run --release
+```
+
+Play files or whole folders (folders add their MP3, WAV, FLAC and Ogg Vorbis
+files, sorted by name); the first one starts playing. Dropping files or
+folders onto any window adds them to the playlist too, and starts them if
+nothing is playing:
+
+```bash
+cargo run --release -- ~/Music/some-album
 ```
 
 Load another classic skin by passing it on the command line or by dropping a
@@ -94,7 +145,8 @@ Pick the zoom yourself instead of letting the screen size decide:
 cargo run --release -- --scale 2
 ```
 
-Render a frame to a PNG (always at 1x) without opening a window:
+Render a frame to a PNG (always at 1x) without opening a window. It shows a
+made-up playlist, with a synthetic signal in the visualizer:
 
 ```bash
 cargo run --release -- --screenshot shot.png
@@ -105,12 +157,15 @@ cargo run --release -- --screenshot shot.png
 | Action | Mouse | Keyboard |
 | --- | --- | --- |
 | Previous / Play / Pause / Stop / Next | transport buttons | Z X C V B |
+| Play a playlist entry | double-click it | |
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
 | Equalizer / Playlist windows | EQ / PL buttons, window close buttons | Alt+G / Alt+E |
 | Double size (doubles the zoom) | the `D` in the clutter bar | Ctrl+D |
 | Zoom in / out / back to default | | Ctrl+= / Ctrl+- / Ctrl+0 |
-| Volume, balance, seek, EQ bands | drag the sliders (the marquee shows the value) | arrows: volume and seek |
+| Volume, balance, EQ bands and preamp | drag the sliders (the marquee shows the value) | Up / Down: volume |
+| Seek | drag the position bar; it seeks when you let go | Left / Right: 5 seconds |
+| Equalizer on / off | the ON button | |
 | Visualizer mode (analyzer, scope, off) | click the visualizer | |
 | Move a window (docked ones follow the main window) | drag its title bar | |
 | Resize the playlist | drag the grip in its bottom-right corner | |
@@ -121,5 +176,13 @@ cargo run --release -- --screenshot shot.png
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
 - Windowshade mode, the options menus, cursors (`.cur`) and the minibrowser
   window are not implemented.
+- Files come from the command line or drag and drop. Eject opens no file
+  dialog, the playlist cannot be edited, and shuffle does not change the
+  order yet. EQ presets and AUTO are not implemented.
+- Tracks play back to back with a short gap, not gaplessly.
+- The output device is opened once, at startup, and never reopened. On Linux
+  that device is PipeWire's or PulseAudio's, which move the stream to another
+  output when one disappears. On Windows and macOS, losing the device (say,
+  unplugging headphones) silences playback until the app restarts.
 - The playlist uses a system TrueType font (Arial, Liberation Sans or
   DejaVu Sans, whichever exists) at the size Winamp used.

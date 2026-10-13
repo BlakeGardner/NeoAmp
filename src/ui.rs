@@ -2,8 +2,11 @@
 //! live in its own OS window.
 
 use std::fmt::Write as _;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::audio::{EQ_RANGE_DB, EqSettings, Event, TrackInfo};
 use crate::canvas::{Image, Rect};
 use crate::font::TtfFont;
 use crate::skin::{Mask, Skin};
@@ -165,7 +168,7 @@ impl Control {
 }
 
 /// Side effects the window layer must perform after input.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
     /// The user grabbed this window's title bar: start moving it.
     DragWindow(WindowKind),
@@ -173,6 +176,20 @@ pub enum Action {
     Minimize,
     /// Window visibility, size or scale changed: re-sync the OS windows.
     Relayout,
+    /// Tell the audio engine.
+    Audio(Transport),
+}
+
+/// Playback commands for the audio engine. The UI state has already changed to match.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Transport {
+    /// Play playlist entry `n` from the start.
+    Open(usize),
+    Pause,
+    Resume,
+    Stop,
+    /// Jump to this many seconds into the current track.
+    Seek(f32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -200,10 +217,14 @@ pub enum KeyCmd {
     SeekForward,
 }
 
+/// One playlist entry.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Track {
+    /// "Artist - Title" from the tags, or the file name until they have been read.
     pub title: String,
-    pub seconds: u32,
+    /// Length in whole seconds; `None` until known.
+    pub seconds: Option<u32>,
+    pub path: PathBuf,
 }
 
 /// Where each window sits when the three are composed into one canvas (screenshots).
@@ -218,8 +239,12 @@ pub struct Layout {
 #[derive(Debug)]
 pub struct Ui {
     pub state: PlayState,
-    elapsed_base: f32,
-    resumed_at: Option<Instant>,
+    /// Seconds into the current track, as reported by the audio engine.
+    pub elapsed: f32,
+    /// Where a position bar drag will seek to when released.
+    seek_to: Option<f32>,
+    /// Tracks that failed to open in a row; when every track has, playback stops.
+    failures: usize,
     pub volume: f32,
     pub balance: f32,
     pub shuffle: bool,
@@ -278,48 +303,21 @@ pub fn write_time(buf: &mut String, secs: u32) {
     push_fmt(buf, format_args!("{}:{:02}", secs / 60, secs % 60));
 }
 
+/// Decibels for an equalizer slider at `v` (`0..=1`, flat in the middle).
+fn slider_db(v: f32) -> f32 {
+    (v - 0.5) * 2.0 * EQ_RANGE_DB
+}
+
 impl Ui {
+    /// An empty playlist, stopped.
     #[must_use]
     pub fn new() -> Ui {
-        let tracks = vec![
-            Track {
-                title: "DJ Mike Llama - Llama Whippin' Intro".into(),
-                seconds: 5,
-            },
-            Track {
-                title: "Nullsoft - Winamp 2.91 Theme".into(),
-                seconds: 213,
-            },
-            Track {
-                title: "Justin F. - Rolling Llama (Radio Edit)".into(),
-                seconds: 254,
-            },
-            Track {
-                title: "The Shoutcasters - Buffering...".into(),
-                seconds: 187,
-            },
-            Track {
-                title: "MilkDrop Crew - Plasma Visions".into(),
-                seconds: 312,
-            },
-            Track {
-                title: "Tom P. - Llama Country".into(),
-                seconds: 198,
-            },
-            Track {
-                title: "Unknown Artist - Track 07".into(),
-                seconds: 241,
-            },
-        ];
-        let mut selected = vec![false; tracks.len()];
-        if let Some(first) = selected.first_mut() {
-            *first = true;
-        }
         let now = Instant::now();
-        let mut ui = Ui {
-            state: PlayState::Playing,
-            elapsed_base: 0.0,
-            resumed_at: Some(now),
+        Ui {
+            state: PlayState::Stopped,
+            elapsed: 0.0,
+            seek_to: None,
+            failures: 0,
             volume: 0.78,
             balance: 0.0,
             shuffle: false,
@@ -335,13 +333,13 @@ impl Ui {
             drag_start: (0, 0),
             drag_size: (0, 0),
             pl_size: (p::MIN_W, p::MIN_H),
-            tracks,
+            tracks: Vec::new(),
             current: 0,
-            selected,
+            selected: Vec::new(),
             pl_scroll: 0,
-            kbps: 56,
-            khz: 22,
-            stereo: true,
+            kbps: 0,
+            khz: 0,
+            stereo: false,
             vis: Vis::new(),
             double_size: false,
             zoom: Zoom::MIN,
@@ -353,7 +351,40 @@ impl Ui {
             last_click: None,
             title_chars: Vec::new(),
             title_scrolls: false,
-        };
+        }
+    }
+
+    /// A made-up playlist shown as if playing, for screenshots and tests. Its files do not
+    /// exist.
+    #[must_use]
+    pub fn demo() -> Ui {
+        const TRACKS: [(&str, u32); 7] = [
+            ("DJ Mike Llama - Llama Whippin' Intro", 5),
+            ("Nullsoft - Winamp 2.91 Theme", 213),
+            ("Justin F. - Rolling Llama (Radio Edit)", 254),
+            ("The Shoutcasters - Buffering...", 187),
+            ("MilkDrop Crew - Plasma Visions", 312),
+            ("Tom P. - Llama Country", 198),
+            ("Unknown Artist - Track 07", 241),
+        ];
+        let mut ui = Ui::new();
+        ui.tracks = TRACKS
+            .iter()
+            .enumerate()
+            .map(|(i, (title, seconds))| Track {
+                title: (*title).into(),
+                seconds: Some(*seconds),
+                path: PathBuf::from(format!("demo/{:02}.mp3", i + 1)),
+            })
+            .collect();
+        ui.selected = vec![false; ui.tracks.len()];
+        if let Some(first) = ui.selected.first_mut() {
+            *first = true;
+        }
+        ui.state = PlayState::Playing;
+        ui.kbps = 56;
+        ui.khz = 22;
+        ui.stereo = true;
         ui.refresh_title();
         ui
     }
@@ -434,56 +465,45 @@ impl Ui {
 
     // ----- playback model -----------------------------------------------------------------
 
-    /// The current track. The playlist is never empty, but fall back gracefully if it were.
+    /// The current track, if the playlist has any.
     #[must_use]
     pub fn track(&self) -> Option<&Track> {
         self.tracks.get(self.current)
     }
 
+    /// Length of the current track in seconds; 0 while unknown.
     #[must_use]
     pub fn track_len(&self) -> f32 {
-        self.track().map_or(0.0, |t| t.seconds as f32)
+        self.track()
+            .and_then(|t| t.seconds)
+            .map_or(0.0, |s| s as f32)
     }
 
+    /// Playback position in `0..=1`, following a position bar drag while there is one.
     #[must_use]
-    pub fn elapsed(&self, now: Instant) -> f32 {
-        let mut t = self.elapsed_base;
-        if let Some(r) = self.resumed_at {
-            t += now.saturating_duration_since(r).as_secs_f32();
-        }
-        t.clamp(0.0, self.track_len())
-    }
-
-    fn set_elapsed(&mut self, secs: f32, now: Instant) {
-        self.elapsed_base = secs.clamp(0.0, self.track_len());
-        if self.state == PlayState::Playing {
-            self.resumed_at = Some(now);
-        }
-    }
-
-    /// Playback position in `0..=1`.
-    #[must_use]
-    pub fn position(&self, now: Instant) -> f32 {
+    pub fn position(&self) -> f32 {
         let len = self.track_len();
         if len <= 0.0 {
             0.0
         } else {
-            self.elapsed(now) / len
+            (self.seek_to.unwrap_or(self.elapsed) / len).clamp(0.0, 1.0)
         }
     }
 
-    /// Minutes, seconds and whether a minus sign is shown (remaining-time mode).
+    /// Minutes, seconds and whether a minus sign is shown (remaining-time mode, which needs a
+    /// known length).
     #[must_use]
-    pub fn display_time(&self, now: Instant) -> (u32, u32, bool) {
-        let e = self.elapsed(now);
-        let secs = if self.remaining_mode {
-            (self.track_len() - e).ceil()
+    pub fn display_time(&self) -> (u32, u32, bool) {
+        let len = self.track_len();
+        let remaining = self.remaining_mode && len > 0.0;
+        let secs = if remaining {
+            (len - self.elapsed).ceil()
         } else {
-            e.floor()
+            self.elapsed.floor()
         };
         // Non-negative and far below u32::MAX, so the cast cannot truncate.
         let secs = secs.max(0.0) as u32;
-        (secs / 60, secs % 60, self.remaining_mode)
+        (secs / 60, secs % 60, remaining)
     }
 
     /// True during the "off" half of the paused blink.
@@ -493,75 +513,197 @@ impl Ui {
             && (now.saturating_duration_since(self.start).as_millis() % BLINK_MS) >= BLINK_MS / 2
     }
 
-    pub fn play(&mut self, now: Instant) {
-        match self.state {
-            PlayState::Paused => self.resumed_at = Some(now),
-            PlayState::Playing | PlayState::Stopped => {
-                self.elapsed_base = 0.0;
-                self.resumed_at = Some(now);
-            }
+    /// Play the current track from the top (Play while playing restarts it, as in Winamp).
+    fn start(&mut self, actions: &mut Vec<Action>) {
+        if self.track().is_none() {
+            return;
         }
         self.state = PlayState::Playing;
+        self.elapsed = 0.0;
+        self.seek_to = None;
+        actions.push(Action::Audio(Transport::Open(self.current)));
     }
 
-    pub fn pause(&mut self, now: Instant) {
+    pub fn play(&mut self, actions: &mut Vec<Action>) {
+        if self.state == PlayState::Paused {
+            self.state = PlayState::Playing;
+            actions.push(Action::Audio(Transport::Resume));
+        } else {
+            self.start(actions);
+        }
+    }
+
+    /// Pause, or resume when already paused.
+    pub fn pause(&mut self, actions: &mut Vec<Action>) {
         match self.state {
             PlayState::Playing => {
-                self.elapsed_base = self.elapsed(now);
-                self.resumed_at = None;
                 self.state = PlayState::Paused;
+                actions.push(Action::Audio(Transport::Pause));
             }
             PlayState::Paused => {
-                self.resumed_at = Some(now);
                 self.state = PlayState::Playing;
+                actions.push(Action::Audio(Transport::Resume));
             }
             PlayState::Stopped => {}
         }
     }
 
-    pub fn stop(&mut self) {
+    pub fn stop(&mut self, actions: &mut Vec<Action>) {
+        if self.state != PlayState::Stopped {
+            actions.push(Action::Audio(Transport::Stop));
+        }
         self.state = PlayState::Stopped;
-        self.elapsed_base = 0.0;
-        self.resumed_at = None;
+        self.elapsed = 0.0;
+        self.seek_to = None;
         self.vis.reset();
     }
 
-    pub fn jump(&mut self, idx: usize, now: Instant) {
+    /// Make playlist entry `idx` current without starting it.
+    fn select(&mut self, idx: usize) {
         if self.tracks.is_empty() {
             self.current = 0;
-            self.refresh_title();
-            return;
+        } else {
+            self.current = idx % self.tracks.len();
+            self.ensure_visible(self.current);
         }
-        self.current = idx % self.tracks.len();
-        self.elapsed_base = 0.0;
-        if self.state == PlayState::Playing {
-            self.resumed_at = Some(now);
-        }
-        self.ensure_visible(self.current);
+        self.elapsed = 0.0;
+        self.seek_to = None;
         self.refresh_title();
     }
 
-    pub fn next(&mut self, now: Instant) {
-        self.jump(self.current.wrapping_add(1), now);
+    /// Move to playlist entry `idx`; it starts playing unless playback is stopped.
+    pub fn jump(&mut self, idx: usize, actions: &mut Vec<Action>) {
+        self.select(idx);
+        if self.state != PlayState::Stopped {
+            self.start(actions);
+        }
     }
 
-    pub fn prev(&mut self, now: Instant) {
+    /// Move to playlist entry `idx` and play it.
+    pub fn play_track(&mut self, idx: usize, actions: &mut Vec<Action>) {
+        self.select(idx);
+        self.start(actions);
+    }
+
+    pub fn next(&mut self, actions: &mut Vec<Action>) {
+        self.jump(self.current.wrapping_add(1), actions);
+    }
+
+    pub fn prev(&mut self, actions: &mut Vec<Action>) {
         let len = self.tracks.len();
         if len == 0 {
             return;
         }
-        self.jump((self.current + len - 1) % len, now);
+        self.jump((self.current + len - 1) % len, actions);
     }
 
-    /// Advance the fake playback and the visualiser. Call once per frame before drawing.
-    pub fn tick(&mut self, now: Instant) {
-        if self.state == PlayState::Playing && self.elapsed(now) >= self.track_len() {
-            if self.repeat || self.current + 1 < self.tracks.len() {
-                self.next(now);
-            } else {
-                self.stop();
+    /// After a track: the next one, or stop at the end of the playlist unless repeating.
+    fn advance(&mut self, actions: &mut Vec<Action>) {
+        if self.repeat || self.current + 1 < self.tracks.len() {
+            self.next(actions);
+        } else {
+            self.stop(actions);
+        }
+    }
+
+    /// Jump to `secs` into the current track, within its length when that is known.
+    fn seek(&mut self, secs: f32, actions: &mut Vec<Action>) {
+        if self.state == PlayState::Stopped {
+            return;
+        }
+        let len = self.track_len();
+        let secs = if len > 0.0 {
+            secs.clamp(0.0, len)
+        } else {
+            secs.max(0.0)
+        };
+        self.elapsed = secs;
+        actions.push(Action::Audio(Transport::Seek(secs)));
+    }
+
+    /// The position bar works while a track with a known length is playing or paused.
+    fn can_seek(&self) -> bool {
+        self.state != PlayState::Stopped && self.track_len() > 0.0
+    }
+
+    /// React to the audio engine: show what it opened, and move on when a track ends or fails.
+    pub fn audio_event(&mut self, event: Event, actions: &mut Vec<Action>) {
+        match event {
+            Event::Started(info) => {
+                self.failures = 0;
+                self.khz = info.sample_rate / 1000;
+                self.stereo = info.channels >= 2;
+                if let Some(kbps) = info.kbps {
+                    self.kbps = kbps;
+                }
+                if let Some(path) = self.track().map(|t| t.path.clone()) {
+                    self.set_track_info(self.current, &path, &info);
+                }
+            }
+            Event::Finished => self.advance(actions),
+            Event::Failed(why) => {
+                if let Some(t) = self.track() {
+                    log::warn!("cannot play {}: {why}", t.path.display());
+                }
+                self.failures += 1;
+                if self.failures >= self.tracks.len() {
+                    self.stop(actions);
+                } else {
+                    self.advance(actions);
+                }
             }
         }
+    }
+
+    /// Append files to the playlist, titled by file name until their tags are read. Returns
+    /// the indices of the new entries.
+    pub fn add_files(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> Range<usize> {
+        let start = self.tracks.len();
+        self.tracks.extend(paths.into_iter().map(|path| Track {
+            title: path.file_stem().map_or_else(
+                || path.display().to_string(),
+                |s| s.to_string_lossy().into_owned(),
+            ),
+            seconds: None,
+            path,
+        }));
+        self.selected.resize(self.tracks.len(), false);
+        if start == 0 && !self.tracks.is_empty() {
+            self.refresh_title();
+        }
+        start..self.tracks.len()
+    }
+
+    /// Fill in a playlist entry's title and length once its file has been read. Ignored if the
+    /// entry no longer plays `path`.
+    pub fn set_track_info(&mut self, idx: usize, path: &Path, info: &TrackInfo) {
+        let Some(track) = self.tracks.get_mut(idx).filter(|t| t.path == path) else {
+            return;
+        };
+        if let Some(title) = &info.title {
+            track.title.clone_from(title);
+        }
+        if let Some(secs) = info.seconds {
+            // Rounded, non-negative and far below u32::MAX, so the cast cannot truncate.
+            track.seconds = Some(secs.round().max(0.0) as u32);
+        }
+        if idx == self.current {
+            self.refresh_title();
+        }
+    }
+
+    /// The equalizer window's settings in decibels.
+    #[must_use]
+    pub fn eq_settings(&self) -> EqSettings {
+        EqSettings {
+            enabled: self.eq_on,
+            preamp_db: slider_db(self.preamp),
+            bands_db: self.bands.map(slider_db),
+        }
+    }
+
+    /// Advance the visualiser. Call once per frame before drawing.
+    pub fn tick(&mut self, now: Instant) {
         self.vis.update(now, self.state == PlayState::Playing);
     }
 
@@ -572,9 +714,12 @@ impl Ui {
         self.title_chars.clear();
         let Some(t) = self.track() else { return };
         let mut s = String::with_capacity(64);
-        push_fmt(&mut s, format_args!("{}. {} (", self.current + 1, t.title));
-        write_time(&mut s, t.seconds);
-        s.push(')');
+        push_fmt(&mut s, format_args!("{}. {}", self.current + 1, t.title));
+        if let Some(secs) = t.seconds {
+            s.push_str(" (");
+            write_time(&mut s, secs);
+            s.push(')');
+        }
         self.title_scrolls = s.chars().count() > m::MARQUEE_CHARS;
         if self.title_scrolls {
             s.push_str(MARQUEE_SEPARATOR);
@@ -844,7 +989,7 @@ impl Ui {
     }
 
     /// Update a slider from a window-local pointer position and show its value in the marquee.
-    fn drag_slider(&mut self, slider: Slider, lx: i32, ly: i32, now: Instant) {
+    fn drag_slider(&mut self, slider: Slider, lx: i32, ly: i32) {
         let mut text = self.marquee_override.take().unwrap_or_default();
         text.clear();
         match slider {
@@ -871,13 +1016,16 @@ impl Ui {
                 }
             }
             Slider::PosBar => {
+                // Winamp seeks when the thumb is let go; until then only the thumb moves.
                 let pos = Self::h_fraction(m::POSBAR, m::POSBAR_THUMB_W, lx);
-                let secs = pos * self.track_len();
-                self.set_elapsed(secs, now);
+                let len = self.track_len();
+                let secs = pos * len;
+                self.seek_to = Some(secs);
                 text.push_str("Seek to: ");
+                // Both lie in 0..=len, far below u32::MAX, so the casts cannot truncate.
                 write_time(&mut text, secs as u32);
                 text.push('/');
-                write_time(&mut text, self.track().map_or(0, |t| t.seconds));
+                write_time(&mut text, len as u32);
                 push_fmt(&mut text, format_args!(" ({}%)", (pos * 100.0).round()));
             }
             Slider::EqPreamp | Slider::EqBand(_) => {
@@ -888,7 +1036,7 @@ impl Ui {
                 let span = e::SLIDER_TRAVEL as f32;
                 let v = (1.0 - (((ly - rect.y) as f32 - e::SLIDER_THUMB_H as f32 / 2.0) / span))
                     .clamp(0.0, 1.0);
-                let db = (v - 0.5) * 24.0;
+                let db = slider_db(v);
                 match slider {
                     Slider::EqBand(i) if i < self.bands.len() => {
                         self.bands[i] = v;
@@ -948,8 +1096,11 @@ impl Ui {
             return actions;
         };
         if let Some(slider) = ctl.slider() {
+            if slider == Slider::PosBar && !self.can_seek() {
+                return actions;
+            }
             self.pressed = Some(ctl);
-            self.drag_slider(slider, x, y, now);
+            self.drag_slider(slider, x, y);
         } else {
             match ctl {
                 MainTitle | EqTitle | PlTitle => actions.push(Action::DragWindow(kind)),
@@ -970,10 +1121,7 @@ impl Ui {
                         *s = true;
                     }
                     if double {
-                        self.jump(i, now);
-                        if self.state != PlayState::Playing {
-                            self.play(now);
-                        }
+                        self.play_track(i, &mut actions);
                     }
                 }
                 // Every other control is a button: show it pressed until release.
@@ -985,7 +1133,7 @@ impl Ui {
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
-    pub fn mouse_move(&mut self, kind: WindowKind, x: i32, y: i32, now: Instant) -> Vec<Action> {
+    pub fn mouse_move(&mut self, kind: WindowKind, x: i32, y: i32) -> Vec<Action> {
         self.note_cursor(kind, x, y);
         let mut actions = Vec::new();
         // A drag only follows pointer motion reported by the window it started in.
@@ -993,7 +1141,7 @@ impl Ui {
             return actions;
         };
         if let Some(slider) = ctl.slider() {
-            self.drag_slider(slider, x, y, now);
+            self.drag_slider(slider, x, y);
         } else if ctl == Control::PlScroll {
             self.drag_scroll(y);
         } else if ctl == Control::PlResize && self.drag_resize(x, y) {
@@ -1003,7 +1151,7 @@ impl Ui {
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
-    pub fn mouse_up(&mut self, kind: WindowKind, x: i32, y: i32, now: Instant) -> Vec<Action> {
+    pub fn mouse_up(&mut self, kind: WindowKind, x: i32, y: i32) -> Vec<Action> {
         use Control::*;
         self.note_cursor(kind, x, y);
         let mut actions = Vec::new();
@@ -1013,8 +1161,14 @@ impl Ui {
         self.marquee_override = None;
         let still_over = ctl.window() == kind && self.hit(kind, x, y) == Some(ctl);
         match ctl {
-            // Drags finish silently.
-            Volume | Balance | PosBar | EqPreamp | EqBand(_) | PlScroll | PlResize => {}
+            // Letting go of the position bar seeks to where the thumb was left.
+            PosBar => {
+                if let Some(secs) = self.seek_to.take() {
+                    self.seek(secs, &mut actions);
+                }
+            }
+            // Other drags finish silently.
+            Volume | Balance | EqPreamp | EqBand(_) | PlScroll | PlResize => {}
             // Releasing outside the pressed button cancels it, as in Win32.
             _ if !still_over => {}
             MainClose => actions.push(Action::Close),
@@ -1025,11 +1179,11 @@ impl Ui {
             }
             PlScrollUp => self.pl_scroll = self.pl_scroll.saturating_sub(1),
             PlScrollDown => self.pl_scroll = (self.pl_scroll + 1).min(self.max_scroll()),
-            Prev | PlMiniPrev => self.prev(now),
-            Play | PlMiniPlay => self.play(now),
-            Pause | PlMiniPause => self.pause(now),
-            Stop | PlMiniStop => self.stop(),
-            Next | PlMiniNext => self.next(now),
+            Prev | PlMiniPrev => self.prev(&mut actions),
+            Play | PlMiniPlay => self.play(&mut actions),
+            Pause | PlMiniPause => self.pause(&mut actions),
+            Stop | PlMiniStop => self.stop(&mut actions),
+            Next | PlMiniNext => self.next(&mut actions),
             Shuffle => self.shuffle = !self.shuffle,
             Repeat => self.repeat = !self.repeat,
             EqToggle => {
@@ -1052,7 +1206,7 @@ impl Ui {
             }
             EqOn => self.eq_on = !self.eq_on,
             EqAuto => self.eq_auto = !self.eq_auto,
-            // Press-only visuals: no behaviour in an interface-only build.
+            // Press-only visuals: menus, dialogs and window shading are not implemented.
             MainTitle | EqTitle | PlTitle | MainOptions | MainShade | Eject | ClutterO
             | ClutterA | ClutterI | ClutterV | EqShade | EqPresets | PlShade | PlAdd | PlRem
             | PlSel | PlMisc | PlListOpts | PlMiniEject | PlTrack(_) => {}
@@ -1061,7 +1215,7 @@ impl Ui {
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
-    pub fn key(&mut self, cmd: KeyCmd, now: Instant) -> Vec<Action> {
+    pub fn key(&mut self, cmd: KeyCmd) -> Vec<Action> {
         let mut actions = Vec::new();
         match cmd {
             KeyCmd::ToggleDoubleSize => {
@@ -1079,18 +1233,18 @@ impl Ui {
                 self.pl_open = !self.pl_open;
                 actions.push(Action::Relayout);
             }
-            KeyCmd::Prev => self.prev(now),
-            KeyCmd::Play => self.play(now),
-            KeyCmd::Pause => self.pause(now),
-            KeyCmd::Stop => self.stop(),
-            KeyCmd::Next => self.next(now),
+            KeyCmd::Prev => self.prev(&mut actions),
+            KeyCmd::Play => self.play(&mut actions),
+            KeyCmd::Pause => self.pause(&mut actions),
+            KeyCmd::Stop => self.stop(&mut actions),
+            KeyCmd::Next => self.next(&mut actions),
             KeyCmd::ToggleShuffle => self.shuffle = !self.shuffle,
             KeyCmd::ToggleRepeat => self.repeat = !self.repeat,
             KeyCmd::ToggleTimeMode => self.remaining_mode = !self.remaining_mode,
             KeyCmd::VolumeUp => self.volume = (self.volume + 0.02).min(1.0),
             KeyCmd::VolumeDown => self.volume = (self.volume - 0.02).max(0.0),
-            KeyCmd::SeekBack => self.set_elapsed(self.elapsed(now) - 5.0, now),
-            KeyCmd::SeekForward => self.set_elapsed(self.elapsed(now) + 5.0, now),
+            KeyCmd::SeekBack => self.seek(self.elapsed - 5.0, &mut actions),
+            KeyCmd::SeekForward => self.seek(self.elapsed + 5.0, &mut actions),
         }
         actions
     }
@@ -1149,7 +1303,7 @@ mod tests {
 
     #[test]
     fn hit_testing_eq_and_playlist() {
-        let ui = Ui::new();
+        let ui = Ui::demo();
         assert_eq!(ui.hit(Eq, 80, 50), Some(Control::EqBand(0)));
         assert_eq!(ui.hit(Eq, 245, 50), Some(Control::EqBand(9)));
         assert_eq!(ui.hit(Eq, 25, 50), Some(Control::EqPreamp));
@@ -1197,43 +1351,201 @@ mod tests {
         let _ = ui.mouse_down(Main, 107 + 7, 60, now);
         assert!(ui.volume < 0.01);
         assert_eq!(ui.marquee_override.as_deref(), Some("Volume: 0%"));
-        let _ = ui.mouse_move(Main, 107 + 68 - 7, 60, now);
+        let _ = ui.mouse_move(Main, 107 + 68 - 7, 60);
         assert!(ui.volume > 0.99);
         // Motion reported by another window does not steer the drag.
-        let _ = ui.mouse_move(Eq, 107, 60, now);
+        let _ = ui.mouse_move(Eq, 107, 60);
         assert!(ui.volume > 0.99);
-        let _ = ui.mouse_up(Main, 107 + 68 - 7, 60, now);
+        let _ = ui.mouse_up(Main, 107 + 68 - 7, 60);
         assert!(ui.pressed.is_none());
         assert!(ui.marquee_override.is_none());
     }
 
+    fn audio(t: Transport) -> Action {
+        Action::Audio(t)
+    }
+
     #[test]
-    fn transport_buttons_change_state() {
-        let mut ui = Ui::new();
+    fn transport_buttons_change_state_and_tell_the_engine() {
+        let mut ui = Ui::demo();
         let now = Instant::now();
         let (px, py) = (85 + 5, 88 + 5); // stop
         let _ = ui.mouse_down(Main, px, py, now);
         assert_eq!(ui.pressed, Some(Control::Stop));
-        let _ = ui.mouse_up(Main, px, py, now);
+        assert_eq!(ui.mouse_up(Main, px, py), vec![audio(Transport::Stop)]);
         assert_eq!(ui.state, PlayState::Stopped);
-        let _ = ui.key(KeyCmd::Play, now);
-        assert_eq!(ui.state, PlayState::Playing);
-        let _ = ui.key(KeyCmd::Pause, now);
-        assert_eq!(ui.state, PlayState::Paused);
-        let _ = ui.key(KeyCmd::Next, now);
+        assert_eq!(ui.key(KeyCmd::Stop), vec![], "already stopped");
+        // Stopped: only the selection moves.
+        assert_eq!(ui.key(KeyCmd::Next), vec![]);
         assert_eq!(ui.current, 1);
+        assert_eq!(ui.key(KeyCmd::Play), vec![audio(Transport::Open(1))]);
+        assert_eq!(ui.state, PlayState::Playing);
+        assert_eq!(ui.key(KeyCmd::Pause), vec![audio(Transport::Pause)]);
+        assert_eq!(ui.state, PlayState::Paused);
+        assert_eq!(ui.key(KeyCmd::Play), vec![audio(Transport::Resume)]);
+        let _ = ui.key(KeyCmd::Pause);
+        assert_eq!(ui.key(KeyCmd::Next), vec![audio(Transport::Open(2))]);
+        // Changing track while paused plays the new one.
+        assert_eq!(ui.state, PlayState::Playing);
+        assert_eq!(ui.key(KeyCmd::Prev), vec![audio(Transport::Open(1))]);
+    }
+
+    #[test]
+    fn double_clicking_a_playlist_entry_plays_it() {
+        let mut ui = Ui::demo();
+        let now = Instant::now();
+        let _ = ui.key(KeyCmd::Stop);
+        assert!(ui.mouse_down(Playlist, 100, 43, now).is_empty());
+        let actions = ui.mouse_down(Playlist, 100, 43, now + Duration::from_millis(100));
+        assert_eq!(actions, vec![audio(Transport::Open(1))]);
+        assert_eq!((ui.current, ui.state), (1, PlayState::Playing));
+    }
+
+    #[test]
+    fn finished_tracks_advance_and_the_last_one_stops() {
+        let mut ui = Ui::demo();
+        let mut actions = Vec::new();
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Open(1))]);
+        actions.clear();
+        ui.play_track(6, &mut actions);
+        actions.clear();
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Stop)]);
+        assert_eq!((ui.current, ui.state), (6, PlayState::Stopped));
+        ui.repeat = true;
+        ui.play_track(6, &mut actions);
+        actions.clear();
+        ui.audio_event(Event::Finished, &mut actions);
+        // Repeat wraps around.
+        assert_eq!(actions, vec![audio(Transport::Open(0))]);
+    }
+
+    #[test]
+    fn failed_tracks_are_skipped_but_not_forever() {
+        let mut ui = Ui::demo();
+        ui.repeat = true;
+        let mut actions = Vec::new();
+        for i in 1..ui.tracks.len() {
+            ui.audio_event(Event::Failed("nope".into()), &mut actions);
+            assert_eq!(ui.current, i);
+            assert_eq!(ui.state, PlayState::Playing);
+        }
+        actions.clear();
+        ui.audio_event(Event::Failed("nope".into()), &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Stop)], "every track failed");
+        // One success resets the count.
+        let _ = ui.key(KeyCmd::Play);
+        ui.audio_event(Event::Started(TrackInfo::default()), &mut actions);
+        assert_eq!(ui.failures, 0);
+    }
+
+    #[test]
+    fn the_position_bar_seeks_on_release() {
+        let mut ui = Ui::demo(); // the first track is 5 seconds long
+        let now = Instant::now();
+        let bar = (m::POSBAR.x, m::POSBAR.y + 5);
+        assert!(ui.mouse_down(Main, bar.0 + 120, bar.1, now).is_empty());
+        let _ = ui.mouse_move(Main, bar.0 + 240, bar.1);
+        assert_eq!(ui.elapsed, 0.0, "dragging only moves the thumb");
+        assert!(ui.position() > 0.99);
+        let actions = ui.mouse_up(Main, bar.0 + 240, bar.1);
+        assert_eq!(actions, vec![audio(Transport::Seek(5.0))]);
+        assert_eq!(ui.elapsed, 5.0);
+        // Nothing to seek while stopped.
+        let _ = ui.key(KeyCmd::Stop);
+        let _ = ui.mouse_down(Main, bar.0 + 120, bar.1, now);
+        assert_eq!(ui.pressed, None);
+        assert!(ui.key(KeyCmd::SeekForward).is_empty());
+    }
+
+    #[test]
+    fn arrow_keys_seek_within_the_track() {
+        let mut ui = Ui::demo();
+        ui.elapsed = 3.0;
+        let seek = |secs| vec![audio(Transport::Seek(secs))];
+        assert_eq!(ui.key(KeyCmd::SeekForward), seek(5.0));
+        assert_eq!(ui.key(KeyCmd::SeekBack), seek(0.0));
+    }
+
+    #[test]
+    fn added_files_are_named_until_their_tags_are_read() {
+        let mut ui = Ui::new();
+        let added = ui.add_files([PathBuf::from("/music/01 Intro.mp3"), "/music/b.wav".into()]);
+        assert_eq!(added, 0..2);
+        assert_eq!(ui.tracks[0].title, "01 Intro");
+        assert_eq!(ui.tracks[0].seconds, None);
+        assert_eq!(ui.selected.len(), 2);
+        assert_eq!(ui.marquee_text(Instant::now()), "1. 01 Intro");
+        let info = TrackInfo {
+            title: Some("Band - Intro".into()),
+            seconds: Some(61.4),
+            ..TrackInfo::default()
+        };
+        ui.set_track_info(0, Path::new("/music/elsewhere.mp3"), &info);
+        // A different file is ignored.
+        assert_eq!(ui.tracks[0].title, "01 Intro");
+        ui.set_track_info(0, Path::new("/music/01 Intro.mp3"), &info);
+        assert_eq!(ui.tracks[0].title, "Band - Intro");
+        assert_eq!(ui.tracks[0].seconds, Some(61));
+        assert_eq!(ui.marquee_text(Instant::now()), "1. Band - Intro (1:01)");
+        assert_eq!(ui.add_files([PathBuf::from("c.ogg")]), 2..3);
+    }
+
+    #[test]
+    fn started_tracks_fill_in_the_readouts() {
+        let mut ui = Ui::new();
+        let _ = ui.add_files([PathBuf::from("song.mp3")]);
+        let mut actions = Vec::new();
+        ui.play_track(0, &mut actions);
+        let info = TrackInfo {
+            title: None,
+            seconds: Some(200.0),
+            sample_rate: 44_100,
+            channels: 1,
+            kbps: Some(128),
+        };
+        ui.audio_event(Event::Started(info), &mut actions);
+        assert_eq!((ui.kbps, ui.khz, ui.stereo), (128, 44, false));
+        assert_eq!(ui.tracks[0].seconds, Some(200));
+        assert_eq!(ui.tracks[0].title, "song");
+    }
+
+    #[test]
+    fn remaining_time_needs_a_known_length() {
+        let mut ui = Ui::new();
+        let _ = ui.add_files([PathBuf::from("song.mp3")]);
+        ui.elapsed = 61.5;
+        ui.remaining_mode = true;
+        assert_eq!(ui.display_time(), (1, 1, false));
+        ui.tracks[0].seconds = Some(100);
+        assert_eq!(ui.display_time(), (0, 39, true));
+    }
+
+    #[test]
+    fn eq_sliders_map_to_decibels() {
+        let mut ui = Ui::new();
+        ui.preamp = 1.0;
+        ui.bands[0] = 0.0;
+        ui.bands[9] = 0.75;
+        let s = ui.eq_settings();
+        assert!(s.enabled);
+        assert_eq!(s.preamp_db, 12.0);
+        assert_eq!(s.bands_db[0], -12.0);
+        assert_eq!(s.bands_db[5], 0.0);
+        assert_eq!(s.bands_db[9], 6.0);
     }
 
     #[test]
     fn releasing_outside_the_pressed_button_cancels_it() {
-        let mut ui = Ui::new();
+        let mut ui = Ui::demo();
         let now = Instant::now();
         let _ = ui.mouse_down(Main, 85 + 5, 88 + 5, now); // stop
-        let actions = ui.mouse_up(Main, 5, 5, now);
+        let actions = ui.mouse_up(Main, 5, 5);
         assert!(actions.is_empty());
         assert_eq!(ui.state, PlayState::Playing);
         let _ = ui.mouse_down(Main, 85 + 5, 88 + 5, now);
-        let actions = ui.mouse_up(Eq, 85 + 5, 88 + 5, now);
+        let actions = ui.mouse_up(Eq, 85 + 5, 88 + 5);
         assert!(actions.is_empty());
         assert_eq!(ui.state, PlayState::Playing);
     }
@@ -1243,9 +1555,9 @@ mod tests {
         let mut ui = Ui::new();
         let now = Instant::now();
         let _ = ui.mouse_down(Eq, 268, 5, now);
-        assert_eq!(ui.mouse_up(Eq, 268, 5, now), vec![Action::Relayout]);
+        assert_eq!(ui.mouse_up(Eq, 268, 5), vec![Action::Relayout]);
         assert!(!ui.eq_open);
-        assert_eq!(ui.key(KeyCmd::ToggleEq, now), vec![Action::Relayout]);
+        assert_eq!(ui.key(KeyCmd::ToggleEq), vec![Action::Relayout]);
         assert!(ui.eq_open);
         ui.set_open(Playlist, false);
         assert!(!ui.is_open(Playlist));
@@ -1261,19 +1573,18 @@ mod tests {
             );
         }
         let mut ui = Ui::new();
-        let now = Instant::now();
         ui.default_zoom = Zoom::try_from(1.5).unwrap();
         assert_scale(&ui, 1.0);
-        assert_eq!(ui.key(KeyCmd::ZoomOut, now), vec![], "already at 1x");
-        assert_eq!(ui.key(KeyCmd::ZoomIn, now), vec![Action::Relayout]);
+        assert_eq!(ui.key(KeyCmd::ZoomOut), vec![], "already at 1x");
+        assert_eq!(ui.key(KeyCmd::ZoomIn), vec![Action::Relayout]);
         assert_scale(&ui, 1.5);
-        let _ = ui.key(KeyCmd::ToggleDoubleSize, now);
+        let _ = ui.key(KeyCmd::ToggleDoubleSize);
         assert_scale(&ui, 3.0);
-        let _ = ui.key(KeyCmd::ZoomIn, now);
+        let _ = ui.key(KeyCmd::ZoomIn);
         assert_scale(&ui, 4.0);
-        assert_eq!(ui.key(KeyCmd::ZoomReset, now), vec![Action::Relayout]);
+        assert_eq!(ui.key(KeyCmd::ZoomReset), vec![Action::Relayout]);
         assert_eq!(ui.zoom, ui.default_zoom);
-        assert_eq!(ui.key(KeyCmd::ZoomReset, now), vec![]);
+        assert_eq!(ui.key(KeyCmd::ZoomReset), vec![]);
     }
 
     #[test]
@@ -1283,7 +1594,7 @@ mod tests {
         let grip = (275 - 8, 116 - 8);
         let _ = ui.mouse_down(Playlist, grip.0, grip.1, now);
         assert_eq!(ui.pressed, Some(Control::PlResize));
-        let actions = ui.mouse_move(Playlist, grip.0 + 30, grip.1 + 40, now);
+        let actions = ui.mouse_move(Playlist, grip.0 + 30, grip.1 + 40);
         assert_eq!(actions, vec![Action::Relayout]);
         assert_eq!(ui.pl_size, (300, 145));
         assert_eq!(ui.window_size(Playlist), (300, 145));
@@ -1292,7 +1603,7 @@ mod tests {
 
     #[test]
     fn marquee_scrolls_long_titles_by_character() {
-        let mut ui = Ui::new();
+        let mut ui = Ui::demo();
         ui.start = Instant::now();
         let t0 = ui.marquee_text(ui.start);
         let t1 = ui.marquee_text(ui.start + Duration::from_millis(MARQUEE_STEP_MS as u64));
@@ -1303,12 +1614,13 @@ mod tests {
 
     #[test]
     fn short_titles_do_not_scroll_and_track_changes_refresh_the_title() {
-        let mut ui = Ui::new();
+        let mut ui = Ui::demo();
         let now = Instant::now();
-        ui.jump(5, now); // "6. Tom P. - Llama Country (3:18)" is 32 chars: scrolls
+        let mut actions = Vec::new();
+        ui.jump(5, &mut actions); // "6. Tom P. - Llama Country (3:18)" is 32 chars: scrolls
         assert!(ui.title_scrolls);
         ui.tracks[5].title = "Short".into();
-        ui.jump(5, now);
+        ui.jump(5, &mut actions);
         assert!(!ui.title_scrolls);
         assert_eq!(
             ui.marquee_text(now + Duration::from_secs(5)),
@@ -1320,20 +1632,22 @@ mod tests {
     fn empty_playlist_never_panics() {
         let mut ui = Ui::new();
         let now = Instant::now();
-        ui.tracks.clear();
-        ui.selected.clear();
-        ui.prev(now);
-        ui.next(now);
-        let _ = ui.key(KeyCmd::SeekForward, now);
+        let mut actions = Vec::new();
+        ui.prev(&mut actions);
+        ui.next(&mut actions);
+        ui.play(&mut actions);
+        let _ = ui.key(KeyCmd::SeekForward);
+        assert!(actions.is_empty());
+        assert_eq!(ui.state, PlayState::Stopped);
         assert_eq!(ui.track_len(), 0.0);
-        assert_eq!(ui.display_time(now), (0, 0, false));
+        assert_eq!(ui.display_time(), (0, 0, false));
         assert_eq!(ui.marquee_text(now), "");
     }
 
     #[test]
     fn per_window_drawing_matches_the_stacked_composition() {
         let skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
-        let mut ui = Ui::new();
+        let mut ui = Ui::demo();
         let now = Instant::now();
         ui.tick(now);
         let mut singles = Vec::new();

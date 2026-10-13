@@ -93,8 +93,11 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
         };
         text.clear();
         push_fmt(&mut text, format_args!("{}. {}", row + 1, track.title));
+        // Unknown lengths stay blank until the file has been read.
         time.clear();
-        write_time(&mut time, track.seconds);
+        if let Some(secs) = track.seconds {
+            write_time(&mut time, secs);
+        }
         match font {
             Some(f) => {
                 let tw = f.width(&time);
@@ -135,9 +138,9 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
         .iter()
         .zip(&ui.selected)
         .filter(|(_, s)| **s)
-        .map(|(t, _)| t.seconds)
+        .filter_map(|(t, _)| t.seconds)
         .sum();
-    let total_secs: u32 = ui.tracks.iter().map(|t| t.seconds).sum();
+    let total_secs: u32 = ui.tracks.iter().filter_map(|t| t.seconds).sum();
     text.clear();
     write_time(&mut text, selected_secs);
     text.push('/');
@@ -152,7 +155,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
     );
 
     if ui.state != PlayState::Stopped && !ui.blink_off(now) {
-        let (mins, secs, neg) = ui.display_time(now);
+        let (mins, secs, neg) = ui.display_time();
         text.clear();
         push_fmt(
             &mut text,

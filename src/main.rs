@@ -6,15 +6,25 @@ use anyhow::{Result, bail};
 use winamp::app::{self, Options};
 
 const USAGE: &str = "\
-usage: winamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>] [<file.wsz>]
+usage: winamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>]
+              [<file.wsz>] [<audio file or folder>...]
 
-  <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto the window)
+  <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto a window)
+  <audio file/folder>  add to the playlist and play the first (also: drop onto a window);
+                       folders add their MP3, WAV, FLAC and Ogg Vorbis files
   --scale <factor>     zoom the windows (default: from the screen height, 1.5 at 1440p)
   --screenshot <png>   render one frame at 1x to a PNG and exit
 
 keys: Z/X/C/V/B transport, S shuffle, R repeat, Ctrl+T time mode,
       Ctrl+D double size, Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
       Alt+G equalizer, Alt+E playlist, arrows volume/seek";
+
+/// Classic skins are `.wsz` files; any other path is audio for the playlist.
+fn is_skin(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("wsz"))
+}
 
 /// Parse the command line; `Ok(None)` means help was requested.
 fn parse_args(args: &[String]) -> Result<Option<Options>> {
@@ -36,7 +46,8 @@ fn parse_args(args: &[String]) -> Result<Option<Options>> {
                 None => bail!("--skin needs a path to a .wsz file"),
             },
             flag if flag.starts_with('-') => bail!("unknown option {flag}\n\n{USAGE}"),
-            path => opts.skin = Some(PathBuf::from(path)),
+            path if is_skin(path) => opts.skin = Some(PathBuf::from(path)),
+            path => opts.files.push(PathBuf::from(path)),
         }
     }
     Ok(Some(opts))
@@ -77,6 +88,18 @@ mod tests {
         assert_eq!(
             opts.screenshot.as_deref(),
             Some(std::path::Path::new("out.png"))
+        );
+    }
+
+    #[test]
+    fn audio_files_and_folders_go_to_the_playlist() {
+        let opts = parse_args(&args(&["a.mp3", "Skin.WSZ", "music/", "b.wav"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(opts.skin.as_deref(), Some(std::path::Path::new("Skin.WSZ")));
+        assert_eq!(
+            opts.files,
+            ["a.mp3", "music/", "b.wav"].map(PathBuf::from).to_vec()
         );
     }
 

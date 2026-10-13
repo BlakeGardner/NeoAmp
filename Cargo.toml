@@ -19,6 +19,11 @@ fontdue = "0.9"
 anyhow = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
+symphonia = { version = "0.6", features = ["mp3"] }
+cpal = "0.18"
+rtrb = "0.4"
+rubato = "5"
+realfft = "3"
 
 [profile.dev]
 opt-level = 1

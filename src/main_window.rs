@@ -69,7 +69,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
 
     // LED time display. Blinks while paused, blank while stopped.
     if ui.state != PlayState::Stopped && !ui.blink_off(now) {
-        let (mins, secs, neg) = ui.display_time(now);
+        let (mins, secs, neg) = ui.display_time();
         let ex = skin.has_sheet(Sheet::NumsEx);
         // Each value is a single decimal digit, so the narrowing is lossless.
         let digit = |d: u32| {
@@ -152,7 +152,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
 
     // Visualiser.
     if ui.state != PlayState::Stopped {
-        ui.vis.draw(c, skin, m::VIS.offset(ox, oy), now);
+        ui.vis.draw(c, skin, m::VIS.offset(ox, oy));
     }
 
     // Volume and balance sliders: 28 background frames plus a thumb.
@@ -190,7 +190,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
     // Seek bar; the thumb is hidden while stopped.
     skin.blit(c, m::POSBAR_BG, ox + m::POSBAR.x, oy + m::POSBAR.y);
     if ui.state != PlayState::Stopped {
-        let px = (ui.position(now) * (m::POSBAR.w - m::POSBAR_THUMB_W) as f32).round() as i32;
+        let px = (ui.position() * (m::POSBAR.w - m::POSBAR_THUMB_W) as f32).round() as i32;
         let thumb = if pressed(Control::PosBar) {
             m::POSBAR_THUMB_PRESSED
         } else {

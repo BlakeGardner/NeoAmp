@@ -23,12 +23,14 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+use crate::audio::{self, Player, Scanner};
 use crate::canvas::{Image, Rect};
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::font::TtfFont;
 use crate::skin::Skin;
-use crate::ui::{Action, KeyCmd, Ui, WindowKind};
+use crate::ui::{Action, KeyCmd, PlayState, Transport, Ui, WindowKind};
 use crate::upscale::{Upscaler, window_to_canvas};
+use crate::vis;
 use crate::zoom::Zoom;
 
 /// The stock Winamp 2.91 skin, embedded as the fallback for every missing sheet.
@@ -71,8 +73,8 @@ fn kind_index(kind: WindowKind) -> usize {
     }
 }
 
-/// What to run: an optional skin to load, an optional screenshot-and-exit path and an
-/// optional zoom (otherwise chosen from the screen size).
+/// What to run: an optional skin to load, an optional screenshot-and-exit path, an optional
+/// zoom (otherwise chosen from the screen size) and the files to play.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
     /// A `.wsz` skin to show instead of the embedded base skin.
@@ -81,6 +83,8 @@ pub struct Options {
     pub screenshot: Option<PathBuf>,
     /// The zoom to start at; `None` picks one from the screen height.
     pub zoom: Option<Zoom>,
+    /// Audio files and folders for the playlist; the first file starts playing.
+    pub files: Vec<PathBuf>,
 }
 
 /// Round a length in screen pixels to whole pixels. Window geometry stays far inside `i32`,
@@ -108,9 +112,12 @@ fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
 
 /// Load the base skin, apply the options and either render a screenshot or open the windows.
 ///
+/// Without a usable audio device the interface still runs, silently.
+///
 /// # Errors
 /// Fails if the embedded base skin or the requested skin cannot be parsed, if the screenshot
-/// cannot be written, or if no windowing backend can be initialised.
+/// cannot be written, if no windowing backend can be initialised, or if the playlist scanner
+/// thread cannot be started.
 pub fn run(opts: Options) -> Result<()> {
     let base = Skin::from_wsz(BASE_SKIN, "base-2.91").context("embedded base skin")?;
     let custom = opts
@@ -119,15 +126,29 @@ pub fn run(opts: Options) -> Result<()> {
         .map(|p| load_skin(p, &base))
         .transpose()?;
     let font = TtfFont::load_system(TtfFont::DEFAULT_PX);
-    let ui = Ui::new();
 
     if let Some(out) = &opts.screenshot {
-        return render_screenshot(ui, custom.as_ref().unwrap_or(&base), font.as_ref(), out);
+        let skin = custom.as_ref().unwrap_or(&base);
+        return render_screenshot(Ui::demo(), skin, font.as_ref(), out);
     }
 
+    let mut ui = Ui::new();
+    let player = match Player::new() {
+        Ok(p) => {
+            ui.vis.set_sample_rate(p.sample_rate());
+            Some(p)
+        }
+        Err(e) => {
+            log::error!("no audio output, playing silently: {e:#}");
+            None
+        }
+    };
+    let scanner = Scanner::new()?;
     let event_loop = build_event_loop()?;
     let mut app = App {
         ui,
+        player,
+        scanner,
         base,
         custom,
         font,
@@ -144,13 +165,17 @@ pub fn run(opts: Options) -> Result<()> {
         next_frame: Instant::now(),
         stats: FrameStats::new(Instant::now()),
     };
+    let mut actions = Vec::new();
+    app.add_files(audio::audio_files(opts.files), &mut actions);
+    app.perform_audio(actions);
     event_loop
         .run_app(&mut app)
         .context("running the event loop")?;
     Ok(())
 }
 
-/// Draw a few frames of fake playback offscreen, stacked the classic way, and save a PNG.
+/// Draw a few frames of `ui` offscreen, stacked the classic way, with a synthetic signal in the
+/// visualiser, and save a PNG.
 ///
 /// # Errors
 /// Fails if the PNG cannot be written.
@@ -160,10 +185,15 @@ pub fn render_screenshot(
     font: Option<&TtfFont>,
     out: &Path,
 ) -> Result<()> {
+    const RATE: u32 = 44_100;
     let start = Instant::now();
     let (w, h) = ui.layout().size;
     let mut canvas = Image::new(w, h);
+    ui.vis.set_sample_rate(RATE);
+    let mut signal = vec![0.0; usize::try_from(u128::from(RATE) * FRAME.as_millis() / 1000)?];
     for k in 0..70 {
+        vis::demo_signal(f64::from(k) * FRAME.as_secs_f64(), RATE, &mut signal);
+        ui.vis.push_samples(&signal);
         ui.draw_stacked(&mut canvas, skin, font, start + FRAME * k);
     }
     let (pw, ph) = (u32::try_from(w)?, u32::try_from(h)?);
@@ -287,6 +317,9 @@ struct Drag {
 
 struct App {
     ui: Ui,
+    /// `None` when no audio device could be opened.
+    player: Option<Player>,
+    scanner: Scanner,
     base: Skin,
     /// A user-chosen skin; `None` means the embedded base skin is shown.
     custom: Option<Skin>,
@@ -336,6 +369,93 @@ impl App {
             }
             Err(e) => log::error!("cannot load skin {}: {e:#}", path.display()),
         }
+    }
+
+    /// Append files to the playlist, have their tags read, and start the first one if nothing
+    /// is playing.
+    fn add_files(&mut self, paths: Vec<PathBuf>, actions: &mut Vec<Action>) {
+        let added = self.ui.add_files(paths);
+        for (i, track) in self.ui.tracks.iter().enumerate().skip(added.start) {
+            self.scanner.scan(i, track.path.clone());
+        }
+        if self.ui.state == PlayState::Stopped && !added.is_empty() {
+            self.ui.play_track(added.start, actions);
+        }
+    }
+
+    /// A file dropped on any window: a skin is applied, anything else joins the playlist.
+    fn drop_file(&mut self, path: PathBuf, el: &ActiveEventLoop) {
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("wsz"))
+        {
+            self.load_skin(&path);
+            return;
+        }
+        let mut actions = Vec::new();
+        self.add_files(audio::audio_files([path]), &mut actions);
+        self.handle(actions, el);
+    }
+
+    /// Pass a playback command from the UI to the audio engine.
+    fn transport(&mut self, t: Transport) {
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        match t {
+            Transport::Open(i) => {
+                if let Some(track) = self.ui.tracks.get(i) {
+                    log::info!("playing {}", track.path.display());
+                    player.open(&track.path);
+                }
+            }
+            Transport::Pause => player.set_paused(true),
+            Transport::Resume => player.set_paused(false),
+            Transport::Stop => player.stop(),
+            Transport::Seek(secs) => player.seek(f64::from(secs)),
+        }
+    }
+
+    /// Carry out the audio actions in `actions` (before the event loop runs, the only kind).
+    fn perform_audio(&mut self, actions: Vec<Action>) {
+        for a in actions {
+            if let Action::Audio(t) = a {
+                self.transport(t);
+            }
+        }
+    }
+
+    /// Once per frame: take in scan results and engine events, hand the engine the current
+    /// settings, and read back the position, bitrate and visualiser samples.
+    fn sync_audio(&mut self, el: &ActiveEventLoop) {
+        while let Some((i, path, info)) = self.scanner.poll() {
+            self.ui.set_track_info(i, &path, &info);
+        }
+        let mut actions = Vec::new();
+        if let Some(player) = self.player.as_mut() {
+            while let Some(event) = player.poll() {
+                self.ui.audio_event(event, &mut actions);
+            }
+        }
+        // A finished track may have started the next one: send that before reading positions.
+        self.handle(actions, el);
+
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        player.set_volume(self.ui.volume);
+        player.set_balance(self.ui.balance);
+        player.set_eq(&self.ui.eq_settings());
+        if self.ui.state != PlayState::Stopped {
+            // Seconds into a track: f32 is plenty.
+            self.ui.elapsed = player.position() as f32;
+            let kbps = player.kbps();
+            if kbps > 0 {
+                self.ui.kbps = kbps;
+            }
+        }
+        let vis = &mut self.ui.vis;
+        player.drain_vis(|samples| vis.push_samples(samples));
     }
 
     /// Set the zoom from the command line or, failing that, from the height of the screen the
@@ -709,6 +829,7 @@ impl App {
                     }
                 }
                 Action::Relayout => self.sync_panes(el),
+                Action::Audio(t) => self.transport(t),
             }
         }
     }
@@ -860,7 +981,7 @@ impl ApplicationHandler for App {
                 if self.drag.as_ref().is_some_and(|d| d.kind == kind) {
                     self.drag_to(kind, position);
                 } else {
-                    let actions = self.ui.mouse_move(kind, x, y, now);
+                    let actions = self.ui.mouse_move(kind, x, y);
                     self.handle(actions, el);
                 }
             }
@@ -879,7 +1000,7 @@ impl ApplicationHandler for App {
                     ElementState::Pressed => self.ui.mouse_down(kind, x, y, now),
                     ElementState::Released => {
                         self.drag = None;
-                        self.ui.mouse_up(kind, x, y, now)
+                        self.ui.mouse_up(kind, x, y)
                     }
                 };
                 self.handle(actions, el);
@@ -888,11 +1009,11 @@ impl ApplicationHandler for App {
                 if event.state == ElementState::Pressed
                     && let Some(cmd) = self.key_cmd(&event.logical_key)
                 {
-                    let actions = self.ui.key(cmd, now);
+                    let actions = self.ui.key(cmd);
                     self.handle(actions, el);
                 }
             }
-            WindowEvent::DroppedFile(path) => self.load_skin(&path),
+            WindowEvent::DroppedFile(path) => self.drop_file(path, el),
             WindowEvent::RedrawRequested => self.render(kind, now),
             _ => {}
         }
@@ -906,6 +1027,7 @@ impl ApplicationHandler for App {
             self.next_frame = now + FRAME;
             self.apply_pending_docks(now);
             self.check_probe(el, now);
+            self.sync_audio(el);
             self.ui.tick(now);
             for p in &self.panes {
                 p.window.request_redraw();
