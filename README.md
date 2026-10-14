@@ -1,12 +1,16 @@
-# Winamp 2.x classic interface in Rust
+# NeoAmp
 
-A pixel-exact reproduction of the classic Winamp 2.x interface (main window,
-equalizer and playlist editor), drawn with real Winamp skins, that plays
-MP3, WAV, FLAC and Ogg Vorbis files. The transport buttons, position bar,
-volume, balance and ten-band equalizer all act on the audio, and the
-visualizer shows what is actually playing.
+NeoAmp is a music player in Rust with a pixel-exact reproduction of the
+classic Winamp 2.x interface (main window, equalizer and playlist editor),
+drawn with classic Winamp skins, that plays MP3, WAV, FLAC and Ogg Vorbis
+files. The transport buttons, position bar, volume, balance and ten-band
+equalizer all act on the audio, and the visualizer shows what is actually
+playing.
 
-![Winamp 2.x classic interface](docs/screenshot@2x.png)
+NeoAmp is an independent project, not affiliated with or endorsed by the
+makers of Winamp. Winamp is a trademark of its owner.
+
+![NeoAmp's main window, equalizer and playlist](docs/screenshot@2x.png)
 
 ## How it works
 
@@ -23,7 +27,7 @@ program does the same:
   base skin for anything a skin leaves out.
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
   three windows; `src/ui.rs` holds state, hit testing and input.
-- `src/app.rs` runs one borderless `winit` window per Winamp window, presents
+- `src/app.rs` runs one borderless `winit` window per NeoAmp window, presents
   each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
   docking. `src/upscale.rs` draws the framebuffer over the whole window (see
   [Scaling](#scaling)), and `src/zoom.rs` picks the zoom.
@@ -36,7 +40,7 @@ program does the same:
   the skin parsers, the blitter and the audio pipeline (decoding, resampling,
   the equalizer, and the decoder and mixer threads working together).
 
-Each Winamp window is its own borderless OS window. Grab a title bar to
+Each NeoAmp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
 equalizer and playlist leave on their own. Windows snap to each other's
 edges and to the screen edges when they come within 10 pixels, like the
@@ -52,9 +56,9 @@ windows as override-redirect windows, which are always placed exactly where
 asked. Such windows have no taskbar entry, stay above other windows (like
 Winamp's "always on top") and take keyboard focus when clicked.
 
-- `WINAMP_BACKEND=x11|wayland` forces a backend. On pure Wayland, title-bar
+- `NEOAMP_BACKEND=x11|wayland` forces a backend. On pure Wayland, title-bar
   drags are handed to the compositor and nothing snaps.
-- `WINAMP_UNMANAGED=1|0` forces or forbids override-redirect windows instead
+- `NEOAMP_UNMANAGED=1|0` forces or forbids override-redirect windows instead
   of probing.
 
 ## Audio

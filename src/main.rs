@@ -1,12 +1,12 @@
-//! Command-line entry point. All logic lives in the `winamp` library crate.
+//! Command-line entry point. All logic lives in the `neoamp` library crate.
 
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use winamp::app::{self, Options};
+use neoamp::app::{self, Options};
 
 const USAGE: &str = "\
-usage: winamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>]
+usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>]
               [<file.wsz>] [<audio file or folder>...]
 
   <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto a window)
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn scale_is_parsed() {
         let opts = parse_args(&args(&["--scale", "1.5"])).unwrap().unwrap();
-        assert_eq!(opts.zoom, winamp::zoom::Zoom::try_from(1.5).ok());
+        assert_eq!(opts.zoom, neoamp::zoom::Zoom::try_from(1.5).ok());
         assert_eq!(parse_args(&args(&[])).unwrap().unwrap().zoom, None);
     }
 

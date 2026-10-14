@@ -291,7 +291,7 @@ pub(super) mod tests {
         frames: u32,
         value: impl Fn(u32, u16) -> i16,
     ) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("winamp-{}-{name}.wav", std::process::id()));
+        let path = std::env::temp_dir().join(format!("neoamp-{}-{name}.wav", std::process::id()));
         let data_len = frames * u32::from(channels) * 2;
         let mut b = Vec::with_capacity(44 + data_len as usize);
         b.extend_from_slice(b"RIFF");
@@ -373,7 +373,7 @@ pub(super) mod tests {
     #[test]
     fn missing_and_bogus_files_fail_to_open() {
         assert!(Source::open(Path::new("/nonexistent/song.mp3")).is_err());
-        let path = std::env::temp_dir().join(format!("winamp-{}-bogus.mp3", std::process::id()));
+        let path = std::env::temp_dir().join(format!("neoamp-{}-bogus.mp3", std::process::id()));
         std::fs::write(&path, b"definitely not audio").unwrap();
         let err = Source::open(&path);
         std::fs::remove_file(&path).unwrap();

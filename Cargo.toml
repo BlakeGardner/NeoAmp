@@ -1,9 +1,9 @@
 [package]
-name = "winamp"
+name = "neoamp"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "A pixel-exact Winamp 2.x classic interface, skinnable with .wsz skins"
+description = "A music player with a pixel-exact classic Winamp 2.x-style interface, skinnable with .wsz skins"
 
 [lib]
 # No doc examples yet; skipping doctests also keeps `cargo test` working on toolchains

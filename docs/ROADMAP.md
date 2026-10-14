@@ -1,4 +1,4 @@
-# Roadmap: what's missing from a mostly complete Winamp 2.x
+# Roadmap: the Winamp 2.x features NeoAmp still lacks
 
 This list came from reading the code on 2026-10-13, not from running the app.
 The phases are in the suggested order of work. Tick items off as they land.
@@ -75,7 +75,7 @@ at the end of `Ui::mouse_up` in [src/ui.rs](../src/ui.rs).
       them to `FORMATS` in [src/audio/mod.rs](../src/audio/mod.rs), which also
       feeds the open dialog's filters.
 - [ ] Show the current song in the OS window title, for the taskbar and
-      Alt+Tab. `App::open_pane` always uses "Winamp".
+      Alt+Tab. `App::open_pane` always uses "NeoAmp".
 - [ ] Honour `Font=` in `pledit.txt`. It is parsed but ignored, and the
       playlist always uses the first font in `CANDIDATES` it finds
       ([src/font.rs](../src/font.rs)).
@@ -104,7 +104,7 @@ Winamp's signature feature: SHOUTcast and Icecast streams.
       and macOS, playback goes silent until a restart today.
 - [ ] Media keys and the OS "now playing" display: MPRIS on Linux, SMTC on
       Windows, Now Playing on macOS. The `souvlaki` crate covers all three.
-- [ ] Single instance: a file opened from the file manager while Winamp runs
+- [ ] Single instance: a file opened from the file manager while NeoAmp runs
       goes to the running copy instead of starting a second one.
 
 ## Optional

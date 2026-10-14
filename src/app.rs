@@ -1,4 +1,4 @@
-//! The desktop application: one borderless OS window per Winamp window (main, equalizer,
+//! The desktop application: one borderless OS window per NeoAmp window (main, equalizer,
 //! playlist), each presented through `pixels`, with Winamp-style magnetic docking.
 //!
 //! Docking needs to read and set window positions. X11 (including XWayland) allows that, so
@@ -46,7 +46,7 @@ const PROBE_DELAY: Duration = Duration::from_millis(250);
 /// How often frame statistics are logged at debug level.
 const STATS_PERIOD: Duration = Duration::from_secs(1);
 
-/// Per-second counters for diagnosing stalls (`RUST_LOG=winamp=debug`).
+/// Per-second counters for diagnosing stalls (`RUST_LOG=neoamp=debug`).
 #[derive(Debug)]
 struct FrameStats {
     since: Instant,
@@ -212,9 +212,9 @@ fn load_skin(path: &Path, base: &Skin) -> Result<Skin> {
     Ok(skin)
 }
 
-/// Prefer X11 (which can position windows) unless `WINAMP_BACKEND=wayland` asks otherwise.
+/// Prefer X11 (which can position windows) unless `NEOAMP_BACKEND=wayland` asks otherwise.
 fn build_event_loop() -> Result<EventLoop<()>> {
-    let backend = std::env::var("WINAMP_BACKEND")
+    let backend = std::env::var("NEOAMP_BACKEND")
         .unwrap_or_default()
         .to_ascii_lowercase();
     let prefer_x11 = match backend.as_str() {
@@ -245,16 +245,16 @@ fn build_event_loop() -> Result<EventLoop<()>> {
     EventLoop::new().context("creating the event loop")
 }
 
-/// `WINAMP_UNMANAGED=1` forces override-redirect windows, `0` forbids them; unset means probe.
+/// `NEOAMP_UNMANAGED=1` forces override-redirect windows, `0` forbids them; unset means probe.
 fn unmanaged_preference() -> Option<bool> {
-    match std::env::var("WINAMP_UNMANAGED").ok()?.trim() {
+    match std::env::var("NEOAMP_UNMANAGED").ok()?.trim() {
         "1" | "true" | "yes" => Some(true),
         "0" | "false" | "no" => Some(false),
         _ => None,
     }
 }
 
-/// One OS window hosting one Winamp window.
+/// One OS window hosting one NeoAmp window.
 struct Pane {
     kind: WindowKind,
     upscaler: Upscaler,
@@ -528,9 +528,9 @@ impl App {
         at: Option<PhysicalPosition<i32>>,
     ) -> Result<()> {
         let title = match kind {
-            WindowKind::Main => "Winamp",
-            WindowKind::Eq => "Winamp Equalizer",
-            WindowKind::Playlist => "Winamp Playlist",
+            WindowKind::Main => "NeoAmp",
+            WindowKind::Eq => "NeoAmp Equalizer",
+            WindowKind::Playlist => "NeoAmp Playlist",
         };
         // The desktop's scale factor is only known once the window exists; `sync_panes`
         // then trims the size to exactly what `scaled_size` asks for.

@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn folders_expand_to_sorted_audio_files_and_files_pass_through() {
-        let dir = std::env::temp_dir().join(format!("winamp-audio-files-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("neoamp-audio-files-{}", std::process::id()));
         let sub = dir.join("disc 2");
         fs::create_dir_all(&sub).unwrap();
         for name in ["b.mp3", "a.wav", "cover.jpg"] {

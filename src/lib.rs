@@ -1,4 +1,5 @@
-//! A pixel-exact Winamp 2.x classic interface, drawn from real `.wsz` skins, that plays music.
+//! NeoAmp: a pixel-exact reproduction of the classic Winamp 2.x interface, drawn from real
+//! `.wsz` skins, that plays music.
 //!
 //! Classic skins are fixed-size sprite sheets; this crate blits rectangles out of them
 //! into a software framebuffer exactly as Winamp did.

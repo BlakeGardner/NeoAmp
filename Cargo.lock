@@ -1248,6 +1248,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "neoamp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "env_logger",
+ "fontdue",
+ "image",
+ "log",
+ "pixels",
+ "pollster",
+ "realfft",
+ "rfd",
+ "rtrb",
+ "rubato",
+ "symphonia",
+ "winit",
+ "zip",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3052,27 +3073,6 @@ checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
 dependencies = [
  "bytemuck",
  "safe_arch",
-]
-
-[[package]]
-name = "winamp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "env_logger",
- "fontdue",
- "image",
- "log",
- "pixels",
- "pollster",
- "realfft",
- "rfd",
- "rtrb",
- "rubato",
- "symphonia",
- "winit",
- "zip",
 ]
 
 [[package]]

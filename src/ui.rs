@@ -1,4 +1,4 @@
-//! UI state, hit testing and input handling, expressed per Winamp window so each window can
+//! UI state, hit testing and input handling, expressed per NeoAmp window so each window can
 //! live in its own OS window.
 
 use std::fmt::Write as _;
