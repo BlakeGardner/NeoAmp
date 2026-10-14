@@ -23,6 +23,8 @@ const MARQUEE_SEPARATOR: &str = "  ***  ";
 const DOUBLE_CLICK_MS: u128 = 400;
 /// Time display blink period while paused (on for half, off for half).
 const BLINK_MS: u128 = 1000;
+/// The volume of a first start, before any settings are saved.
+pub const DEFAULT_VOLUME: f32 = 0.78;
 
 /// The three classic windows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -204,7 +206,7 @@ pub enum KeyCmd {
     ZoomIn,
     /// One half step smaller.
     ZoomOut,
-    /// Back to the zoom chosen at startup.
+    /// Back to the default zoom for the screen's height.
     ZoomReset,
     ToggleEq,
     TogglePl,
@@ -232,6 +234,21 @@ pub struct Track {
     /// Length in whole seconds; `None` until known.
     pub seconds: Option<u32>,
     pub path: PathBuf,
+}
+
+impl Track {
+    /// An entry for `path` whose tags have not been read: titled by its file name.
+    #[must_use]
+    pub fn from_path(path: PathBuf) -> Track {
+        Track {
+            title: path.file_stem().map_or_else(
+                || path.display().to_string(),
+                |s| s.to_string_lossy().into_owned(),
+            ),
+            seconds: None,
+            path,
+        }
+    }
 }
 
 /// Where each window sits when the three are composed into one canvas (screenshots).
@@ -276,7 +293,8 @@ pub struct Ui {
     pub double_size: bool,
     /// How far the windows are enlarged; double size doubles it again (see [`Ui::scale`]).
     pub zoom: Zoom,
-    /// The zoom chosen at startup, restored by [`KeyCmd::ZoomReset`].
+    /// The zoom the screen's height calls for, restored by [`KeyCmd::ZoomReset`]. While
+    /// `zoom` equals it, the settings save no zoom and the next start picks one afresh.
     pub default_zoom: Zoom,
     /// Any of the app's windows has focus: title bars draw in their active state.
     pub active: bool,
@@ -309,8 +327,13 @@ pub fn write_time(buf: &mut String, secs: u32) {
 }
 
 /// Decibels for an equalizer slider at `v` (`0..=1`, flat in the middle).
-fn slider_db(v: f32) -> f32 {
+pub(crate) fn slider_db(v: f32) -> f32 {
     (v - 0.5) * 2.0 * EQ_RANGE_DB
+}
+
+/// Where an equalizer slider sits for `db`: the inverse of [`slider_db`], kept on the slider.
+pub(crate) fn db_slider(db: f32) -> f32 {
+    (db / (2.0 * EQ_RANGE_DB) + 0.5).clamp(0.0, 1.0)
 }
 
 impl Ui {
@@ -323,7 +346,7 @@ impl Ui {
             elapsed: 0.0,
             seek_to: None,
             failures: 0,
-            volume: 0.78,
+            volume: DEFAULT_VOLUME,
             balance: 0.0,
             shuffle: false,
             repeat: false,
@@ -561,8 +584,8 @@ impl Ui {
         self.vis.reset();
     }
 
-    /// Make playlist entry `idx` current without starting it.
-    fn select(&mut self, idx: usize) {
+    /// Make playlist entry `idx` current without starting it, scrolling the playlist to it.
+    pub fn select(&mut self, idx: usize) {
         if self.tracks.is_empty() {
             self.current = 0;
         } else {
@@ -661,15 +684,14 @@ impl Ui {
     /// Append files to the playlist, titled by file name until their tags are read. Returns
     /// the indices of the new entries.
     pub fn add_files(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> Range<usize> {
+        self.add_tracks(paths.into_iter().map(Track::from_path))
+    }
+
+    /// Append entries whose titles and lengths may already be known, such as those of a saved
+    /// playlist. Returns the indices of the new entries.
+    pub fn add_tracks(&mut self, tracks: impl IntoIterator<Item = Track>) -> Range<usize> {
         let start = self.tracks.len();
-        self.tracks.extend(paths.into_iter().map(|path| Track {
-            title: path.file_stem().map_or_else(
-                || path.display().to_string(),
-                |s| s.to_string_lossy().into_owned(),
-            ),
-            seconds: None,
-            path,
-        }));
+        self.tracks.extend(tracks);
         self.selected.resize(self.tracks.len(), false);
         if start == 0 && !self.tracks.is_empty() {
             self.refresh_title();

@@ -4,6 +4,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+
 /// Screen height, in logical pixels, that suits a 1x skin. Taller screens get proportionally
 /// more zoom, rounded down to a half step: 1080 lines stay at 1x, 1440 get 1.5x, 2160 get 2x.
 const REFERENCE_HEIGHT: f64 = 960.0;
@@ -14,7 +16,10 @@ const STEP_TOLERANCE: f64 = 1e-9;
 
 /// How much the skin is enlarged, in half steps from 1x to 3x. Double size multiplies this
 /// by two, and the desktop's own scale factor applies on top of both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// Saved in the settings as its factor (`1.5`); reading anything between the steps fails.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
 pub struct Zoom {
     halves: u8,
 }
@@ -79,6 +84,12 @@ impl Zoom {
 impl Default for Zoom {
     fn default() -> Self {
         Self::MIN
+    }
+}
+
+impl From<Zoom> for f64 {
+    fn from(zoom: Zoom) -> f64 {
+        zoom.factor()
     }
 }
 

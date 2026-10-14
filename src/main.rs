@@ -10,10 +10,14 @@ usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.p
               [<file.wsz>] [<audio file or folder>...]
 
   <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto a window)
-  <audio file/folder>  add to the playlist and play the first (also: drop onto a window);
-                       folders add their MP3, WAV, FLAC and Ogg Vorbis files
-  --scale <factor>     zoom the windows (default: from the screen height, 1.5 at 1440p)
+  <audio file/folder>  replace the playlist and play the first (dropping onto a window
+                       adds instead); folders add their MP3, WAV, FLAC and Ogg Vorbis files
+  --scale <factor>     zoom the windows (default: the saved zoom, else from the screen
+                       height, 1.5 at 1440p)
   --screenshot <png>   render one frame at 1x to a PNG and exit
+
+Settings and the playlist are remembered between runs; NEOAMP_CONFIG_DIR=<folder> keeps
+them somewhere other than the platform's config folder.
 
 keys: Z/X/C/V/B transport, L open files, S shuffle, R repeat, Ctrl+T time mode,
       Ctrl+D double size, Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,

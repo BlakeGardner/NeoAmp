@@ -29,6 +29,10 @@ realfft = "3"
 rfd = "0.17"
 # Waits for the file dialog's future; already used by pixels.
 pollster = "0.4"
+# Saved settings (settings.toml) in the platform's config folder.
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+dirs = "6"
 
 [profile.dev]
 opt-level = 1

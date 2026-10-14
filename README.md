@@ -35,10 +35,14 @@ program does the same:
   button (see [Opening files](#opening-files)).
 - `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
   the samples being played into the spectrum analyzer and oscilloscope.
+- `src/settings.rs` remembers the settings and the playlist between runs (see
+  [Saved settings](#saved-settings)); `src/m3u.rs` reads and writes the
+  playlist file.
 - `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
   parses the command line. `cargo test` covers layout, hit testing, input,
-  the skin parsers, the blitter and the audio pipeline (decoding, resampling,
-  the equalizer, and the decoder and mixer threads working together).
+  the skin parsers, the blitter, the saved settings and playlist, and the
+  audio pipeline (decoding, resampling, the equalizer, and the decoder and
+  mixer threads working together).
 
 Each NeoAmp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
@@ -102,7 +106,9 @@ in half steps from 1x to 3x:
   pixels). 1080 lines stay at 1x, 1440 get 1.5x, 2160 get 2x. On a 27"
   1440p monitor, 1.5x is about the physical size Winamp had on a 15" CRT.
 - **Ctrl+=** / **Ctrl+-** step the zoom, **Ctrl+0** goes back to the default,
-  and `--scale 1|1.5|2|2.5|3` overrides it at startup.
+  and `--scale 1|1.5|2|2.5|3` overrides it at startup. A zoom picked either
+  way is remembered. At the default none is, so the next start picks one for
+  whatever screen it finds.
 - **Double size** (`D` in the clutter bar, Ctrl+D) doubles whatever the zoom
   is, as in Winamp, so 1.5x becomes 3x.
 - The desktop's own scale factor applies on top, so a 200% desktop shows a 1x
@@ -139,6 +145,61 @@ Ogg Vorbis one at a time. The platforms differ a little:
   instead if it is installed. With neither, eject does nothing and rfd logs
   why.
 
+## Saved settings
+
+NeoAmp starts the way it was left: volume, balance, the equalizer, shuffle,
+repeat, the time display, the visualizer mode, which windows are open and
+where, the playlist's size, the skin, the zoom and double size, and the
+playlist with its current entry. The playlist comes back stopped, as in
+Winamp. NeoAmp saves within a couple of seconds of a change and again on
+exit, so a crash loses little.
+
+Two files share one folder:
+
+| Platform | Folder |
+| --- | --- |
+| Linux | `~/.config/neoamp/` (or `$XDG_CONFIG_HOME/neoamp/`) |
+| Windows | `%APPDATA%\NeoAmp\` |
+| macOS | `~/Library/Application Support/NeoAmp/` |
+
+- `settings.toml` holds the settings. Edit it while NeoAmp is closed, since a
+  running NeoAmp rewrites it (without comments). A missing key keeps its
+  default, and an unusable value (a volume out of range, a zoom between the
+  steps) is brought into range or falls back on its own. A file that cannot
+  be read as settings is renamed `settings.toml.bad`, and NeoAmp starts with
+  the defaults.
+- `playlist.m3u8` is the playlist as an extended M3U file, which other players
+  can open too. Entries whose length it records are not scanned again at
+  startup.
+
+[docs/SETTINGS.md](docs/SETTINGS.md) describes every setting: what it
+controls, the values it takes and its default.
+
+`NEOAMP_CONFIG_DIR=<folder>` keeps both files somewhere else. `--screenshot`
+neither reads nor writes them. Files, a skin or `--scale` given on the command
+line take precedence over what was saved and are remembered in turn, so files
+replace the saved playlist.
+
+The equalizer and playlist positions are kept relative to the main window, so
+docked windows stay docked, and they are converted when the zoom or the
+desktop's scale has changed since. Closing either window also remembers where
+it was, and it reopens there, as in Winamp. A window whose title bar would land
+off every screen (a monitor unplugged since, say) is placed the default way
+instead. Each file is written beside the old one under a temporary name and
+then renamed over it, so a crash during a save leaves the old file whole.
+
+Where the platforms differ:
+
+- **Pure Wayland:** window positions can be neither read nor set, so they are
+  not saved. Whatever an X11 session saved stays for the next one.
+- **Minimized windows** have no position worth keeping (Windows reports one far
+  off the screen), so the last one from before is kept.
+- **File names that are not valid Unicode**, which Linux allows, are written
+  to the playlist as raw bytes and come back exactly. A skin at such a path is
+  not remembered, because TOML holds only Unicode text. On Windows, the rare
+  path that is not valid Unicode (an unpaired surrogate) is written with
+  replacement characters, and that entry will not play after a restart.
+
 ## Building and running
 
 The stock `base-2.91.wsz` skin must be present at `skins/base-2.91.wsz`; it is
@@ -156,9 +217,10 @@ cargo run --release
 ```
 
 Play files or whole folders (folders add their MP3, WAV, FLAC and Ogg Vorbis
-files, sorted by name); the first one starts playing. Dropping files or
-folders onto any window adds them to the playlist too, and starts them if
-nothing is playing. Eject picks files in a dialog (see
+files, sorted by name); they replace the saved playlist and the first one
+starts playing. Without any, the playlist from last time comes back. Dropping
+files or folders onto any window adds them to the playlist too, and starts
+them if nothing is playing. Eject picks files in a dialog (see
 [Opening files](#opening-files)):
 
 ```bash
@@ -166,7 +228,9 @@ cargo run --release -- ~/Music/some-album
 ```
 
 Load another classic skin by passing it on the command line or by dropping a
-`.wsz` onto the window:
+`.wsz` onto the window. It stays until another one replaces it; until there is
+a skins menu, deleting the `skin` line from `settings.toml` (see
+[Saved settings](#saved-settings)) goes back to the built-in skin:
 
 ```bash
 cargo run --release -- ~/Downloads/Classic.wsz

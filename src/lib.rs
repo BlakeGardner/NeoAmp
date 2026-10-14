@@ -12,6 +12,8 @@
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`).
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
 //! - [`zoom`]: how far the skin is enlarged for today's screens.
+//! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
+//!   an extended M3U file ([`m3u`]).
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, and the native
 //!   file dialog behind the eject button (`open_dialog`).
 
@@ -21,9 +23,11 @@ pub mod canvas;
 pub mod dock;
 mod eq_window;
 pub mod font;
+pub mod m3u;
 mod main_window;
 mod open_dialog;
 mod playlist_window;
+pub mod settings;
 pub mod skin;
 pub mod sprites;
 pub mod ui;

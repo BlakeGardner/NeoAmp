@@ -5,12 +5,14 @@ The phases are in the suggested order of work. Tick items off as they land.
 
 ## Phase 1: Saved settings
 
-Nothing survives a restart today.
+Done: `settings.toml` and `playlist.m3u8` in the platform's config folder
+([src/settings.rs](../src/settings.rs)). See "Saved settings" in the README,
+and [SETTINGS.md](SETTINGS.md) for every key.
 
-- [ ] Save and restore volume, balance, EQ (on, preamp, bands), shuffle,
+- [x] Save and restore volume, balance, EQ (on, preamp, bands), shuffle,
       repeat, time mode, visualizer mode, which windows are open, window
       positions, playlist size, skin, zoom and double size.
-- [ ] Save and restore the playlist and its current entry.
+- [x] Save and restore the playlist and its current entry.
 
 ## Phase 2: Popup menus
 
@@ -56,6 +58,9 @@ at the end of `Ui::mouse_up` in [src/ui.rs](../src/ui.rs).
       `Ui::advance` always move to the following entry.
 - [ ] Load and save M3U, M3U8 and PLS, from LIST OPTS, the command line and
       drag-and-drop. Resolve relative paths against the playlist's folder.
+      [src/m3u.rs](../src/m3u.rs) already reads and writes extended M3U for
+      the saved playlist, relative paths included; PLS and `file://` URLs
+      are still missing.
 - [ ] J: jump to file (a search box over the playlist).
 - [ ] Shift+L: open a folder.
 

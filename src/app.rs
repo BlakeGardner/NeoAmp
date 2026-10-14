@@ -21,6 +21,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::monitor::MonitorHandle;
 use winit::window::{CursorIcon, Window, WindowId};
 
 use crate::audio::{self, Player, Scanner};
@@ -28,8 +29,9 @@ use crate::canvas::{Image, Rect};
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::font::TtfFont;
 use crate::open_dialog::OpenDialog;
+use crate::settings::{Saver, Settings, Store, WindowLayout};
 use crate::skin::Skin;
-use crate::ui::{Action, Control, KeyCmd, PlayState, Transport, Ui, WindowKind};
+use crate::ui::{Action, Control, KeyCmd, PlayState, Track, Transport, Ui, WindowKind};
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::vis;
 use crate::zoom::Zoom;
@@ -45,6 +47,10 @@ const REDOCK_DELAY: Duration = Duration::from_millis(200);
 const PROBE_DELAY: Duration = Duration::from_millis(250);
 /// How often frame statistics are logged at debug level.
 const STATS_PERIOD: Duration = Duration::from_secs(1);
+/// How often to check whether the settings or playlist changed and need saving.
+const SAVE_CHECK: Duration = Duration::from_secs(2);
+/// Skin pixels from a window's top edge to a point inside every title bar.
+const TITLE_BAR_Y: i32 = 5;
 
 /// Per-second counters for diagnosing stalls (`RUST_LOG=neoamp=debug`).
 #[derive(Debug)]
@@ -75,16 +81,16 @@ fn kind_index(kind: WindowKind) -> usize {
 }
 
 /// What to run: an optional skin to load, an optional screenshot-and-exit path, an optional
-/// zoom (otherwise chosen from the screen size) and the files to play.
+/// zoom and the files to play. Each overrides what the saved settings say.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
-    /// A `.wsz` skin to show instead of the embedded base skin.
+    /// A `.wsz` skin to show instead of the saved one (or the embedded base skin).
     pub skin: Option<PathBuf>,
     /// Render one frame to this PNG and exit instead of opening windows.
     pub screenshot: Option<PathBuf>,
-    /// The zoom to start at; `None` picks one from the screen height.
+    /// The zoom to start at; `None` keeps the saved zoom or picks one from the screen height.
     pub zoom: Option<Zoom>,
-    /// Audio files and folders for the playlist; the first file starts playing.
+    /// Audio files and folders. They replace the saved playlist, and the first file plays.
     pub files: Vec<PathBuf>,
 }
 
@@ -113,7 +119,10 @@ fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
 
 /// Load the base skin, apply the options and either render a screenshot or open the windows.
 ///
-/// Without a usable audio device the interface still runs, silently.
+/// Opening the windows restores the saved settings and playlist (see [`crate::settings`]),
+/// with the options taking precedence, and saves them again as they change and on exit. A
+/// screenshot neither reads nor writes them. Without a usable audio device the interface
+/// still runs, silently.
 ///
 /// # Errors
 /// Fails if the embedded base skin or the requested skin cannot be parsed, if the screenshot
@@ -121,8 +130,9 @@ fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
 /// thread cannot be started.
 pub fn run(opts: Options) -> Result<()> {
     let base = Skin::from_wsz(BASE_SKIN, "base-2.91").context("embedded base skin")?;
-    let custom = opts
-        .skin
+    // Paths are remembered, so they must not depend on the folder NeoAmp was started in.
+    let skin_path = opts.skin.map(absolute);
+    let custom = skin_path
         .as_deref()
         .map(|p| load_skin(p, &base))
         .transpose()?;
@@ -133,7 +143,20 @@ pub fn run(opts: Options) -> Result<()> {
         return render_screenshot(Ui::demo(), skin, font.as_ref(), out);
     }
 
+    let store = Store::platform();
+    match &store {
+        Some(store) => log::info!("settings are kept in {}", store.dir().display()),
+        None => log::warn!("this system has no config folder; nothing will be remembered"),
+    }
+    let loaded = store.as_ref().and_then(Store::load_settings);
+    let settings = loaded.clone().unwrap_or_default();
+    let (custom, skin_path) = match custom {
+        Some(skin) => (Some(skin), skin_path),
+        None => restore_skin(settings.skin.as_deref(), &base),
+    };
+
     let mut ui = Ui::new();
+    settings.apply(&mut ui);
     let player = match Player::new() {
         Ok(p) => {
             ui.vis.set_sample_rate(p.sample_rate());
@@ -152,6 +175,7 @@ pub fn run(opts: Options) -> Result<()> {
         scanner,
         base,
         custom,
+        skin_path,
         font,
         panes: Vec::with_capacity(3),
         drag: None,
@@ -161,20 +185,57 @@ pub fn run(opts: Options) -> Result<()> {
         unmanaged: unmanaged_preference() == Some(true),
         probe: None,
         probe_done: unmanaged_preference().is_some(),
-        startup_zoom: opts.zoom,
+        startup_zoom: opts.zoom.or(settings.zoom),
         applied_scale: 1.0,
+        layout: settings.windows,
+        offsets: [None; 3],
+        restored_main: None,
+        saver: None,
+        next_save: Instant::now() + SAVE_CHECK,
         modifiers: ModifiersState::empty(),
         next_frame: Instant::now(),
         stats: FrameStats::new(Instant::now()),
         open_dialog: None,
     };
-    let mut actions = Vec::new();
-    app.add_files(audio::audio_files(opts.files), &mut actions);
-    app.perform_audio(actions);
+    let saved_tracks = if opts.files.is_empty() {
+        let tracks = store.as_ref().and_then(Store::load_playlist);
+        if let Some(tracks) = &tracks {
+            app.restore_playlist(tracks, settings.playlist.current);
+        }
+        tracks
+    } else {
+        let files = opts.files.into_iter().map(absolute);
+        let mut actions = Vec::new();
+        app.add_files(audio::audio_files(files), &mut actions);
+        app.perform_audio(actions);
+        // Replaces the saved playlist at the first save.
+        None
+    };
+    app.saver = store.map(|store| Saver::new(store, loaded, saved_tracks));
     event_loop
         .run_app(&mut app)
         .context("running the event loop")?;
     Ok(())
+}
+
+/// `path` made absolute against the current folder, or unchanged if that cannot be read.
+fn absolute(path: PathBuf) -> PathBuf {
+    std::path::absolute(&path).unwrap_or(path)
+}
+
+/// Load the skin the settings name, if any. One that cannot be loaded any more (moved or
+/// deleted, say) gives way to the base skin and is forgotten.
+fn restore_skin(path: Option<&Path>, base: &Skin) -> (Option<Skin>, Option<PathBuf>) {
+    let Some(path) = path else {
+        return (None, None);
+    };
+    match load_skin(path, base) {
+        Ok(skin) => (Some(skin), Some(path.to_path_buf())),
+        Err(e) => {
+            log::warn!("cannot load the saved skin, using the base skin: {e:#}");
+            (None, None)
+        }
+    }
 }
 
 /// Draw a few frames of `ui` offscreen, stacked the classic way, with a synthetic signal in the
@@ -209,7 +270,34 @@ pub fn render_screenshot(
 fn load_skin(path: &Path, base: &Skin) -> Result<Skin> {
     let mut skin = Skin::from_path(path)?;
     skin.fill_missing_from(base);
+    if path.to_str().is_none() {
+        log::warn!(
+            "{} is not valid Unicode, so the settings cannot remember this skin",
+            path.display()
+        );
+    }
     Ok(skin)
+}
+
+/// A monitor's area in physical pixels.
+fn monitor_rect(monitor: &MonitorHandle) -> Option<Rect> {
+    let p = monitor.position();
+    let s = monitor.size();
+    Some(Rect::new(
+        p.x,
+        p.y,
+        i32::try_from(s.width).ok()?,
+        i32::try_from(s.height).ok()?,
+    ))
+}
+
+/// Whether a window with its top-left corner at `at`, `width` skin pixels wide and drawn
+/// `scale` screen pixels per skin pixel, has the middle of its title bar on one of `screens`,
+/// where it can be grabbed and dragged.
+fn title_bar_on_screen((x, y): (i32, i32), width: i32, scale: f64, screens: &[Rect]) -> bool {
+    let px = x.saturating_add(round_px(f64::from(width) / 2.0 * scale));
+    let py = y.saturating_add(round_px(f64::from(TITLE_BAR_Y) * scale));
+    screens.iter().any(|s| s.contains(px, py))
 }
 
 /// Prefer X11 (which can position windows) unless `NEOAMP_BACKEND=wayland` asks otherwise.
@@ -282,6 +370,16 @@ impl Pane {
         ))
     }
 
+    /// Like [`Pane::rect`], but `None` while the window is minimized: Windows then reports a
+    /// position far off the screen, which must not be remembered.
+    fn placed_rect(&self) -> Option<Rect> {
+        if self.window.is_minimized() == Some(true) {
+            None
+        } else {
+            self.rect()
+        }
+    }
+
     /// Screen pixels per skin pixel: the UI scale times the desktop's scale for this window.
     fn scale(&self, ui_scale: f64) -> f64 {
         ui_scale * self.window.scale_factor()
@@ -299,15 +397,7 @@ impl Pane {
 
     /// The monitor this window is on, as a physical rectangle.
     fn screen(&self) -> Option<Rect> {
-        let mon = self.window.current_monitor()?;
-        let p = mon.position();
-        let s = mon.size();
-        Some(Rect::new(
-            p.x,
-            p.y,
-            i32::try_from(s.width).ok()?,
-            i32::try_from(s.height).ok()?,
-        ))
+        monitor_rect(&self.window.current_monitor()?)
     }
 }
 
@@ -337,6 +427,8 @@ struct App {
     base: Skin,
     /// A user-chosen skin; `None` means the embedded base skin is shown.
     custom: Option<Skin>,
+    /// The file `custom` came from, to be remembered.
+    skin_path: Option<PathBuf>,
     font: Option<TtfFont>,
     panes: Vec<Pane>,
     drag: Option<Drag>,
@@ -351,10 +443,25 @@ struct App {
     /// A re-dock whose outcome is still to be checked: (window, expected position, when).
     probe: Option<(WindowKind, PhysicalPosition<i32>, Instant)>,
     probe_done: bool,
-    /// The zoom asked for on the command line; `None` picks one from the screen size.
+    /// The zoom asked for on the command line, or else the saved one; `None` picks one from
+    /// the screen size.
     startup_zoom: Option<Zoom>,
     /// The main window's scale when the panes were last sized (to re-dock after a change).
     applied_scale: f64,
+    /// Where the windows were last known to be: loaded from the settings, then brought up to
+    /// date at every save. Positions the backend cannot report keep their saved values.
+    layout: WindowLayout,
+    /// For the equalizer and playlist (by `kind_index`), the offset from the main window's
+    /// top-left corner to theirs, in physical pixels at `applied_scale`. Taken from the
+    /// settings at startup and whenever a window closes, so that it reopens where it was.
+    offsets: [Option<(i32, i32)>; 3],
+    /// The saved position the main window was opened at, if it was. Applied again once the
+    /// window manager has mapped the window, and kept if the windows are recreated.
+    restored_main: Option<PhysicalPosition<i32>>,
+    /// Writes the settings and playlist as they change; `None` without a config folder.
+    saver: Option<Saver>,
+    /// When to next check whether anything needs saving.
+    next_save: Instant,
     modifiers: ModifiersState,
     next_frame: Instant,
     stats: FrameStats,
@@ -383,6 +490,7 @@ impl App {
             Ok(s) => {
                 log::info!("loaded skin {}", s.name);
                 self.custom = Some(s);
+                self.skin_path = Some(path.to_path_buf());
             }
             Err(e) => log::error!("cannot load skin {}: {e:#}", path.display()),
         }
@@ -397,6 +505,70 @@ impl App {
         }
         if self.ui.state == PlayState::Stopped && !added.is_empty() {
             self.ui.play_track(added.start, actions);
+        }
+    }
+
+    /// Put the saved playlist back, stopped on entry `current`. Only entries whose length was
+    /// not known when it was saved have their tags read again.
+    fn restore_playlist(&mut self, tracks: &[Track], current: usize) {
+        let added = self.ui.add_tracks(tracks.iter().cloned());
+        for (i, track) in self.ui.tracks.iter().enumerate().skip(added.start) {
+            if track.seconds.is_none() {
+                self.scanner.scan(i, track.path.clone());
+            }
+        }
+        if let Some(last) = self.ui.tracks.len().checked_sub(1) {
+            self.ui.select(current.min(last));
+        }
+    }
+
+    /// Everything to remember, as it is now.
+    fn settings(&mut self) -> Settings {
+        let mut settings = Settings::from_ui(&self.ui);
+        // TOML cannot hold a path that is not valid Unicode (`load_skin` says so once).
+        settings.skin = self.skin_path.clone().filter(|p| p.to_str().is_some());
+        self.update_layout();
+        let mut windows = self.layout.clone();
+        windows.eq.open = settings.windows.eq.open;
+        windows.playlist.open = settings.windows.playlist.open;
+        windows.playlist.size = settings.windows.playlist.size;
+        settings.windows = windows;
+        settings
+    }
+
+    /// Bring `layout` and `offsets` up to date with where the windows are, when the backend
+    /// can tell and the windows have been placed.
+    fn update_layout(&mut self) {
+        if !self.docking || self.redock.contains(&WindowKind::Main) {
+            return;
+        }
+        let Some(main) = self.pane(WindowKind::Main).and_then(Pane::placed_rect) else {
+            return;
+        };
+        self.layout.scale = self.applied_scale;
+        self.layout.main = Some([main.x, main.y]);
+        for kind in [WindowKind::Eq, WindowKind::Playlist] {
+            let i = kind_index(kind);
+            // A window waiting to be re-docked is not where it is going yet.
+            if !self.redock.contains(&kind)
+                && let Some(r) = self.pane(kind).and_then(Pane::placed_rect)
+            {
+                self.offsets[i] = Some((r.x - main.x, r.y - main.y));
+            }
+            if let Some(w) = self.layout.window_mut(kind) {
+                w.offset = self.offsets[i].map(|(dx, dy)| [dx, dy]);
+            }
+        }
+    }
+
+    /// Write the settings and playlist if they changed since they were last saved.
+    fn save(&mut self) {
+        if self.saver.is_none() {
+            return;
+        }
+        let settings = self.settings();
+        if let Some(saver) = self.saver.as_mut() {
+            saver.save(&settings, &self.ui.tracks);
         }
     }
 
@@ -505,20 +677,55 @@ impl App {
         player.drain_vis(|samples| vis.push_samples(samples));
     }
 
-    /// Set the zoom from the command line or, failing that, from the height of the screen the
-    /// main window opens on.
+    /// Set the zoom from the command line, or else the settings, or else the height of the
+    /// screen the main window opens on. The last is the default that Ctrl+0 goes back to.
     fn choose_zoom(&mut self, el: &ActiveEventLoop) {
-        let zoom = self.startup_zoom.unwrap_or_else(|| {
-            let monitor = el
-                .primary_monitor()
-                .or_else(|| el.available_monitors().next());
-            monitor.map_or(Zoom::MIN, |m| {
-                Zoom::for_screen_height(f64::from(m.size().height) / m.scale_factor())
-            })
+        let monitor = el
+            .primary_monitor()
+            .or_else(|| el.available_monitors().next());
+        let default = monitor.map_or(Zoom::MIN, |m| {
+            Zoom::for_screen_height(f64::from(m.size().height) / m.scale_factor())
         });
-        log::info!("zoom {zoom} (Ctrl+= and Ctrl+- change it, Ctrl+0 resets)");
+        let zoom = self.startup_zoom.unwrap_or(default);
+        log::info!("zoom {zoom} (Ctrl+= and Ctrl+- change it, Ctrl+0 resets to {default})");
         self.ui.zoom = zoom;
-        self.ui.default_zoom = zoom;
+        self.ui.default_zoom = default;
+    }
+
+    /// The saved position of the main window, unless its title bar would now be off every
+    /// screen (a monitor unplugged since, say), out of reach of the mouse.
+    fn saved_main_position(&self, screens: &[Rect]) -> Option<PhysicalPosition<i32>> {
+        let [x, y] = self.layout.main?;
+        let scale = self.layout.usable_scale()?;
+        let (w, _) = self.ui.window_size(WindowKind::Main);
+        title_bar_on_screen((x, y), w, scale, screens).then(|| PhysicalPosition::new(x, y))
+    }
+
+    /// Take the saved offsets of the equalizer and playlist, carried over to the main window's
+    /// scale now, for a main window opened at `main`. An offset that would leave the window's
+    /// title bar off every screen is dropped, and that window docks the default way instead.
+    fn restore_offsets(&mut self, main: PhysicalPosition<i32>, screens: &[Rect]) {
+        let Some(saved_scale) = self.layout.usable_scale() else {
+            return;
+        };
+        let scale = self.applied_scale;
+        for kind in [WindowKind::Eq, WindowKind::Playlist] {
+            let (w, _) = self.ui.window_size(kind);
+            self.offsets[kind_index(kind)] = self
+                .layout
+                .window(kind)
+                .and_then(|c| c.offset)
+                .map(|[dx, dy]| {
+                    (
+                        rescale_offset(dx, saved_scale, scale),
+                        rescale_offset(dy, saved_scale, scale),
+                    )
+                })
+                .filter(|&(dx, dy)| {
+                    let at = (main.x.saturating_add(dx), main.y.saturating_add(dy));
+                    title_bar_on_screen(at, w, scale, screens)
+                });
+        }
     }
 
     fn open_pane(
@@ -598,6 +805,7 @@ impl App {
     }
 
     fn close_pane(&mut self, kind: WindowKind) {
+        self.remember_offset(kind);
         self.panes.retain(|p| p.kind != kind);
         self.redock.retain(|k| *k != kind);
         if self.drag.as_ref().is_some_and(|d| d.kind == kind) {
@@ -608,9 +816,22 @@ impl App {
         }
     }
 
+    /// Note where the equalizer or playlist sits relative to the main window, so that it
+    /// reopens there.
+    fn remember_offset(&mut self, kind: WindowKind) {
+        if kind == WindowKind::Main || !self.docking || self.redock.contains(&kind) {
+            return;
+        }
+        let main = self.pane(WindowKind::Main).and_then(Pane::placed_rect);
+        let this = self.pane(kind).and_then(Pane::placed_rect);
+        if let (Some(main), Some(r)) = (main, this) {
+            self.offsets[kind_index(kind)] = Some((r.x - main.x, r.y - main.y));
+        }
+    }
+
     /// Re-apply docked positions to windows the window manager has had time to map.
     fn apply_pending_docks(&mut self, now: Instant) {
-        let due: Vec<WindowKind> = self
+        let mut due: Vec<WindowKind> = self
             .redock
             .iter()
             .copied()
@@ -619,9 +840,19 @@ impl App {
                     .is_some_and(|p| now >= p.opened_at + REDOCK_DELAY)
             })
             .collect();
+        // The main window first: the others dock to where it is going, which the window
+        // manager may not have reported yet.
+        due.sort_by_key(|k| kind_index(*k));
+        let mut main = self.pane(WindowKind::Main).and_then(Pane::rect);
         for kind in due {
             self.redock.retain(|k| *k != kind);
-            if let (Some(at), Some(pane)) = (self.docked_position(kind), self.pane(kind)) {
+            let target = main.and_then(|m| self.docked_to(kind, m));
+            if kind == WindowKind::Main
+                && let (Some(at), Some(m)) = (target, main)
+            {
+                main = Some(Rect::new(at.x, at.y, m.w, m.h));
+            }
+            if let (Some(at), Some(pane)) = (target, self.pane(kind)) {
                 log::debug!(
                     "redock {kind:?}: reported {:?}, docking at ({}, {})",
                     pane.rect(),
@@ -661,12 +892,15 @@ impl App {
         self.recreate_panes(el);
     }
 
-    /// Tear every window down and open it again (used when switching window styles).
+    /// Tear every window down and open it again (used when switching window styles). The
+    /// window manager ignored where the windows were asked to go, so the main window goes back
+    /// to its saved position if it has one, and the others to their saved offsets.
     fn recreate_panes(&mut self, el: &ActiveEventLoop) {
-        let main_at = self
-            .pane(WindowKind::Main)
-            .and_then(Pane::rect)
-            .map(|r| PhysicalPosition::new(r.x, r.y));
+        let main_at = self.restored_main.or_else(|| {
+            self.pane(WindowKind::Main)
+                .and_then(Pane::rect)
+                .map(|r| PhysicalPosition::new(r.x, r.y))
+        });
         self.panes.clear();
         self.redock.clear();
         self.drag = None;
@@ -680,13 +914,29 @@ impl App {
         self.sync_panes(el);
     }
 
-    /// Where a newly opened window docks: the equalizer under the main window, the playlist
-    /// under the lowest of the two.
+    /// Where a newly opened window goes. See [`App::docked_to`].
     fn docked_position(&self, kind: WindowKind) -> Option<PhysicalPosition<i32>> {
+        let main = self.pane(WindowKind::Main)?.rect()?;
+        self.docked_to(kind, main)
+    }
+
+    /// Where a newly opened window goes with the main window at `main`: the main window to its
+    /// saved position, if it was opened at one; the equalizer and playlist back to where they
+    /// last were relative to the main window. Without such a place, the equalizer docks under
+    /// the main window and the playlist under the lowest of the two.
+    fn docked_to(&self, kind: WindowKind, main: Rect) -> Option<PhysicalPosition<i32>> {
         if !self.docking {
             return None;
         }
-        let main = self.pane(WindowKind::Main)?.rect()?;
+        if kind == WindowKind::Main {
+            return self.restored_main;
+        }
+        if let Some((dx, dy)) = self.offsets[kind_index(kind)] {
+            return Some(PhysicalPosition::new(
+                main.x.saturating_add(dx),
+                main.y.saturating_add(dy),
+            ));
+        }
         let below = |r: Rect| PhysicalPosition::new(r.x, r.bottom());
         match kind {
             WindowKind::Main => None,
@@ -762,6 +1012,19 @@ impl App {
             log::info!("interface scale {main_scale}x");
             let from = self.applied_scale;
             self.applied_scale = main_scale;
+            // Closed windows reopen where they were at the new scale. Open ones have their
+            // offsets taken afresh when they close.
+            for kind in [WindowKind::Eq, WindowKind::Playlist] {
+                let i = kind_index(kind);
+                if self.pane(kind).is_none()
+                    && let Some((dx, dy)) = self.offsets[i]
+                {
+                    self.offsets[i] = Some((
+                        rescale_offset(dx, from, main_scale),
+                        rescale_offset(dy, from, main_scale),
+                    ));
+                }
+            }
             if let Some(main) = self.pane(WindowKind::Main).and_then(Pane::rect) {
                 for (kind, dx, dy) in cluster {
                     if let Some(p) = self.pane(kind) {
@@ -1026,15 +1289,25 @@ impl ApplicationHandler for App {
             .or_else(|| el.available_monitors().next())
             .map(|m| m.position())
             .unwrap_or(PhysicalPosition::new(0, 0));
-        let at = PhysicalPosition::new(origin.x + INITIAL_OFFSET.0, origin.y + INITIAL_OFFSET.1);
+        let screens: Vec<Rect> = el
+            .available_monitors()
+            .filter_map(|m| monitor_rect(&m))
+            .collect();
         self.choose_zoom(el);
+        self.restored_main = self.saved_main_position(&screens);
+        let at = self.restored_main.unwrap_or_else(|| {
+            PhysicalPosition::new(origin.x + INITIAL_OFFSET.0, origin.y + INITIAL_OFFSET.1)
+        });
         if let Err(e) = self.open_pane(el, WindowKind::Main, Some(at)) {
             log::error!("cannot open a window: {e:#}");
             el.exit();
             return;
         }
-        // The main window goes where the window manager puts it; only the others re-dock.
-        self.redock.clear();
+        // A new main window goes where the window manager puts it, and only the others
+        // re-dock; a restored one is put back once mapped, in case the manager moved it.
+        if self.restored_main.is_none() {
+            self.redock.clear();
+        }
         self.docking = self.pane(WindowKind::Main).and_then(Pane::rect).is_some();
         if !self.docking {
             log::info!("this backend cannot position windows; docking is disabled");
@@ -1042,7 +1315,12 @@ impl ApplicationHandler for App {
         self.applied_scale = self
             .pane(WindowKind::Main)
             .map_or(1.0, |p| p.scale(self.ui.scale()));
+        self.restore_offsets(at, &screens);
         self.sync_panes(el);
+    }
+
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        self.save();
     }
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -1150,6 +1428,10 @@ impl ApplicationHandler for App {
                 p.window.request_redraw();
             }
         }
+        if now >= self.next_save {
+            self.next_save = now + SAVE_CHECK;
+            self.save();
+        }
         el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
     }
 }
@@ -1173,6 +1455,28 @@ mod tests {
         assert_eq!(round_px(f64::NAN), 0);
         assert_eq!(round_px(1e12), i32::MAX);
         assert_eq!(scaled_size((275, 116), f64::NAN), PhysicalSize::new(1, 1));
+    }
+
+    #[test]
+    fn windows_off_every_screen_are_not_restored_there() {
+        let screens = [Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 2560, 1440)];
+        assert!(title_bar_on_screen((64, 64), 275, 1.0, &screens));
+        assert!(
+            title_bar_on_screen((4000, 1300), 275, 1.0, &screens),
+            "second screen"
+        );
+        // Hanging off the left edge is fine while the title bar's middle is still on screen.
+        assert!(title_bar_on_screen((-100, 0), 275, 1.0, &screens));
+        assert!(!title_bar_on_screen((-200, 0), 275, 1.0, &screens));
+        // Below the first screen but beside the taller second one.
+        assert!(!title_bar_on_screen((100, 1200), 275, 1.0, &screens));
+        assert!(
+            !title_bar_on_screen((0, 0), 275, 1.0, &[]),
+            "no screens known"
+        );
+        // The point checked moves with the scale.
+        assert!(!title_bar_on_screen((-200, 0), 275, 1.0, &screens));
+        assert!(title_bar_on_screen((-200, 0), 275, 2.0, &screens));
     }
 
     #[test]

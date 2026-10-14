@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use realfft::num_complex::Complex;
 use realfft::{RealFftPlanner, RealToComplex};
+use serde::{Deserialize, Serialize};
 
 use crate::canvas::{Image, Rect};
 use crate::skin::Skin;
@@ -14,8 +15,11 @@ use crate::skin::Skin;
 /// Each analyser bar is this wide, followed by a one pixel gap.
 const BAR_W: i32 = 3;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// What the visualiser shows. Saved in the settings as `analyzer`, `oscilloscope` or `off`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VisMode {
+    #[default]
     Analyzer,
     Oscilloscope,
     Off,
