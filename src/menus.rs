@@ -8,6 +8,7 @@ use crate::eqf;
 use crate::library::Entry;
 use crate::menu::{Item, escape};
 use crate::playlist::SortKey;
+use crate::shortcut::{Key, Shortcut};
 use crate::ui::{KeyCmd, ListCmd, Ui};
 use crate::vis::{AnalyzerStyle, Bands, Falloff, ScopeStyle, VisMode};
 use crate::zoom::Zoom;
@@ -110,7 +111,7 @@ pub fn build(kind: MenuKind, ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
     }
 }
 
-fn list(label: &'static str, cmd: ListCmd, shortcut: &'static str) -> Item<Command> {
+fn list(label: &'static str, cmd: ListCmd, shortcut: Shortcut) -> Item<Command> {
     key(label, KeyCmd::List(cmd), shortcut)
 }
 
@@ -119,21 +120,29 @@ fn playlist_sort() -> Vec<Item<Command>> {
         list(
             "Sort list by &title",
             ListCmd::Sort(SortKey::Title),
-            "Ctrl+Shift+1",
+            Shortcut::char('1').ctrl().shift(),
         ),
         list(
             "Sort list by &filename",
             ListCmd::Sort(SortKey::FileName),
-            "Ctrl+Shift+2",
+            Shortcut::char('2').ctrl().shift(),
         ),
         list(
             "Sort list by &path and filename",
             ListCmd::Sort(SortKey::Path),
-            "Ctrl+Shift+3",
+            Shortcut::char('3').ctrl().shift(),
         ),
         Item::separator(),
-        list("&Reverse list", ListCmd::Reverse, "Ctrl+R"),
-        list("R&andomize list", ListCmd::Randomize, "Ctrl+Shift+R"),
+        list(
+            "&Reverse list",
+            ListCmd::Reverse,
+            Shortcut::char('R').ctrl(),
+        ),
+        list(
+            "R&andomize list",
+            ListCmd::Randomize,
+            Shortcut::char('R').ctrl().shift(),
+        ),
     ]
 }
 
@@ -141,21 +150,30 @@ fn playlist_remove() -> Vec<Item<Command>> {
     vec![list(
         "Remove all &dead files",
         ListCmd::RemoveDead,
-        "Alt+Del",
+        Shortcut::new(Key::Delete).alt(),
     )]
 }
 
-fn key(label: &'static str, key: KeyCmd, shortcut: &'static str) -> Item<Command> {
-    Item::new(label, Command::Key(key)).shortcut(shortcut)
+fn key(label: &'static str, key: KeyCmd, shortcut: Shortcut) -> Item<Command> {
+    Item::new(label, Command::Key(key)).shortcut(shortcut.to_string())
 }
 
 fn main_menu(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
     vec![
-        key("&Play File...", KeyCmd::OpenFiles, "L"),
-        key("Play &Folder...", KeyCmd::OpenFolder, "Shift+L"),
+        key("&Play File...", KeyCmd::OpenFiles, Shortcut::char('L')),
+        key(
+            "Play &Folder...",
+            KeyCmd::OpenFolder,
+            Shortcut::char('L').shift(),
+        ),
         Item::separator(),
-        key("Playlist &Editor", KeyCmd::TogglePl, "Alt+E").checked(ui.pl_open),
-        key("E&qualizer", KeyCmd::ToggleEq, "Alt+G").checked(ui.eq_open),
+        key(
+            "Playlist &Editor",
+            KeyCmd::TogglePl,
+            Shortcut::char('E').alt(),
+        )
+        .checked(ui.pl_open),
+        key("E&qualizer", KeyCmd::ToggleEq, Shortcut::char('G').alt()).checked(ui.eq_open),
         Item::separator(),
         Item::submenu("&Skins", skins(lib)),
         Item::submenu("&Options", options(ui)),
@@ -167,20 +185,31 @@ fn main_menu(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
 }
 
 fn options(ui: &Ui) -> Vec<Item<Command>> {
+    let toggles = format!("({} toggles)", Shortcut::char('T').ctrl());
     vec![
         Item::new("Time &elapsed", Command::TimeRemaining(false))
-            .shortcut("(Ctrl+T toggles)")
+            .shortcut(toggles.clone())
             .chosen(!ui.remaining_mode),
         Item::new("Time re&maining", Command::TimeRemaining(true))
-            .shortcut("(Ctrl+T toggles)")
+            .shortcut(toggles)
             .chosen(ui.remaining_mode),
         Item::separator(),
-        key("&Always On Top", KeyCmd::ToggleAlwaysOnTop, "Ctrl+A").checked(ui.always_on_top),
-        key("&Double Size", KeyCmd::ToggleDoubleSize, "Ctrl+D").checked(ui.double_size),
+        key(
+            "&Always On Top",
+            KeyCmd::ToggleAlwaysOnTop,
+            Shortcut::char('A').ctrl(),
+        )
+        .checked(ui.always_on_top),
+        key(
+            "&Double Size",
+            KeyCmd::ToggleDoubleSize,
+            Shortcut::char('D').ctrl(),
+        )
+        .checked(ui.double_size),
         Item::submenu("&Zoom", zoom(ui)),
         Item::separator(),
-        key("&Repeat", KeyCmd::ToggleRepeat, "R").checked(ui.repeat),
-        key("S&huffle", KeyCmd::ToggleShuffle, "S").checked(ui.shuffle),
+        key("&Repeat", KeyCmd::ToggleRepeat, Shortcut::char('R')).checked(ui.repeat),
+        key("S&huffle", KeyCmd::ToggleShuffle, Shortcut::char('S')).checked(ui.shuffle),
     ]
 }
 
@@ -191,29 +220,37 @@ fn zoom(ui: &Ui) -> Vec<Item<Command>> {
         .collect();
     items.extend([
         Item::separator(),
-        key("Zoom &In", KeyCmd::ZoomIn, "Ctrl+="),
-        key("Zoom &Out", KeyCmd::ZoomOut, "Ctrl+-"),
+        key("Zoom &In", KeyCmd::ZoomIn, Shortcut::char('=').ctrl()),
+        key("Zoom &Out", KeyCmd::ZoomOut, Shortcut::char('-').ctrl()),
         Item::new(
             format!("&Default ({})", ui.default_zoom),
             Command::Key(KeyCmd::ZoomReset),
         )
-        .shortcut("Ctrl+0"),
+        .shortcut(Shortcut::char('0').ctrl().to_string()),
     ]);
     items
 }
 
 fn playback() -> Vec<Item<Command>> {
     vec![
-        key("Pre&vious", KeyCmd::Prev, "Z"),
-        key("&Play", KeyCmd::Play, "X"),
-        key("P&ause", KeyCmd::Pause, "C"),
-        key("&Stop", KeyCmd::Stop, "V"),
-        key("&Next", KeyCmd::Next, "B"),
+        key("Pre&vious", KeyCmd::Prev, Shortcut::char('Z')),
+        key("&Play", KeyCmd::Play, Shortcut::char('X')),
+        key("P&ause", KeyCmd::Pause, Shortcut::char('C')),
+        key("&Stop", KeyCmd::Stop, Shortcut::char('V')),
+        key("&Next", KeyCmd::Next, Shortcut::char('B')),
         Item::separator(),
-        key("&Back 5 seconds", KeyCmd::SeekBack, "Left"),
-        key("&Fwd 5 seconds", KeyCmd::SeekForward, "Right"),
+        key(
+            "&Back 5 seconds",
+            KeyCmd::SeekBack,
+            Shortcut::new(Key::Left),
+        ),
+        key(
+            "&Fwd 5 seconds",
+            KeyCmd::SeekForward,
+            Shortcut::new(Key::Right),
+        ),
         Item::separator(),
-        key("&Jump to file...", KeyCmd::JumpToFile, "J"),
+        key("&Jump to file...", KeyCmd::JumpToFile, Shortcut::char('J')),
     ]
 }
 

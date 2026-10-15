@@ -117,10 +117,10 @@ impl<C> Item<C> {
         }
     }
 
-    /// Show the key that does the same, e.g. `"Ctrl+D"`.
+    /// Show the key that does the same, e.g. `"Ctrl+D"` (see [`crate::shortcut`]).
     #[must_use]
-    pub fn shortcut(mut self, keys: &'static str) -> Item<C> {
-        self.shortcut = Cow::Borrowed(keys);
+    pub fn shortcut(mut self, keys: impl Into<Cow<'static, str>>) -> Item<C> {
+        self.shortcut = keys.into();
         self
     }
 

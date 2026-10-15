@@ -11,7 +11,8 @@
 //! - [`dock`]: the magnetic snapping and window-attachment geometry.
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`).
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
-//! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own.
+//! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own, and
+//!   [`shortcut`] writes their keyboard shortcuts the platform's way (⌘ on macOS).
 //! - [`eqf`]: equalizer presets, built in and in Winamp's `.eqf` files.
 //! - [`zoom`]: how far the skin is enlarged for today's screens.
 //! - [`playlist`]: sorting, moving and shuffling playlist entries; [`playlist_file`] loads and
@@ -45,6 +46,7 @@ mod playlist_window;
 pub mod pls;
 mod popup;
 pub mod settings;
+pub mod shortcut;
 pub mod skin;
 pub mod sprites;
 pub mod ui;

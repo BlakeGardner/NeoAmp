@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::canvas::{Image, Rect};
+use crate::shortcut::Style;
 use crate::skin::Skin;
 use crate::sprites::font as f;
 
@@ -78,6 +79,8 @@ pub fn bitmap_text_width(text: &str) -> i32 {
 #[derive(Clone)]
 pub struct TtfFont {
     font: fontdue::Font,
+    /// Draws the characters `font` has no glyph for (the menus' key symbols on macOS).
+    fallback: Option<fontdue::Font>,
     px: f32,
     ascent: i32,
     descent: i32,
@@ -110,6 +113,17 @@ const TAHOMA: &[&str] = &[
     "/System/Library/Fonts/Supplemental/Tahoma.ttf",
 ];
 
+/// Fonts with the key symbols macOS writes shortcuts with (⌘ ⌥ ⇧), which Tahoma and Arial
+/// lack. Windows' own folder is added by [`windows_font`] (Segoe UI Symbol).
+const SYMBOLS: &[&str] = &[
+    "/System/Library/Fonts/LucidaGrande.ttc",
+    "/System/Library/Fonts/Apple Symbols.ttf",
+    "/System/Library/Fonts/Menlo.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+];
+
 /// `file` in Windows' font folder (`%WINDIR%\Fonts`). `None` elsewhere.
 fn windows_font(file: &str) -> Option<PathBuf> {
     if cfg!(windows) {
@@ -134,6 +148,7 @@ impl std::fmt::Debug for TtfFont {
             .field("ascent", &self.ascent)
             .field("descent", &self.descent)
             .field("letter_spacing", &self.letter_spacing)
+            .field("fallback", &self.fallback.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -155,7 +170,7 @@ impl TtfFont {
     }
 
     /// The menu font: Tahoma if the system has it, else the playlist's face, without letter
-    /// spacing.
+    /// spacing, with a fallback for the symbols this platform's shortcuts are written with.
     #[must_use]
     pub fn load_menu(px: f32) -> Option<TtfFont> {
         let mut paths = candidates("tahoma.ttf", TAHOMA);
@@ -164,7 +179,34 @@ impl TtfFont {
         if font.is_none() {
             log::warn!("no TrueType font found; menus cannot be shown");
         }
-        font
+        font.map(|font| font.with_symbols(Style::CURRENT.symbols()))
+    }
+
+    /// This font, drawing those of `symbols` it lacks with the first font in [`SYMBOLS`] that
+    /// has them all.
+    #[must_use]
+    pub fn with_symbols(self, symbols: &[char]) -> TtfFont {
+        let lacking = || {
+            symbols
+                .iter()
+                .copied()
+                .filter(|&ch| !self.font.has_glyph(ch))
+        };
+        if lacking().next().is_none() {
+            return self;
+        }
+        let fallback = candidates("seguisym.ttf", SYMBOLS).iter().find_map(|path| {
+            let font = Self::parse(std::fs::read(path).ok()?, self.px)?;
+            lacking().all(|ch| font.has_glyph(ch)).then(|| {
+                log::info!("symbol font: {}", path.display());
+                font
+            })
+        });
+        if fallback.is_none() {
+            let missing: String = lacking().collect();
+            log::warn!("no font found with {missing}; the menus show boxes for them");
+        }
+        TtfFont { fallback, ..self }
     }
 
     fn load_first(paths: &[PathBuf], px: f32, letter_spacing: f32) -> Option<TtfFont> {
@@ -180,12 +222,17 @@ impl TtfFont {
 
     #[must_use]
     pub fn from_bytes(bytes: Vec<u8>, px: f32) -> Option<TtfFont> {
+        let font = Self::parse(bytes, px)?;
+        Some(Self::sized(font, px, Self::PLAYLIST_SPACING))
+    }
+
+    /// A font file (the first face of a collection), made ready for `px`.
+    fn parse(bytes: Vec<u8>, px: f32) -> Option<fontdue::Font> {
         let settings = fontdue::FontSettings {
             scale: px,
             ..Default::default()
         };
-        let font = fontdue::Font::from_bytes(bytes, settings).ok()?;
-        Some(Self::sized(font, px, Self::PLAYLIST_SPACING))
+        fontdue::Font::from_bytes(bytes, settings).ok()
     }
 
     fn sized(font: fontdue::Font, px: f32, letter_spacing: f32) -> TtfFont {
@@ -195,6 +242,7 @@ impl TtfFont {
         let descent = metrics.map_or(0, |m| (-m.descent).round() as i32);
         TtfFont {
             font,
+            fallback: None,
             px,
             ascent,
             descent,
@@ -205,7 +253,18 @@ impl TtfFont {
     /// The same face at another size.
     #[must_use]
     pub fn resized(&self, px: f32) -> TtfFont {
-        Self::sized(self.font.clone(), px, self.letter_spacing)
+        TtfFont {
+            fallback: self.fallback.clone(),
+            ..Self::sized(self.font.clone(), px, self.letter_spacing)
+        }
+    }
+
+    /// The face that draws `ch`.
+    fn face(&self, ch: char) -> &fontdue::Font {
+        match &self.fallback {
+            Some(fallback) if !self.font.has_glyph(ch) && fallback.has_glyph(ch) => fallback,
+            _ => &self.font,
+        }
     }
 
     /// The size in pixels (the em height).
@@ -227,7 +286,7 @@ impl TtfFont {
     }
 
     fn advance(&self, ch: char) -> f32 {
-        self.font.metrics(ch, self.px).advance_width + self.letter_spacing
+        self.face(ch).metrics(ch, self.px).advance_width + self.letter_spacing
     }
 
     #[must_use]
@@ -248,7 +307,7 @@ impl TtfFont {
         let baseline = top + self.ascent;
         let mut pen = x as f32;
         for ch in text.chars() {
-            let (m, bitmap) = self.font.rasterize(ch, self.px);
+            let (m, bitmap) = self.face(ch).rasterize(ch, self.px);
             let gx = pen.round() as i32 + m.xmin;
             let gy = baseline - m.ymin - m.height as i32;
             for yy in 0..m.height {
@@ -300,6 +359,27 @@ mod tests {
     fn bitmap_width_is_five_pixels_per_character() {
         assert_eq!(bitmap_text_width("abc"), 15);
         assert_eq!(bitmap_text_width(""), 0);
+    }
+
+    #[test]
+    fn a_symbol_font_draws_the_mac_key_symbols_the_menu_font_lacks() {
+        let Some(font) = TtfFont::load_menu(12.0) else {
+            return; // no system font to draw with
+        };
+        let font = font.with_symbols(Style::Mac.symbols());
+        for &ch in Style::Mac.symbols() {
+            // Only a system with no font that has them all leaves them as boxes.
+            assert!(
+                font.face(ch).has_glyph(ch) || font.fallback.is_none(),
+                "{ch}"
+            );
+        }
+        assert!(
+            std::ptr::eq(font.face('A'), &font.font),
+            "letters stay in the menu font"
+        );
+        let resized = font.resized(18.0);
+        assert_eq!(resized.fallback.is_some(), font.fallback.is_some());
     }
 
     #[test]

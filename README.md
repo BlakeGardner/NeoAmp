@@ -174,6 +174,11 @@ sharp.
 The text is Tahoma, Windows 2000's menu font, where the system has it (Windows
 and macOS do, and so does Wine); elsewhere it is the playlist's font.
 
+The menus list each item's keyboard shortcut the way the platform writes them:
+"Ctrl+Shift+1" on Windows and Linux, "⇧⌘1" on macOS. Tahoma has no ⌘, ⌥ or ⇧,
+so on macOS those come from Lucida Grande, Apple Symbols or Menlo, whichever is
+found first with all of them; with none, they show as boxes.
+
 Each open menu is a small window of its own, since a menu reaches past the
 NeoAmp window it opens from. These windows are drawn in software with
 [softbuffer](https://crates.io/crates/softbuffer), from the people behind
@@ -451,6 +456,15 @@ cargo run --release -- --screenshot shot.png
 | Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS, let go over an item | |
 
 Keys marked "(playlist)" work while the playlist window has the focus.
+
+On macOS, Cmd takes Ctrl's place in every shortcut above (Cmd+A, Cmd+Shift+1,
+...) and Option is Alt; the menus show them as ⌘A, ⇧⌘1, ⌥E. There are two
+differences on macOS:
+
+- macOS keeps Cmd+Shift+3 for screenshots, so sorting the playlist by path is
+  only in the MISC > SORT LIST menu there.
+- Delete is the forward-delete key (fn+Delete on a laptop keyboard). The key
+  labelled "delete" on a Mac is Backspace, which removes nothing.
 
 ## Scope and limitations
 

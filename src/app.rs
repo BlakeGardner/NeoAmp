@@ -22,6 +22,7 @@ use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, Window
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::monitor::MonitorHandle;
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
 use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
 use crate::audio::{Player, Scanner};
@@ -39,6 +40,7 @@ use crate::playlist::SortKey;
 use crate::playlist_file;
 use crate::popup::Popups;
 use crate::settings::{Saver, Settings, Store, WindowLayout};
+use crate::shortcut::Shortcut;
 use crate::skin::Skin;
 use crate::sprites::pl::TRACK_H;
 use crate::ui::{
@@ -131,6 +133,26 @@ fn scaled_size((w, h): (i32, i32), scale: f64) -> PhysicalSize<u32> {
 /// pixels so docked edges land where the rounded window sizes put them.
 fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
     round_px((f64::from(offset) / from).round() * to)
+}
+
+/// Whether the modifier of Winamp's Ctrl shortcuts is held. On macOS that is Cmd, as in Mac
+/// apps; the menus write it as ⌘ there (see [`crate::shortcut`]).
+fn ctrl_held(m: ModifiersState) -> bool {
+    if cfg!(target_os = "macos") {
+        m.super_key()
+    } else {
+        m.control_key()
+    }
+}
+
+/// The key a shortcut is matched against. On macOS, Option types other characters (Option+G
+/// is "©" and Option+E starts an accent), so while it is held the key is read without it.
+fn shortcut_key(event: &KeyEvent, m: ModifiersState) -> Key {
+    if cfg!(target_os = "macos") && m.alt_key() {
+        event.key_without_modifiers()
+    } else {
+        event.logical_key.clone()
+    }
 }
 
 /// Load the base skin, apply the options and either render a screenshot or open the windows.
@@ -1083,7 +1105,8 @@ impl App {
     }
 
     /// Set the zoom from the command line, or else the settings, or else the height of the
-    /// screen the main window opens on. The last is the default that Ctrl+0 goes back to.
+    /// screen the main window opens on. The last is the default that Ctrl+0 (Cmd+0 on macOS)
+    /// goes back to.
     fn choose_zoom(&mut self, el: &ActiveEventLoop) {
         let monitor = el
             .primary_monitor()
@@ -1092,7 +1115,12 @@ impl App {
             Zoom::for_screen_height(f64::from(m.size().height) / m.scale_factor())
         });
         let zoom = self.startup_zoom.unwrap_or(default);
-        log::info!("zoom {zoom} (Ctrl+= and Ctrl+- change it, Ctrl+0 resets to {default})");
+        log::info!(
+            "zoom {zoom} ({} and {} change it, {} resets to {default})",
+            Shortcut::char('=').ctrl(),
+            Shortcut::char('-').ctrl(),
+            Shortcut::char('0').ctrl()
+        );
         self.ui.zoom = zoom;
         self.ui.default_zoom = default;
     }
@@ -1664,17 +1692,18 @@ impl App {
 
     /// What a key pressed in window `kind` does. The playlist has keys of its own, as in
     /// Winamp: there the arrows move through the entries rather than change the volume, and
-    /// Ctrl+A selects every entry rather than keeping the windows on top.
+    /// Ctrl+A selects every entry rather than keeping the windows on top. On macOS, Cmd takes
+    /// Ctrl's place (see [`ctrl_held`]).
     fn key_cmd(&self, kind: WindowKind, event: &KeyEvent) -> Option<KeyCmd> {
         if kind == WindowKind::Playlist
             && let Some(cmd) = self.playlist_key(event)
         {
             return Some(cmd);
         }
-        let ctrl = self.modifiers.control_key();
+        let ctrl = ctrl_held(self.modifiers);
         let alt = self.modifiers.alt_key();
         let shift = self.modifiers.shift_key();
-        Some(match &event.logical_key {
+        Some(match &shortcut_key(event, self.modifiers) {
             Key::Character(s) => match (s.to_ascii_lowercase().as_str(), ctrl, alt) {
                 ("a", true, _) => KeyCmd::ToggleAlwaysOnTop,
                 ("d", true, _) => KeyCmd::ToggleDoubleSize,
@@ -1708,7 +1737,7 @@ impl App {
 
     /// The playlist window's own keys (Winamp's playlist editor shortcuts).
     fn playlist_key(&self, event: &KeyEvent) -> Option<KeyCmd> {
-        let ctrl = self.modifiers.control_key();
+        let ctrl = ctrl_held(self.modifiers);
         let alt = self.modifiers.alt_key();
         let shift = self.modifiers.shift_key();
         let list = |cmd| Some(KeyCmd::List(cmd));

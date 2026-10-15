@@ -27,7 +27,8 @@ keys: Z/X/C/V/B transport, L open files, Shift+L open a folder, S shuffle, R rep
 in the playlist: arrows, PgUp/PgDn, Home/End move (Shift selects), Enter plays,
       Ctrl+A / Ctrl+I select all / invert, Delete / Ctrl+Delete / Alt+Delete remove
       selected / crop / dead files, Alt+Up/Down move entries, Ctrl+Shift+1/2/3 sort,
-      Ctrl+R reverse, Ctrl+Shift+R randomize, Ctrl+N / Ctrl+O / Ctrl+S new/load/save";
+      Ctrl+R reverse, Ctrl+Shift+R randomize, Ctrl+N / Ctrl+O / Ctrl+S new/load/save
+on macOS, Cmd takes Ctrl's place and Option is Alt";
 
 /// Classic skins are `.wsz` files; any other path is audio for the playlist.
 fn is_skin(path: &str) -> bool {
