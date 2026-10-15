@@ -20,6 +20,8 @@ pub enum Sheet {
     NumsEx,
     Text,
     EqMain,
+    /// The equalizer's windowshade bar and its pressed title-bar buttons.
+    EqEx,
     PlEdit,
 }
 
@@ -212,6 +214,75 @@ pub mod main {
     }
 }
 
+/// Thirds of a windowshade slider's travel; each has its own thumb sprite.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Third {
+    Left,
+    Middle,
+    Right,
+}
+
+impl Third {
+    /// The third `fraction` (`0..=1`) falls in. The edges at 1/3 and 2/3 go to the outer
+    /// thirds, as in Webamp.
+    #[must_use]
+    pub fn of(fraction: f32) -> Third {
+        if fraction <= 1.0 / 3.0 {
+            Third::Left
+        } else if fraction >= 2.0 / 3.0 {
+            Third::Right
+        } else {
+            Third::Middle
+        }
+    }
+
+    /// Sprite columns are 3 pixels apart, left to right.
+    const fn column(self) -> i32 {
+        match self {
+            Third::Left => 0,
+            Third::Middle => 3,
+            Third::Right => 6,
+        }
+    }
+}
+
+/// The main window in windowshade mode: a 275x14 bar from titlebar.bmp. The options,
+/// minimize and close buttons are where the full window has them (see [`main`]).
+pub mod main_shade {
+    use super::*;
+    pub const H: i32 = 14;
+
+    pub const BACKGROUND: Sprite = sp(Sheet::TitleBar, 27, 29, 275, 14);
+    pub const BACKGROUND_INACTIVE: Sprite = sp(Sheet::TitleBar, 27, 42, 275, 14);
+    /// The shade button, which opens the window out again here, pressed.
+    pub const UNSHADE_PRESSED: Sprite = sp(Sheet::TitleBar, 9, 27, 9, 9);
+
+    /// The visualizer: the analyzer or oscilloscope at 38x5.
+    pub const VIS: Rect = Rect::new(79, 5, 38, 5);
+    /// The time, in the text font: a minus sign, two digits for the minutes and two for the
+    /// seconds. The colon between them is part of the bar.
+    pub const TIME: Rect = Rect::new(127, 4, 30, 6);
+    pub const MINUS_X: i32 = 128;
+    pub const DIGIT_X: [i32; 4] = [134, 139, 147, 152];
+    pub const TEXT_Y: i32 = 4;
+
+    /// The transport buttons are drawn into the bar; they have no pressed sprites.
+    pub const PREV: Rect = Rect::new(169, 2, 7, 10);
+    pub const PLAY: Rect = Rect::new(176, 2, 10, 10);
+    pub const PAUSE: Rect = Rect::new(186, 2, 9, 10);
+    pub const STOP: Rect = Rect::new(195, 2, 9, 10);
+    pub const NEXT: Rect = Rect::new(204, 2, 10, 10);
+    pub const EJECT: Rect = Rect::new(215, 2, 10, 10);
+
+    pub const POSBAR: Rect = Rect::new(226, 4, 17, 7);
+    pub const POSBAR_BG: Sprite = sp(Sheet::TitleBar, 0, 36, 17, 7);
+    pub const POSBAR_THUMB_W: i32 = 3;
+    /// The position bar's thumb, which looks different in each third of the bar.
+    pub const fn posbar_thumb(third: Third) -> Sprite {
+        sp(Sheet::TitleBar, 17 + third.column(), 36, 3, 7)
+    }
+}
+
 /// Equalizer window (275x116).
 pub mod eq {
     use super::*;
@@ -223,9 +294,12 @@ pub mod eq {
     pub const TITLEBAR_INACTIVE: Sprite = sp(Sheet::EqMain, 0, 149, 275, 14);
     pub const TITLE_RECT: Rect = Rect::new(0, 0, 275, 14);
     pub const CLOSE: Rect = Rect::new(264, 3, 9, 9);
-    pub const CLOSE_PRESSED: Sprite = sp(Sheet::EqMain, 0, 116, 9, 9);
+    /// eqmain.bmp has the close button at (0, 116) as the title bar draws it, then pressed.
+    pub const CLOSE_PRESSED: Sprite = sp(Sheet::EqMain, 0, 125, 9, 9);
     pub const SHADE: Rect = Rect::new(254, 3, 9, 9);
-    pub const SHADE_PRESSED: Sprite = sp(Sheet::EqMain, 0, 125, 9, 9);
+    /// Only in eq_ex.bmp, so it is drawn only for skins that have their own (as in Webamp):
+    /// the base skin's would not match theirs.
+    pub const SHADE_PRESSED: Sprite = sp(Sheet::EqEx, 1, 38, 9, 9);
 
     pub const ON: Rect = Rect::new(14, 18, 26, 12);
     pub const fn on_sprite(on: bool, pressed: bool) -> Sprite {
@@ -278,6 +352,29 @@ pub mod eq {
     pub const BAND_LABELS: [&str; 10] = [
         "60", "170", "310", "600", "1K", "3K", "6K", "12K", "14K", "16K",
     ];
+}
+
+/// The equalizer in windowshade mode: a 275x14 bar from eq_ex.bmp, with the volume and balance
+/// sliders. The shade and close buttons are where the full window has them (see [`eq`]).
+pub mod eq_shade {
+    use super::*;
+    pub const H: i32 = 14;
+
+    pub const BACKGROUND: Sprite = sp(Sheet::EqEx, 0, 0, 275, 14);
+    pub const BACKGROUND_INACTIVE: Sprite = sp(Sheet::EqEx, 0, 15, 275, 14);
+    pub const UNSHADE_PRESSED: Sprite = sp(Sheet::EqEx, 1, 47, 9, 9);
+    pub const CLOSE_PRESSED: Sprite = sp(Sheet::EqEx, 11, 47, 9, 9);
+
+    pub const VOLUME: Rect = Rect::new(61, 4, 97, 6);
+    pub const BALANCE: Rect = Rect::new(164, 4, 43, 6);
+    pub const THUMB_W: i32 = 3;
+    /// The thumbs look different in each third of their slider.
+    pub const fn volume_thumb(third: Third) -> Sprite {
+        sp(Sheet::EqEx, 1 + third.column(), 30, 3, 7)
+    }
+    pub const fn balance_thumb(third: Third) -> Sprite {
+        sp(Sheet::EqEx, 11 + third.column(), 30, 3, 7)
+    }
 }
 
 /// Playlist editor (resizable; 275x116 minimum, grows in 25x29 steps).
@@ -376,4 +473,31 @@ pub mod pl {
     pub const MISC_BAR_X: i32 = 200;
     pub const LIST_MENU_X: i32 = 204;
     pub const LIST_BAR_X: i32 = 250;
+}
+
+/// The playlist in windowshade mode: a bar 14 high and as wide as the playlist, from
+/// pledit.bmp, showing the current track. Its close and shade buttons are where the full
+/// window has them (see [`pl`]); only its width can be changed.
+pub mod pl_shade {
+    use super::*;
+    pub const H: i32 = 14;
+
+    /// Tiled across the whole bar, under the two ends.
+    pub const FILL: Sprite = sp(Sheet::PlEdit, 72, 57, 25, 14);
+    pub const LEFT: Sprite = sp(Sheet::PlEdit, 72, 42, 25, 14);
+    pub const RIGHT_W: i32 = 50;
+    pub const fn right(active: bool) -> Sprite {
+        sp(Sheet::PlEdit, 99, if active { 42 } else { 57 }, 50, 14)
+    }
+    pub const UNSHADE_PRESSED: Sprite = sp(Sheet::PlEdit, 150, 42, 9, 9);
+    /// The width-only resize grip, measured from the right edge.
+    pub const RESIZE_FROM_RIGHT: i32 = 29;
+
+    /// "N. Title" in the text font, cut short to fit the bar.
+    pub const TITLE_POS: (i32, i32) = (5, 4);
+    /// The bar shows `(width - TITLE_SPARE) / 5` characters of the title: 41 at the
+    /// narrowest.
+    pub const TITLE_SPARE: i32 = 70;
+    /// The track's length ends this far from the right edge.
+    pub const TIME_FROM_RIGHT: i32 = 30;
 }

@@ -13,7 +13,9 @@ use crate::font::TtfFont;
 use crate::menus::{AppCommand, Command, MenuKind};
 use crate::playlist::{self, Rng, Shuffle, SortKey};
 use crate::skin::{Mask, Skin};
-use crate::sprites::{eq as e, main as m, pl as p};
+use crate::sprites::{
+    eq as e, eq_shade as es, main as m, main_shade as ms, pl as p, pl_shade as ps,
+};
 use crate::vis::Vis;
 use crate::zoom::Zoom;
 use crate::{eq_window, main_window, playlist_window};
@@ -86,6 +88,10 @@ pub enum Control {
     EqPresets,
     EqPreamp,
     EqBand(usize),
+    /// The volume slider of the equalizer's windowshade bar.
+    EqVolume,
+    /// The balance slider of the equalizer's windowshade bar.
+    EqBalance,
     PlTitle,
     PlClose,
     PlShade,
@@ -115,6 +121,10 @@ pub enum Slider {
     PosBar,
     EqPreamp,
     EqBand(usize),
+    /// The volume, from the equalizer's windowshade bar.
+    EqVolume,
+    /// The balance, from the equalizer's windowshade bar.
+    EqBalance,
 }
 
 impl Control {
@@ -127,6 +137,8 @@ impl Control {
             Control::PosBar => Some(Slider::PosBar),
             Control::EqPreamp => Some(Slider::EqPreamp),
             Control::EqBand(i) => Some(Slider::EqBand(i)),
+            Control::EqVolume => Some(Slider::EqVolume),
+            Control::EqBalance => Some(Slider::EqBalance),
             // Everything else is a button, a title bar or a list row.
             _ => None,
         }
@@ -162,9 +174,8 @@ impl Control {
             | PosBar
             | TimeDisplay
             | Control::Vis => WindowKind::Main,
-            EqTitle | EqClose | EqShade | EqOn | EqAuto | EqPresets | EqPreamp | EqBand(_) => {
-                WindowKind::Eq
-            }
+            EqTitle | EqClose | EqShade | EqOn | EqAuto | EqPresets | EqPreamp | EqBand(_)
+            | EqVolume | EqBalance => WindowKind::Eq,
             PlTitle | PlClose | PlShade | PlAdd | PlRem | PlSel | PlMisc | PlListOpts
             | PlResize | PlScroll | PlScrollUp | PlScrollDown | PlTrack(_) | PlMiniPrev
             | PlMiniPlay | PlMiniPause | PlMiniStop | PlMiniNext | PlMiniEject => {
@@ -318,6 +329,9 @@ pub enum Action {
     Minimize,
     /// Window visibility, size or scale changed: re-sync the OS windows.
     Relayout,
+    /// This window went into or out of windowshade mode: resize it, keeping the windows docked
+    /// below it docked.
+    Reshade(WindowKind),
     /// Eject: ask for files to play. They replace the playlist (see [`Ui::clear_playlist`]).
     OpenFiles,
     /// Ask for a folder whose files replace the playlist.
@@ -368,6 +382,8 @@ pub enum KeyCmd {
     ZoomReset,
     ToggleEq,
     TogglePl,
+    /// Windowshade mode on or off for this window.
+    ToggleShade(WindowKind),
     Prev,
     Play,
     Pause,
@@ -500,6 +516,10 @@ pub struct Ui {
     pub repeat: bool,
     pub eq_open: bool,
     pub pl_open: bool,
+    /// Windowshade mode: the window is collapsed to a bar 14 pixels high.
+    pub main_shade: bool,
+    pub eq_shade: bool,
+    pub pl_shade: bool,
     pub eq_on: bool,
     pub eq_auto: bool,
     pub preamp: f32,
@@ -547,7 +567,9 @@ pub struct Ui {
     pub marquee_override: Option<String>,
     pub start: Instant,
     last_click: Option<(Control, Instant)>,
-    /// The current track's marquee text, rebuilt only when the track changes.
+    /// "N. Title" for the current track, rebuilt only when the track changes.
+    title_text: String,
+    /// The current track's marquee text: `title_text` and the length.
     title_chars: Vec<char>,
     title_scrolls: bool,
 }
@@ -595,6 +617,9 @@ impl Ui {
             repeat: false,
             eq_open: true,
             pl_open: true,
+            main_shade: false,
+            eq_shade: false,
+            pl_shade: false,
             eq_on: true,
             eq_auto: false,
             preamp: 0.5,
@@ -626,6 +651,7 @@ impl Ui {
             marquee_override: None,
             start: now,
             last_click: None,
+            title_text: String::new(),
             title_chars: Vec::new(),
             title_scrolls: false,
         }
@@ -668,14 +694,44 @@ impl Ui {
 
     // ----- windows ------------------------------------------------------------------------
 
-    /// Size of a window's canvas in skin pixels.
+    /// Size of a window's canvas in skin pixels. A window in windowshade mode keeps its width.
     #[must_use]
     pub fn window_size(&self, kind: WindowKind) -> (i32, i32) {
-        match kind {
-            WindowKind::Main => (m::W, m::H),
-            WindowKind::Eq => (e::W, e::H),
-            WindowKind::Playlist => self.pl_size,
+        self.window_size_shaded(kind, self.is_shaded(kind))
+    }
+
+    /// The size window `kind` has in windowshade mode, or out of it.
+    #[must_use]
+    pub fn window_size_shaded(&self, kind: WindowKind, shaded: bool) -> (i32, i32) {
+        match (kind, shaded) {
+            (WindowKind::Main, false) => (m::W, m::H),
+            (WindowKind::Main, true) => (m::W, ms::H),
+            (WindowKind::Eq, false) => (e::W, e::H),
+            (WindowKind::Eq, true) => (e::W, es::H),
+            (WindowKind::Playlist, false) => self.pl_size,
+            (WindowKind::Playlist, true) => (self.pl_size.0, ps::H),
         }
+    }
+
+    /// Whether the window is in windowshade mode, collapsed to a bar.
+    #[must_use]
+    pub fn is_shaded(&self, kind: WindowKind) -> bool {
+        match kind {
+            WindowKind::Main => self.main_shade,
+            WindowKind::Eq => self.eq_shade,
+            WindowKind::Playlist => self.pl_shade,
+        }
+    }
+
+    /// Collapse a window to its windowshade bar, or open it out again.
+    fn toggle_shade(&mut self, kind: WindowKind, actions: &mut Vec<Action>) {
+        let shade = match kind {
+            WindowKind::Main => &mut self.main_shade,
+            WindowKind::Eq => &mut self.eq_shade,
+            WindowKind::Playlist => &mut self.pl_shade,
+        };
+        *shade = !*shade;
+        actions.push(Action::Reshade(kind));
     }
 
     #[must_use]
@@ -699,18 +755,16 @@ impl Ui {
     /// The classic stacked arrangement, used when composing all windows into one canvas.
     #[must_use]
     pub fn layout(&self) -> Layout {
-        let main = Rect::new(0, 0, m::W, m::H);
-        let mut y = m::H;
-        let eq = self.eq_open.then(|| {
-            let r = Rect::new(0, y, e::W, e::H);
-            y += e::H;
+        let mut y = 0;
+        let mut place = |kind| {
+            let (w, h) = self.window_size(kind);
+            let r = Rect::new(0, y, w, h);
+            y += h;
             r
-        });
-        let pl = self.pl_open.then(|| {
-            let r = Rect::new(0, y, self.pl_size.0, self.pl_size.1);
-            y += self.pl_size.1;
-            r
-        });
+        };
+        let main = place(WindowKind::Main);
+        let eq = self.eq_open.then(|| place(WindowKind::Eq));
+        let pl = self.pl_open.then(|| place(WindowKind::Playlist));
         let w = if self.pl_open {
             m::W.max(self.pl_size.0)
         } else {
@@ -1303,17 +1357,23 @@ impl Ui {
 
     // ----- text ---------------------------------------------------------------------------
 
-    /// Rebuild the cached marquee text (`"N. Title (m:ss)"`, padded when it scrolls).
+    /// Rebuild the cached titles: `"N. Title"`, and the marquee's `"N. Title (m:ss)"`, padded
+    /// when it scrolls.
     fn refresh_title(&mut self) {
         if self.orphan.is_some() {
             // The track playing has left the playlist; its title stays as it was.
             return;
         }
+        self.title_text.clear();
         self.title_chars.clear();
         self.title_scrolls = false;
-        let Some(t) = self.track() else { return };
+        // Without an orphan, the current track is the current entry.
+        let Some(t) = self.tracks.get(self.current) else {
+            return;
+        };
         let mut s = String::with_capacity(64);
         push_fmt(&mut s, format_args!("{}. {}", self.current + 1, t.title));
+        self.title_text.clone_from(&s);
         if let Some(secs) = t.seconds {
             s.push_str(" (");
             write_time(&mut s, secs);
@@ -1324,6 +1384,13 @@ impl Ui {
             s.push_str(MARQUEE_SEPARATOR);
         }
         self.title_chars.extend(s.chars());
+    }
+
+    /// The current track's number in the playlist and its title ("3. Artist - Title"), as the
+    /// playlist's windowshade bar shows them. Empty with an empty playlist.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title_text
     }
 
     /// The characters the marquee shows for the current track at `now`, without allocating.
@@ -1377,23 +1444,8 @@ impl Ui {
         now: Instant,
     ) {
         let (w, h) = self.window_size(kind);
-        let r = Rect::new(0, 0, w, h);
         c.clear([0, 0, 0, 0]);
-        match kind {
-            WindowKind::Main => {
-                main_window::draw(self, c, skin, r, now);
-                if let Some(mask) = &skin.main_mask {
-                    apply_mask(c, r, mask);
-                }
-            }
-            WindowKind::Eq => {
-                eq_window::draw(self, c, skin, r, now);
-                if let Some(mask) = &skin.eq_mask {
-                    apply_mask(c, r, mask);
-                }
-            }
-            WindowKind::Playlist => playlist_window::draw(self, c, skin, font, r, now),
-        }
+        self.draw_at(kind, c, skin, font, Rect::new(0, 0, w, h), now);
     }
 
     /// Advance one frame and draw every open window stacked into a single canvas.
@@ -1407,18 +1459,54 @@ impl Ui {
         self.tick(now);
         let lay = self.layout();
         c.clear([0, 0, 0, 0]);
-        main_window::draw(self, c, skin, lay.main, now);
-        if let Some(mask) = &skin.main_mask {
-            apply_mask(c, lay.main, mask);
-        }
+        self.draw_at(WindowKind::Main, c, skin, font, lay.main, now);
         if let Some(r) = lay.eq {
-            eq_window::draw(self, c, skin, r, now);
-            if let Some(mask) = &skin.eq_mask {
-                apply_mask(c, r, mask);
-            }
+            self.draw_at(WindowKind::Eq, c, skin, font, r, now);
         }
         if let Some(r) = lay.pl {
-            playlist_window::draw(self, c, skin, font, r, now);
+            self.draw_at(WindowKind::Playlist, c, skin, font, r, now);
+        }
+    }
+
+    /// Draw window `kind`, or its windowshade bar, into `r`, cut to the skin's shape for it.
+    fn draw_at(
+        &self,
+        kind: WindowKind,
+        c: &mut Image,
+        skin: &Skin,
+        font: Option<&TtfFont>,
+        r: Rect,
+        now: Instant,
+    ) {
+        let mask = match (kind, self.is_shaded(kind)) {
+            (WindowKind::Main, false) => {
+                main_window::draw(self, c, skin, r, now);
+                skin.main_mask.as_ref()
+            }
+            (WindowKind::Main, true) => {
+                main_window::draw_shade(self, c, skin, r, now);
+                skin.main_shade_mask.as_ref()
+            }
+            (WindowKind::Eq, false) => {
+                eq_window::draw(self, c, skin, r, now);
+                skin.eq_mask.as_ref()
+            }
+            (WindowKind::Eq, true) => {
+                eq_window::draw_shade(self, c, skin, r);
+                skin.eq_shade_mask.as_ref()
+            }
+            // region.txt has no section for the playlist.
+            (WindowKind::Playlist, false) => {
+                playlist_window::draw(self, c, skin, font, r, now);
+                None
+            }
+            (WindowKind::Playlist, true) => {
+                playlist_window::draw_shade(self, c, skin, r);
+                None
+            }
+        };
+        if let Some(mask) = mask {
+            apply_mask(c, r, mask);
         }
     }
 
@@ -1431,11 +1519,62 @@ impl Ui {
         if !Rect::new(0, 0, w, h).contains(x, y) {
             return None;
         }
-        match kind {
-            WindowKind::Main => Self::hit_main(x, y),
-            WindowKind::Eq => Self::hit_eq(x, y),
-            WindowKind::Playlist => self.hit_pl(x, y, w, h),
+        match (kind, self.is_shaded(kind)) {
+            (WindowKind::Main, false) => Self::hit_main(x, y),
+            (WindowKind::Main, true) => Some(Self::hit_main_shade(x, y)),
+            (WindowKind::Eq, false) => Self::hit_eq(x, y),
+            (WindowKind::Eq, true) => Some(Self::hit_eq_shade(x, y)),
+            (WindowKind::Playlist, false) => self.hit_pl(x, y, w, h),
+            (WindowKind::Playlist, true) => Some(Self::hit_pl_shade(x, y, w)),
         }
+    }
+
+    /// The main window's windowshade bar. Whatever is not a control there drags the window,
+    /// as with the other two bars.
+    fn hit_main_shade(x: i32, y: i32) -> Control {
+        use Control::*;
+        const TABLE: &[(Rect, Control)] = &[
+            (m::OPTIONS, MainOptions),
+            (m::MINIMIZE, MainMinimize),
+            (m::SHADE, MainShade),
+            (m::CLOSE, MainClose),
+            (ms::VIS, Control::Vis),
+            (ms::TIME, TimeDisplay),
+            (ms::PREV, Prev),
+            (ms::PLAY, Play),
+            (ms::PAUSE, Pause),
+            (ms::STOP, Stop),
+            (ms::NEXT, Next),
+            (ms::EJECT, Eject),
+            (ms::POSBAR, PosBar),
+        ];
+        let hit = TABLE.iter().find(|(r, _)| r.contains(x, y));
+        hit.map_or(MainTitle, |(_, c)| *c)
+    }
+
+    fn hit_eq_shade(x: i32, y: i32) -> Control {
+        use Control::*;
+        const TABLE: &[(Rect, Control)] = &[
+            (e::CLOSE, EqClose),
+            (e::SHADE, EqShade),
+            (es::VOLUME, EqVolume),
+            (es::BALANCE, EqBalance),
+        ];
+        let hit = TABLE.iter().find(|(r, _)| r.contains(x, y));
+        hit.map_or(EqTitle, |(_, c)| *c)
+    }
+
+    /// The playlist's windowshade bar, `w` wide: its grip only changes the width.
+    fn hit_pl_shade(x: i32, y: i32, w: i32) -> Control {
+        use Control::*;
+        let button = |from_right: i32| Rect::new(w - from_right, p::TITLE_BTN_Y, 9, 9);
+        let table = [
+            (button(p::CLOSE_FROM_RIGHT), PlClose),
+            (button(p::SHADE_FROM_RIGHT), PlShade),
+            (button(ps::RESIZE_FROM_RIGHT), PlResize),
+        ];
+        let hit = table.iter().find(|(r, _)| r.contains(x, y));
+        hit.map_or(PlTitle, |(_, c)| *c)
     }
 
     fn hit_main(x: i32, y: i32) -> Option<Control> {
@@ -1607,15 +1746,23 @@ impl Ui {
         let mut text = self.marquee_override.take().unwrap_or_default();
         text.clear();
         match slider {
-            Slider::Volume => {
-                self.volume = Self::h_fraction(m::VOLUME, m::SLIDER_THUMB_W, lx);
+            Slider::Volume | Slider::EqVolume => {
+                self.volume = if slider == Slider::Volume {
+                    Self::h_fraction(m::VOLUME, m::SLIDER_THUMB_W, lx)
+                } else {
+                    Self::h_fraction(es::VOLUME, es::THUMB_W, lx)
+                };
                 push_fmt(
                     &mut text,
                     format_args!("Volume: {}%", (self.volume * 100.0).round()),
                 );
             }
-            Slider::Balance => {
-                let v = Self::h_fraction(m::BALANCE, m::SLIDER_THUMB_W, lx);
+            Slider::Balance | Slider::EqBalance => {
+                let v = if slider == Slider::Balance {
+                    Self::h_fraction(m::BALANCE, m::SLIDER_THUMB_W, lx)
+                } else {
+                    Self::h_fraction(es::BALANCE, es::THUMB_W, lx)
+                };
                 let mut b = (v * 2.0 - 1.0).clamp(-1.0, 1.0);
                 if b.abs() < 0.08 {
                     b = 0.0;
@@ -1631,7 +1778,11 @@ impl Ui {
             }
             Slider::PosBar => {
                 // Winamp seeks when the thumb is let go; until then only the thumb moves.
-                let pos = Self::h_fraction(m::POSBAR, m::POSBAR_THUMB_W, lx);
+                let pos = if self.main_shade {
+                    Self::h_fraction(ms::POSBAR, ms::POSBAR_THUMB_W, lx)
+                } else {
+                    Self::h_fraction(m::POSBAR, m::POSBAR_THUMB_W, lx)
+                };
                 let len = self.track_len();
                 let secs = pos * len;
                 self.seek_to = Some(secs);
@@ -1713,6 +1864,8 @@ impl Ui {
         let Some(ctl) = self.hit(kind, x, y) else {
             return actions;
         };
+        let double = matches!(self.last_click,
+            Some((last, t)) if last == ctl && now.saturating_duration_since(t).as_millis() < DOUBLE_CLICK_MS);
         if let Some(slider) = ctl.slider() {
             if slider == Slider::PosBar && !self.can_seek() {
                 return actions;
@@ -1721,17 +1874,20 @@ impl Ui {
             self.drag_slider(slider, x, y);
         } else {
             match ctl {
+                // A double-click on a title bar collapses the window to its windowshade bar, or
+                // opens it out again. A third click starts afresh.
+                MainTitle | EqTitle | PlTitle if double => {
+                    self.toggle_shade(kind, &mut actions);
+                    self.last_click = None;
+                    return actions;
+                }
                 MainTitle | EqTitle | PlTitle => actions.push(Action::DragWindow(kind)),
                 PlScroll => {
                     self.pressed = Some(ctl);
                     self.drag_scroll(y);
                 }
                 PlResize => actions.push(Action::ResizePlaylist),
-                PlTrack(i) => {
-                    let double = matches!(self.last_click,
-                        Some((PlTrack(j), t)) if j == i && now.saturating_duration_since(t).as_millis() < DOUBLE_CLICK_MS);
-                    self.click_row(i, y, double, &mut actions);
-                }
+                PlTrack(i) => self.click_row(i, y, double, &mut actions),
                 // Every other control is a button, the playlist's menu buttons included: show
                 // it pressed (or its menu) until release.
                 _ => self.pressed = Some(ctl),
@@ -1813,9 +1969,11 @@ impl Ui {
 
     /// The mouse wheel turned `steps` notches over window `kind`, positive away from the user:
     /// the playlist scrolls a row per step (up for positive), and over the main window the
-    /// volume moves a step, as Up and Down do.
+    /// volume moves a step, as Up and Down do. The playlist's windowshade bar has no list to
+    /// scroll.
     pub fn wheel(&mut self, kind: WindowKind, steps: i32) {
         match kind {
+            WindowKind::Playlist if self.pl_shade => {}
             WindowKind::Playlist => {
                 let rows = usize::try_from(steps.unsigned_abs()).unwrap_or(usize::MAX);
                 self.pl_scroll = if steps > 0 {
@@ -1863,11 +2021,15 @@ impl Ui {
                 }
             }
             // Other drags finish silently.
-            Volume | Balance | EqPreamp | EqBand(_) | PlScroll | PlResize => {}
+            Volume | Balance | EqPreamp | EqBand(_) | EqVolume | EqBalance | PlScroll
+            | PlResize => {}
             // Releasing outside the pressed button cancels it, as in Win32.
             _ if !still_over => {}
             MainClose => actions.push(Action::Close),
             MainMinimize => actions.push(Action::Minimize),
+            MainShade => self.toggle_shade(WindowKind::Main, &mut actions),
+            EqShade => self.toggle_shade(WindowKind::Eq, &mut actions),
+            PlShade => self.toggle_shade(WindowKind::Playlist, &mut actions),
             ClutterD => {
                 self.double_size = !self.double_size;
                 actions.push(Action::Relayout);
@@ -1907,10 +2069,10 @@ impl Ui {
             ClutterV => actions.push(Self::menu(MenuKind::Vis, kind, None)),
             EqPresets => actions.push(Self::menu(MenuKind::EqPresets, kind, Some(e::PRESETS))),
             ClutterA => self.toggle_always_on_top(&mut actions),
-            // Press-only visuals: the file info dialog and window shading are not implemented.
-            // The playlist's menu buttons were handled above.
-            MainTitle | EqTitle | PlTitle | MainShade | ClutterI | EqShade | PlShade | PlAdd
-            | PlRem | PlSel | PlMisc | PlListOpts => {}
+            // Press-only visuals: the file info dialog is not implemented. The playlist's menu
+            // buttons were handled above.
+            MainTitle | EqTitle | PlTitle | ClutterI | PlAdd | PlRem | PlSel | PlMisc
+            | PlListOpts => {}
         }
         actions
     }
@@ -2014,6 +2176,7 @@ impl Ui {
                 self.pl_open = !self.pl_open;
                 actions.push(Action::Relayout);
             }
+            KeyCmd::ToggleShade(kind) => self.toggle_shade(kind, &mut actions),
             KeyCmd::Prev => self.prev(&mut actions),
             KeyCmd::Play => self.play(&mut actions),
             KeyCmd::Pause => self.pause(&mut actions),
@@ -2670,6 +2833,258 @@ mod tests {
         };
         assert!(differs(m::CLUTTER_A) && differs(m::CLUTTER_D));
         assert!(!differs(m::CLUTTER_O));
+    }
+
+    #[test]
+    fn windowshade_collapses_each_window_to_a_bar_keeping_its_width() {
+        let mut ui = Ui::new();
+        assert!(ui.resize_playlist((300, 145)));
+        for kind in WindowKind::ALL {
+            assert_eq!(
+                ui.key(KeyCmd::ToggleShade(kind)),
+                vec![Action::Reshade(kind)]
+            );
+            assert!(ui.is_shaded(kind));
+        }
+        assert_eq!(ui.window_size(Main), (275, 14));
+        assert_eq!(ui.window_size(Eq), (275, 14));
+        assert_eq!(ui.window_size(Playlist), (300, 14));
+        assert_eq!(ui.pl_size, (300, 145), "the height it opens out to is kept");
+        let l = ui.layout();
+        assert_eq!(
+            (l.eq.unwrap().y, l.pl.unwrap().y, l.size),
+            (14, 28, (300, 42))
+        );
+        let _ = ui.key(KeyCmd::ToggleShade(Playlist));
+        assert_eq!(ui.window_size(Playlist), (300, 145));
+        assert_eq!(ui.window_size_shaded(Main, false), (275, 116));
+    }
+
+    #[test]
+    fn shade_buttons_and_title_double_clicks_toggle_windowshade() {
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        let later = |ms| now + Duration::from_millis(ms);
+        assert_eq!(click(&mut ui, Main, m::SHADE), vec![Action::Reshade(Main)]);
+        assert!(ui.main_shade);
+        // The bar's shade button opens the window out again.
+        assert_eq!(click(&mut ui, Main, m::SHADE), vec![Action::Reshade(Main)]);
+        assert!(!ui.main_shade);
+        assert_eq!(click(&mut ui, Eq, e::SHADE), vec![Action::Reshade(Eq)]);
+        assert_eq!(click(&mut ui, Eq, e::SHADE), vec![Action::Reshade(Eq)]);
+        let pl_shade = Rect::new(275 - p::SHADE_FROM_RIGHT, p::TITLE_BTN_Y, 9, 9);
+        assert_eq!(
+            click(&mut ui, Playlist, pl_shade),
+            vec![Action::Reshade(Playlist)]
+        );
+        assert!(ui.pl_shade);
+        assert_eq!(
+            click(&mut ui, Playlist, pl_shade),
+            vec![Action::Reshade(Playlist)]
+        );
+
+        // A single click on a title bar drags; a second soon after toggles, a third drags.
+        assert_eq!(
+            ui.mouse_down(Main, 100, 5, now),
+            vec![Action::DragWindow(Main)]
+        );
+        let _ = ui.mouse_up(Main, 100, 5);
+        assert_eq!(
+            ui.mouse_down(Main, 100, 5, later(200)),
+            vec![Action::Reshade(Main)]
+        );
+        assert!(ui.main_shade);
+        assert!(ui.mouse_up(Main, 100, 5).is_empty());
+        // Anywhere on a bar that is not a control counts as its title bar.
+        assert_eq!(
+            ui.mouse_down(Main, 30, 7, later(300)),
+            vec![Action::DragWindow(Main)]
+        );
+        let _ = ui.mouse_up(Main, 30, 7);
+        assert_eq!(
+            ui.mouse_down(Main, 30, 7, later(350)),
+            vec![Action::Reshade(Main)]
+        );
+        assert!(!ui.main_shade);
+        // Too slow.
+        let _ = ui.mouse_down(Eq, 100, 5, later(1000));
+        let _ = ui.mouse_up(Eq, 100, 5);
+        let actions = ui.mouse_down(Eq, 100, 5, later(1000 + DOUBLE_CLICK_MS as u64));
+        assert_eq!(actions, vec![Action::DragWindow(Eq)]);
+    }
+
+    #[test]
+    fn hit_testing_the_windowshade_bars() {
+        let mut ui = Ui::demo();
+        ui.main_shade = true;
+        ui.eq_shade = true;
+        ui.pl_shade = true;
+        let at = |ui: &Ui, kind, r: Rect| ui.hit(kind, r.x + 1, r.y + 1);
+        assert_eq!(at(&ui, Main, ms::PLAY), Some(Control::Play));
+        assert_eq!(at(&ui, Main, ms::EJECT), Some(Control::Eject));
+        assert_eq!(at(&ui, Main, ms::POSBAR), Some(Control::PosBar));
+        assert_eq!(at(&ui, Main, ms::TIME), Some(Control::TimeDisplay));
+        assert_eq!(at(&ui, Main, ms::VIS), Some(Control::Vis));
+        assert_eq!(at(&ui, Main, m::OPTIONS), Some(Control::MainOptions));
+        assert_eq!(at(&ui, Main, m::SHADE), Some(Control::MainShade));
+        assert_eq!(ui.hit(Main, 40, 7), Some(Control::MainTitle));
+        assert_eq!(ui.hit(Main, 40, 50), None, "below the bar");
+        assert_eq!(at(&ui, Eq, es::VOLUME), Some(Control::EqVolume));
+        assert_eq!(at(&ui, Eq, es::BALANCE), Some(Control::EqBalance));
+        assert_eq!(at(&ui, Eq, e::CLOSE), Some(Control::EqClose));
+        assert_eq!(ui.hit(Eq, 30, 7), Some(Control::EqTitle));
+        assert_eq!(ui.hit(Playlist, 275 - 25, 5), Some(Control::PlResize));
+        assert_eq!(ui.hit(Playlist, 275 - 17, 5), Some(Control::PlShade));
+        assert_eq!(ui.hit(Playlist, 275 - 7, 5), Some(Control::PlClose));
+        assert_eq!(ui.hit(Playlist, 100, 5), Some(Control::PlTitle));
+        // The right-click over the small visualizer opens its menu.
+        assert_eq!(
+            ui.context_menu(Main, ms::VIS.x + 1, ms::VIS.y + 1),
+            menu(MenuKind::Vis, Main, None)
+        );
+    }
+
+    #[test]
+    fn the_windowshade_bars_play_seek_and_set_the_volume() {
+        let mut ui = Ui::demo(); // the first track is 5 seconds long
+        ui.main_shade = true;
+        ui.eq_shade = true;
+        assert_eq!(click(&mut ui, Main, ms::STOP), vec![audio(Transport::Stop)]);
+        assert_eq!(
+            click(&mut ui, Main, ms::PLAY),
+            vec![audio(Transport::Open(0))]
+        );
+        let _ = click(&mut ui, Main, ms::TIME);
+        assert!(ui.remaining_mode);
+        // The position bar seeks when let go.
+        let bar = ms::POSBAR;
+        let _ = ui.mouse_down(Main, bar.x + 1, bar.y + 2, Instant::now());
+        let actions = ui.mouse_up(Main, bar.right(), bar.y + 2);
+        assert_eq!(actions, vec![audio(Transport::Seek(0.0))]);
+        let _ = ui.mouse_down(Main, bar.x + 1, bar.y + 2, Instant::now());
+        let _ = ui.mouse_move(Main, bar.right(), bar.y + 2);
+        assert_eq!(
+            ui.mouse_up(Main, bar.right(), bar.y + 2),
+            vec![audio(Transport::Seek(5.0))]
+        );
+        // The equalizer's bar sets the volume and balance, following the pointer in its window.
+        let vol = es::VOLUME;
+        let _ = ui.mouse_down(Eq, vol.x, vol.y + 2, Instant::now());
+        assert!(ui.volume < 0.01);
+        let _ = ui.mouse_move(Eq, vol.right(), vol.y + 2);
+        assert!(ui.volume > 0.99);
+        assert_eq!(ui.marquee_override.as_deref(), Some("Volume: 100%"));
+        assert!(ui.mouse_up(Eq, vol.right(), vol.y + 2).is_empty());
+        let bal = es::BALANCE;
+        let _ = ui.mouse_down(Eq, bal.x, bal.y + 2, Instant::now());
+        assert_eq!(ui.balance, -1.0);
+        let _ = ui.mouse_move(Eq, bal.x + bal.w / 2, bal.y + 2);
+        assert_eq!(ui.balance, 0.0, "snaps to the centre");
+        let _ = ui.mouse_up(Eq, bal.x + bal.w / 2, bal.y + 2);
+        // The shaded playlist has no list for the wheel to scroll.
+        ui.pl_shade = true;
+        ui.pl_scroll = 2;
+        ui.wheel(Playlist, -1);
+        assert_eq!(ui.pl_scroll, 2);
+    }
+
+    #[test]
+    fn windowshade_bars_draw_their_own_pieces_and_shapes() {
+        let mut skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut ui = Ui::demo();
+        ui.main_shade = true;
+        ui.eq_shade = true;
+        ui.pl_shade = true;
+        let now = Instant::now();
+        let draw = |ui: &Ui, skin: &Skin, kind| {
+            let (w, h) = ui.window_size(kind);
+            let mut c = Image::new(w, h);
+            ui.draw_window(kind, &mut c, skin, None, now);
+            c
+        };
+        for kind in WindowKind::ALL {
+            let c = draw(&ui, &skin, kind);
+            assert_eq!(c.h, 14);
+            assert!(
+                c.data.chunks_exact(4).all(|px| px[3] == 255),
+                "{kind:?} opaque"
+            );
+        }
+        // The equalizer's bar, against the inactive one from eq_ex.bmp.
+        ui.active = false;
+        let inactive = draw(&ui, &skin, Eq);
+        let ex = skin.sheet(crate::sprites::Sheet::EqEx);
+        assert_eq!(inactive.get(30, 7), ex.get(30, 15 + 7));
+        ui.active = true;
+        // [WindowShade] and [EqualizerWS] cut the bars to shape; [Normal] does not apply.
+        let regions = crate::skin::parse_region(
+            "[Normal]\nNumPoints=4\nPointList=0,0,9,0,9,9,0,9\n\
+             [WindowShade]\nNumPoints=4\nPointList=0,0,275,0,275,13,0,13\n\
+             [EqualizerWS]\nNumPoints=4\nPointList=1,0,275,0,275,14,1,14\n",
+        );
+        let mask = |polys: Option<&crate::skin::Polygons>| {
+            polys.map(|p| crate::skin::region_mask(p, 275, 14))
+        };
+        skin.main_shade_mask = mask(regions.windowshade.as_ref());
+        skin.eq_shade_mask = mask(regions.equalizer_ws.as_ref());
+        skin.main_mask = Some(crate::skin::region_mask(
+            regions.normal.as_ref().unwrap(),
+            275,
+            116,
+        ));
+        let main = draw(&ui, &skin, Main);
+        assert_eq!(main.get(100, 13)[3], 0, "the last row is cut away");
+        assert_eq!(main.get(100, 12)[3], 255, "the rest of the bar is not");
+        let eq = draw(&ui, &skin, Eq);
+        assert_eq!((eq.get(0, 5)[3], eq.get(1, 5)[3]), (0, 255));
+    }
+
+    #[test]
+    fn per_window_drawing_matches_the_stacked_composition_in_windowshade() {
+        let skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut ui = Ui::demo();
+        ui.main_shade = true;
+        ui.pl_shade = true;
+        let now = Instant::now();
+        ui.tick(now);
+        let lay = ui.layout();
+        let mut stacked = Image::new(lay.size.0, lay.size.1);
+        ui.draw_stacked(&mut stacked, &skin, None, now);
+        for (kind, origin) in [
+            (Main, lay.main),
+            (Eq, lay.eq.unwrap()),
+            (Playlist, lay.pl.unwrap()),
+        ] {
+            let (w, h) = ui.window_size(kind);
+            let mut c = Image::new(w, h);
+            ui.draw_window(kind, &mut c, &skin, None, now);
+            for y in 0..h {
+                for x in 0..w {
+                    if kind == Main && ms::VIS.contains(x, y) {
+                        continue; // time-seeded
+                    }
+                    assert_eq!(
+                        c.get(x, y),
+                        stacked.get(origin.x + x, origin.y + y),
+                        "{kind:?} pixel ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_playlist_bar_names_the_current_entry() {
+        let mut ui = Ui::demo();
+        assert_eq!(ui.title(), "1. DJ Mike Llama - Llama Whippin' Intro");
+        ui.jump(2, &mut Vec::new());
+        assert_eq!(ui.title(), "3. Justin F. - Rolling Llama (Radio Edit)");
+        // The entry playing is removed: it plays on under its old name.
+        ui.selected = vec![false, false, true, false, false, false, false];
+        let _ = ui.key(KeyCmd::List(ListCmd::RemoveSelected));
+        assert_eq!(ui.title(), "3. Justin F. - Rolling Llama (Radio Edit)");
+        ui.clear_playlist(&mut Vec::new());
+        assert_eq!(ui.title(), "");
     }
 
     #[test]

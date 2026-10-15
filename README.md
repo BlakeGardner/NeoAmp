@@ -26,7 +26,8 @@ program does the same:
   `pledit.txt` and `region.txt`, and falls back per sheet to the embedded
   base skin for anything a skin leaves out.
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
-  three windows; `src/ui.rs` holds state, hit testing and input.
+  three windows and their windowshade bars; `src/ui.rs` holds state, hit
+  testing and input.
 - `src/app.rs` runs one borderless `winit` window per NeoAmp window, presents
   each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
   docking. `src/upscale.rs` draws the framebuffer over the whole window (see
@@ -61,7 +62,9 @@ equalizer and playlist leave on their own. Windows snap to each other's
 edges and to the screen edges when they come within 10 pixels, like the
 original. Resizing the playlist from its grip leaves the other windows where
 they are, even ones docked to it, as Webamp does (how Winamp itself behaved
-here is undocumented). `src/dock.rs` holds that geometry.
+here is undocumented). Shading a window (see [Windowshade](#windowshade)) is
+different: the windows docked below it move up or down with its bottom edge.
+`src/dock.rs` holds that geometry.
 
 Docking needs to read and set window positions, which Wayland forbids, so
 the app prefers the X11 backend (XWayland on a Wayland desktop) whenever
@@ -131,6 +134,40 @@ colour and only its edges blend over one screen pixel. Plain nearest-neighbour
 at those scales would make some rows and columns a pixel wider than others,
 which garbles the bitmap fonts. Windows are sized to whole screen pixels and the
 image is stretched to fill them exactly, so docked windows meet without gaps.
+
+## Windowshade
+
+Each window can collapse to a bar 14 pixels high, as in Winamp: click the
+shade button beside its close button, or double-click its title bar. In the
+bar, the same button or a double-click anywhere that is not a control opens
+it out again. **Ctrl+W** shades the main window, or the playlist while it has
+the focus. The equalizer has no key, as in Winamp.
+
+- **Main window:** the options, minimize and close buttons, a small
+  visualizer (click it to change the mode, right-click for its menu), the
+  time (click it for elapsed or remaining), previous, play, pause, stop, next
+  and eject, and a position bar that seeks when let go. The time and the
+  position bar are blank while stopped, and the time blinks while paused.
+- **Equalizer:** the volume and balance sliders.
+- **Playlist:** the current entry's number, title and length; a title too
+  long for the bar ends in "…". The grip at its right changes only the width,
+  in the same 25-pixel steps, and the playlist opens out to the height it had.
+
+Windows docked below a window follow its bottom edge as it is shaded or
+opened out, so a stack of windows stays a stack, as in Webamp. A closed
+window that was docked below reopens docked to the bar. Which windows are
+shaded is saved with the other settings.
+
+The bars come from the skin's `titlebar.bmp`, `eq_ex.bmp` and `pledit.bmp`.
+A skin's `region.txt` can shape the main window's bar (`[WindowShade]`) and
+the equalizer's (`[EqualizerWS]`); `[Normal]` and `[Equalizer]` apply only to
+the full windows. A skin without `eq_ex.bmp` gets the built-in skin's
+equalizer bar, but keeps its own shade button when pressed in the full window,
+as Webamp does, since the built-in one would not match.
+
+Where the platforms differ: on pure Wayland, which lets no application move
+its windows, the windows docked below stay where they are and nothing
+follows. On macOS, ⌘W shades a window rather than closing it.
 
 ## Menus
 
@@ -311,10 +348,10 @@ the menus, at the same size, in Tahoma where the system has it.
 
 NeoAmp starts the way it was left: volume, balance, the equalizer, shuffle,
 repeat, the time display, the visualizer and its options, which windows are
-open and where, the playlist's size, the skin, the zoom, double size and
-always on top, and the playlist with its current entry. The playlist comes
-back stopped, as in Winamp. NeoAmp saves within a couple of seconds of a change
-and again on exit, so a crash loses little.
+open, where and which are shaded, the playlist's size, the skin, the zoom,
+double size and always on top, and the playlist with its current entry. The
+playlist comes back stopped, as in Winamp. NeoAmp saves within a couple of
+seconds of a change and again on exit, so a crash loses little.
 
 Two files share one folder, with the skins and presets the menus list:
 
@@ -439,6 +476,7 @@ cargo run --release -- --screenshot shot.png
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
 | Equalizer / Playlist windows | EQ / PL buttons, window close buttons | Alt+G / Alt+E |
+| Windowshade (collapse a window to a bar, or open it out) | the shade button beside a window's close button, or double-click its title bar | Ctrl+W: the main window, or the playlist (playlist) |
 | Main menu | the options button at the left of the title bar, or right-click | Alt+F |
 | Options menu | the `O` in the clutter bar | |
 | Always on top | the `A` in the clutter bar | Ctrl+A (but in the playlist, select all) |
@@ -452,10 +490,12 @@ cargo run --release -- --screenshot shot.png
 | Visualizer styles and falloff | the `V` in the clutter bar, or right-click the visualizer | |
 | Skins | Skins in the main menu | Alt+S |
 | Move a window (docked ones follow the main window) | drag its title bar | |
-| Resize the playlist | drag the grip in its bottom-right corner | |
+| Resize the playlist | drag the grip in its bottom-right corner (in its windowshade bar, the grip beside the shade button changes the width) | |
 | Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS, let go over an item | |
 
 Keys marked "(playlist)" work while the playlist window has the focus.
+[docs/SHORTCUTS.md](docs/SHORTCUTS.md) lists every key, including those of the
+menus and the Jump to file dialog.
 
 On macOS, Cmd takes Ctrl's place in every shortcut above (Cmd+A, Cmd+Shift+1,
 ...) and Option is Alt; the menus show them as ⌘A, ⇧⌘1, ⌥E. There are two
@@ -466,11 +506,14 @@ differences on macOS:
 - Delete is the forward-delete key (fn+Delete on a laptop keyboard). The key
   labelled "delete" on a Mac is Backspace, which removes nothing.
 
+Cmd+W shades a window, as Ctrl+W does in Winamp, rather than closing it as in
+most Mac apps.
+
 ## Scope and limitations
 
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
-- Windowshade mode, the file info dialog, cursors (`.cur`) and the minibrowser
-  window are not implemented. The menus leave out what NeoAmp cannot do yet
+- The file info dialog, cursors (`.cur`) and the minibrowser window are not
+  implemented. The menus leave out what NeoAmp cannot do yet
   (Play Location, Preferences and the like) rather than grey it.
 - Internet radio is not supported yet: ADD > URL does nothing, Winamp's
   Ctrl+L (open a URL) is not implemented, and stream URLs in playlist files

@@ -1,11 +1,11 @@
-//! Drawing of the 275x116 main window.
+//! Drawing of the 275x116 main window, and of its 275x14 windowshade bar.
 
 use std::time::Instant;
 
 use crate::canvas::{Image, Rect};
 use crate::font::{draw_bitmap_chars, draw_bitmap_text};
 use crate::skin::Skin;
-use crate::sprites::{Sheet, digits, main as m};
+use crate::sprites::{Sheet, Third, digits, main as m, main_shade as ms};
 use crate::ui::{Control, PlayState, Ui, push_fmt};
 
 pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
@@ -272,6 +272,68 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
         ox + m::PL_BTN.x,
         oy + m::PL_BTN.y,
     );
+}
+
+/// Draw the main window in windowshade mode: the title bar's buttons, a small visualizer,
+/// the time in the text font, transport buttons and a position bar, all in one bar.
+pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
+    let (ox, oy) = (r.x, r.y);
+    let bounds = c.bounds();
+    let pressed = |ctl: Control| ui.pressed == Some(ctl);
+
+    let background = if ui.active {
+        ms::BACKGROUND
+    } else {
+        ms::BACKGROUND_INACTIVE
+    };
+    skin.blit(c, background, ox, oy);
+    for (ctl, rect, sprite) in [
+        (Control::MainOptions, m::OPTIONS, m::OPTIONS_PRESSED),
+        (Control::MainMinimize, m::MINIMIZE, m::MINIMIZE_PRESSED),
+        (Control::MainShade, m::SHADE, ms::UNSHADE_PRESSED),
+        (Control::MainClose, m::CLOSE, m::CLOSE_PRESSED),
+    ] {
+        if pressed(ctl) {
+            skin.blit(c, sprite, ox + rect.x, oy + rect.y);
+        }
+    }
+
+    if ui.state != PlayState::Stopped {
+        ui.vis.draw_small(c, skin, ms::VIS.offset(ox, oy));
+    }
+
+    // The time: spaces while stopped and in the "off" half of the paused blink, as in
+    // Winamp, which drew the text font's blank there.
+    let mut chars = [' '; 5];
+    if ui.state != PlayState::Stopped && !ui.blink_off(now) {
+        let (mins, secs, neg) = ui.display_time();
+        let digit = |d: u32| char::from_digit(d % 10, 10).unwrap_or(' ');
+        chars = [
+            if neg { '-' } else { ' ' },
+            digit(mins / 10),
+            digit(mins),
+            digit(secs / 10),
+            digit(secs),
+        ];
+    }
+    let xs = [ms::MINUS_X].into_iter().chain(ms::DIGIT_X);
+    for (x, ch) in xs.zip(chars) {
+        draw_bitmap_chars(c, skin, [ch], ox + x, oy + ms::TEXT_Y, bounds);
+    }
+
+    // Seek bar; the thumb is hidden while stopped.
+    skin.blit(c, ms::POSBAR_BG, ox + ms::POSBAR.x, oy + ms::POSBAR.y);
+    if ui.state != PlayState::Stopped {
+        let pos = ui.position();
+        // `pos` is clamped to 0..=1, so the cast stays in range.
+        let px = (pos * (ms::POSBAR.w - ms::POSBAR_THUMB_W) as f32).round() as i32;
+        skin.blit(
+            c,
+            ms::posbar_thumb(Third::of(pos)),
+            ox + ms::POSBAR.x + px,
+            oy + ms::POSBAR.y,
+        );
+    }
 }
 
 /// Skins without nums_ex.bmp have no minus glyph: draw a bar in the digit colour.

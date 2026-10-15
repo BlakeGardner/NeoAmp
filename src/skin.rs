@@ -7,7 +7,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::canvas::{Image, Rect};
-use crate::sprites::{Sheet, Sprite, eq, main};
+use crate::sprites::{Sheet, Sprite, eq, eq_shade, main, main_shade};
 
 /// Largest sheet dimension we accept from an untrusted archive (real sheets are under 400px).
 const MAX_SHEET_SIDE: u32 = 4096;
@@ -36,10 +36,17 @@ impl Default for PleditColors {
 /// Polygons in window pixel-edge coordinates; a pixel is visible if its centre is inside any polygon.
 pub type Polygons = Vec<Vec<(f32, f32)>>;
 
+/// The window shapes `region.txt` gives, one per section.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Regions {
+    /// `[Normal]`: the main window.
     pub normal: Option<Polygons>,
+    /// `[WindowShade]`: the main window in windowshade mode.
+    pub windowshade: Option<Polygons>,
+    /// `[Equalizer]`.
     pub equalizer: Option<Polygons>,
+    /// `[EqualizerWS]`: the equalizer in windowshade mode.
+    pub equalizer_ws: Option<Polygons>,
 }
 
 /// A visibility mask the size of a window: `true` where the window is drawn.
@@ -86,6 +93,7 @@ const SHEET_FILES: &[(Sheet, &str)] = &[
     (Sheet::NumsEx, "nums_ex"),
     (Sheet::Text, "text"),
     (Sheet::EqMain, "eqmain"),
+    (Sheet::EqEx, "eq_ex"),
     (Sheet::PlEdit, "pledit"),
 ];
 
@@ -94,25 +102,35 @@ const SHEET_FILES: &[(Sheet, &str)] = &[
 pub struct Skin {
     pub name: String,
     sheets: HashMap<Sheet, Image>,
+    /// Sheets taken from the base skin because this one has none of its own.
+    borrowed: Vec<Sheet>,
     empty: Image,
     pub vis_colors: [[u8; 4]; 24],
     pub pledit: PleditColors,
     pub regions: Regions,
     /// Window-shape masks rasterised once from `regions`, if the skin defines any.
     pub main_mask: Option<Mask>,
+    pub main_shade_mask: Option<Mask>,
     pub eq_mask: Option<Mask>,
+    pub eq_shade_mask: Option<Mask>,
 }
 
 impl std::fmt::Debug for Skin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_regions = [
+            &self.main_mask,
+            &self.main_shade_mask,
+            &self.eq_mask,
+            &self.eq_shade_mask,
+        ]
+        .iter()
+        .any(|m| m.is_some());
         f.debug_struct("Skin")
             .field("name", &self.name)
             .field("sheets", &self.sheets.keys().collect::<Vec<_>>())
+            .field("borrowed", &self.borrowed)
             .field("pledit", &self.pledit)
-            .field(
-                "has_regions",
-                &(self.main_mask.is_some() || self.eq_mask.is_some()),
-            )
+            .field("has_regions", &has_regions)
             .finish_non_exhaustive()
     }
 }
@@ -196,23 +214,19 @@ impl Skin {
         let regions = text("region.txt")
             .map(|t| parse_region(&t))
             .unwrap_or_default();
-        let main_mask = regions
-            .normal
-            .as_ref()
-            .map(|p| region_mask(p, main::W, main::H));
-        let eq_mask = regions
-            .equalizer
-            .as_ref()
-            .map(|p| region_mask(p, eq::W, eq::H));
+        let mask = |polys: Option<&Polygons>, w, h| polys.map(|p| region_mask(p, w, h));
         Ok(Skin {
             name: name.to_string(),
             sheets,
+            borrowed: Vec::new(),
             empty: Image::new(0, 0),
             vis_colors,
             pledit,
+            main_mask: mask(regions.normal.as_ref(), main::W, main::H),
+            main_shade_mask: mask(regions.windowshade.as_ref(), main::W, main_shade::H),
+            eq_mask: mask(regions.equalizer.as_ref(), eq::W, eq::H),
+            eq_shade_mask: mask(regions.equalizer_ws.as_ref(), eq::W, eq_shade::H),
             regions,
-            main_mask,
-            eq_mask,
         })
     }
 
@@ -225,16 +239,23 @@ impl Skin {
             self.sheets.insert(Sheet::Balance, v.clone());
         }
         for (k, v) in &base.sheets {
-            if *k == Sheet::NumsEx {
-                continue; // optional sheet; absence selects the numbers.bmp path
+            if *k == Sheet::NumsEx || self.sheets.contains_key(k) {
+                continue; // nums_ex is optional; its absence selects the numbers.bmp path
             }
-            self.sheets.entry(*k).or_insert_with(|| v.clone());
+            self.sheets.insert(*k, v.clone());
+            self.borrowed.push(*k);
         }
     }
 
     #[must_use]
     pub fn has_sheet(&self, s: Sheet) -> bool {
         self.sheets.contains_key(&s)
+    }
+
+    /// Whether the skin brought this sheet itself, rather than borrowing the base skin's.
+    #[must_use]
+    pub fn has_own_sheet(&self, s: Sheet) -> bool {
+        self.has_sheet(s) && !self.borrowed.contains(&s)
     }
 
     /// The decoded sheet, or an empty image (so blits draw nothing) when it is missing.
@@ -336,7 +357,9 @@ pub fn parse_pledit(text: &str) -> PleditColors {
     c
 }
 
-/// Parse `region.txt`: `[Normal]` / `[Equalizer]` sections with `NumPoints` and `PointList`.
+/// Parse `region.txt`: `[Normal]`, `[WindowShade]`, `[Equalizer]` and `[EqualizerWS]` sections
+/// with `NumPoints` and `PointList`. Section names are matched ignoring case, and only the
+/// first definition of each counts, as in Winamp.
 #[must_use]
 pub fn parse_region(text: &str) -> Regions {
     let mut regions = Regions::default();
@@ -344,13 +367,17 @@ pub fn parse_region(text: &str) -> Regions {
     let mut num_points: Vec<usize> = Vec::new();
     let mut points: Vec<i32> = Vec::new();
     let mut flush = |section: &str, num_points: &mut Vec<usize>, points: &mut Vec<i32>| {
-        if points.len() >= 6 {
-            let polys = build_polygons(num_points, points);
-            match section {
-                "normal" => regions.normal.get_or_insert(polys),
-                "equalizer" => regions.equalizer.get_or_insert(polys),
-                _ => return,
-            };
+        let slot = match section {
+            "normal" => Some(&mut regions.normal),
+            "windowshade" => Some(&mut regions.windowshade),
+            "equalizer" => Some(&mut regions.equalizer),
+            "equalizerws" => Some(&mut regions.equalizer_ws),
+            _ => None,
+        };
+        if let Some(slot) = slot
+            && points.len() >= 6
+        {
+            slot.get_or_insert_with(|| build_polygons(num_points, points));
         }
         num_points.clear();
         points.clear();
@@ -474,6 +501,28 @@ mod tests {
     }
 
     #[test]
+    fn windowshade_regions_are_read_and_only_the_first_of_each_counts() {
+        let r = parse_region(
+            "[WINDOWSHADE]\r\nNumPoints=4\r\nPointList=0,0,275,0,275,14,0,14\r\n\
+             [Unknown]\r\nNumPoints=4\r\nPointList=0,0,9,0,9,9,0,9\r\n\
+             [EqualizerWS]\r\nNumPoints=4\r\nPointList=1,1,274,1,274,13,1,13\r\n\
+             [WindowShade]\r\nNumPoints=4\r\nPointList=0,0,1,0,1,1,0,1\r\n",
+        );
+        assert_eq!(r.normal, None);
+        assert_eq!(r.equalizer, None);
+        let shade = region_mask(r.windowshade.as_ref().unwrap(), 275, 14);
+        assert!(
+            shade.iter().all(|v| *v),
+            "the second [WindowShade] is ignored"
+        );
+        let eq = region_mask(r.equalizer_ws.as_ref().unwrap(), 275, 14);
+        assert_eq!(eq.iter().filter(|v| **v).count(), 273 * 12);
+        // A section without its own PointList takes nothing from the section before it.
+        let r = parse_region("[Unknown]\nPointList=0,0,4,0,4,4\n[Normal]\nNumPoints=3\n");
+        assert_eq!(r, Regions::default());
+    }
+
+    #[test]
     fn region_file_with_only_comments_defines_nothing() {
         let r = parse_region(";[Normal]\n;NumPoints=4\n;PointList=0,0,1,0,1,1,0,1\n");
         assert_eq!(r, Regions::default());
@@ -489,7 +538,29 @@ mod tests {
         }
         assert_eq!(skin.sheet(Sheet::Main).w, main::W);
         assert_eq!(skin.sheet(Sheet::Main).h, main::H);
-        assert!(skin.main_mask.is_none());
+        assert!(skin.main_mask.is_none() && skin.main_shade_mask.is_none());
+        assert!(skin.has_own_sheet(Sheet::EqEx));
+    }
+
+    #[test]
+    fn missing_sheets_are_borrowed_from_the_base_skin_and_known_as_borrowed() {
+        let base = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut files = HashMap::new();
+        let main_bmp = image_bmp(main::W, main::H);
+        files.insert("main.bmp".to_string(), main_bmp);
+        let mut skin = Skin::from_files(&files, "partial").unwrap();
+        skin.fill_missing_from(&base);
+        assert!(skin.has_own_sheet(Sheet::Main));
+        assert!(skin.has_sheet(Sheet::EqEx) && !skin.has_own_sheet(Sheet::EqEx));
+        assert!(!skin.has_sheet(Sheet::NumsEx), "never borrowed");
+    }
+
+    /// A black BMP file of `w` x `h`.
+    fn image_bmp(w: i32, h: i32) -> Vec<u8> {
+        let img = image::RgbImage::new(w.unsigned_abs(), h.unsigned_abs());
+        let mut out = Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Bmp).unwrap();
+        out.into_inner()
     }
 
     #[test]

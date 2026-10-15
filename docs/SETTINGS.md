@@ -89,13 +89,16 @@ current = 0
 [windows]
 scale = 1.0
 main = [64, 64]
+main_shade = false
 
 [windows.eq]
 open = true
+shade = false
 offset = [0, 116]
 
 [windows.playlist]
 open = true
+shade = false
 offset = [0, 232]
 size = [275, 116]
 ```
@@ -124,8 +127,8 @@ size = [275, 116]
   gain; at `1.0` only the right one plays. When you drag the slider, it snaps
   to the centre near the middle, but a value written in the file is used
   exactly.
-- **`shuffle`** is remembered, but shuffle does not change the playing order
-  yet (see the [roadmap](ROADMAP.md), Phase 3).
+- **`shuffle`** plays every entry once, in a random order, before any plays
+  again. The order itself is not remembered: a new round starts each run.
 - **`repeat`** makes the playlist start over after its last entry. Without it,
   playback stops there.
 - **`time_remaining`** needs the track's length. Until that is known, the
@@ -223,6 +226,7 @@ docked to it stay docked when it moves between runs.
 | --- | --- | --- | --- |
 | `scale` | a number above `0` | `1.0` | Screen pixels per skin pixel when the positions were saved. |
 | `main` | `[x, y]` | none | The main window's top-left corner. |
+| `main_shade` | `true` / `false` | `false` | Whether the main window is in windowshade mode, collapsed to a bar (its shade button, a double-click on its title bar, or **Ctrl+W**). |
 
 - **`scale`** is the zoom times double size times the desktop's scale factor,
   as it was when NeoAmp saved. It lets NeoAmp carry the offsets below over to
@@ -242,6 +246,7 @@ docked to it stay docked when it moves between runs.
 | Key | Values | Default | What it controls |
 | --- | --- | --- | --- |
 | `open` | `true` / `false` | `true` | Whether the window is shown (**Alt+G** for the equalizer, **Alt+E** for the playlist). |
+| `shade` | `true` / `false` | `false` | Whether the window is in windowshade mode, collapsed to a bar (its shade button, a double-click on its title bar, or for the playlist **Ctrl+W**). |
 | `offset` | `[dx, dy]` | none | From the main window's top-left corner to this window's, in screen pixels at `scale`. |
 | `size` | `[width, height]` (playlist only) | `[275, 116]` | The playlist's size, in skin pixels. |
 
@@ -250,13 +255,19 @@ docked to it stay docked when it moves between runs.
   playlist under the equalizer (or under the main window when the equalizer
   is elsewhere or closed). At 1x, docked under the main window is `[0, 116]`
   and under the equalizer `[0, 232]`; at 1.5x these are `[0, 174]` and
-  `[0, 348]`. At startup, an offset that would put the window's title bar
-  off every screen is ignored.
+  `[0, 348]`. A window in windowshade mode is 14 skin pixels high, so under a
+  shaded main window at 1x is `[0, 14]`. At startup, an offset that would put
+  the window's title bar off every screen is ignored.
+- **`shade`**: a window collapsed to its bar keeps its width. The windows
+  docked below it follow when it is shaded or opened out (see "Windowshade"
+  in the README), so the offsets saved are those of the windows as they are.
 - **`size`** is in skin pixels, so it does not change with the zoom. The
   playlist grows in steps of 25 by 29 pixels from its smallest size, 275 by
   116, as when resized from its grip. Other values are moved to the nearest
-  step, and anything smaller becomes the smallest size. The equalizer has a
-  fixed size and ignores this key.
+  step, and anything smaller becomes the smallest size. In windowshade mode
+  `size` keeps the height the playlist opens out to; the bar's own grip
+  changes only the width. The equalizer has a fixed size and ignores this
+  key.
 
 ### Platform notes
 

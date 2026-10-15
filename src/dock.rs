@@ -85,6 +85,35 @@ pub fn attached(root: usize, rects: &[Rect]) -> Vec<usize> {
         .collect()
 }
 
+/// Indices of the rectangles hanging below `rects[root]`: those whose top edge lies on its
+/// bottom edge (within a pixel) and that overlap it sideways, then those hanging below them,
+/// and so on. When the root window grows or shrinks in height, as in windowshade mode, these
+/// move by as much so that they stay docked, as Webamp does. Windows docked beside it stay.
+#[must_use]
+pub fn hanging_below(root: usize, rects: &[Rect]) -> Vec<usize> {
+    let mut found = vec![false; rects.len()];
+    let Some(slot) = found.get_mut(root) else {
+        return Vec::new();
+    };
+    *slot = true;
+    let mut stack = vec![root];
+    while let Some(i) = stack.pop() {
+        let above = rects[i];
+        for (j, r) in rects.iter().enumerate() {
+            if !found[j]
+                && (r.y - above.bottom()).abs() <= 1
+                && near_overlap(above.x, above.right(), r.x, r.right(), 0)
+            {
+                found[j] = true;
+                stack.push(j);
+            }
+        }
+    }
+    (0..rects.len())
+        .filter(|&j| j != root && found[j])
+        .collect()
+}
+
 /// New top-left corner for a window being dragged by hand.
 ///
 /// `dragged` is its current rectangle, `pointer` the pointer's screen position and `grab`
@@ -212,6 +241,24 @@ mod tests {
         // Side by side counts too.
         let beside = Rect::new(275, 10, 100, 50);
         assert_eq!(attached(0, &[MAIN, beside]), vec![1]);
+    }
+
+    #[test]
+    fn windows_hanging_below_are_found_down_the_stack_only() {
+        let eq = Rect::new(0, 116, 275, 116);
+        let pl = Rect::new(0, 232 + 1, 275, 116); // a pixel off still counts
+        let beside = Rect::new(275, 0, 275, 116);
+        let under_beside = Rect::new(275, 116, 275, 116);
+        let apart = Rect::new(0, 400, 275, 116);
+        let rects = [MAIN, eq, pl, beside, under_beside, apart];
+        assert_eq!(hanging_below(0, &rects), vec![1, 2]);
+        assert_eq!(hanging_below(1, &rects), vec![2]);
+        assert_eq!(hanging_below(3, &rects), vec![4]);
+        assert_eq!(hanging_below(2, &rects), Vec::<usize>::new());
+        assert_eq!(hanging_below(9, &rects), Vec::<usize>::new());
+        // Touching only at a corner is not hanging below.
+        let corner = Rect::new(275, 116, 100, 50);
+        assert_eq!(hanging_below(0, &[MAIN, corner]), Vec::<usize>::new());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The 76x16 visualiser: a spectrum analyser and an oscilloscope fed with the samples the
-//! sound card is playing, in the styles Winamp's visualization menu offered.
+//! sound card is playing, in the styles Winamp's visualization menu offered. A 38x5 version
+//! of it shows in the main window's windowshade bar.
 
 use std::fmt;
 use std::sync::Arc;
@@ -169,6 +170,10 @@ pub struct ScopeOptions {
 pub const H: i32 = 16;
 /// Width of the visualiser, and so the number of oscilloscope points.
 pub const W: usize = 76;
+/// Height of the small visualiser in the main window's windowshade bar.
+const SMALL_H: i32 = 5;
+/// The small analyser's colours from `viscolor.txt`, top row to bottom, as Winamp picked them.
+const SMALL_ROWS: [usize; SMALL_H as usize] = [4, 8, 11, 14, 17];
 
 /// Samples per analyser FFT: about 21 ms at 48 kHz, 47 Hz per bin.
 const FFT_SIZE: usize = 1024;
@@ -500,6 +505,72 @@ impl Vis {
         }
     }
 
+    /// Draw the small version for the windowshade bar into `r` (38x5). Each pair of the
+    /// analyser's bars makes one, so the whole spectrum still fits; the oscilloscope shows the
+    /// start of its trace, unsqueezed, as Winamp's did. Neither draws peaks or a dot grid.
+    pub fn draw_small(&self, c: &mut Image, skin: &Skin, r: Rect) {
+        let colors = &skin.vis_colors;
+        match self.mode {
+            VisMode::Analyzer => {
+                c.fill_rect(r, colors[0]);
+                self.draw_small_analyzer(c, colors, r);
+            }
+            VisMode::Oscilloscope => {
+                c.fill_rect(r, colors[0]);
+                self.draw_small_scope(c, colors, r);
+            }
+            VisMode::Off => {}
+        }
+    }
+
+    fn draw_small_analyzer(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+        let (width, pitch) = match self.analyzer.bands {
+            Bands::Thick => (THICK_W, THICK_W + 1),
+            Bands::Thin => (1, 1),
+        };
+        let count = self.analyzer.bands.count();
+        let pairs = self.bars[..count].chunks(2);
+        for (x, pair) in (0..).map(|i| r.x + i * pitch).zip(pairs) {
+            let bar = pair.iter().copied().fold(0.0, f32::max);
+            // Clamped to 0..=5, so the cast cannot truncate.
+            let h = (bar * SMALL_H as f32 / H as f32)
+                .round()
+                .clamp(0.0, SMALL_H as f32) as i32;
+            let top = SMALL_H - h;
+            for row in top..SMALL_H {
+                let shade = match self.analyzer.style {
+                    AnalyzerStyle::Normal => row,
+                    AnalyzerStyle::Fire => row - top,
+                    AnalyzerStyle::Line => top,
+                };
+                let color = colors[SMALL_ROWS[shade.clamp(0, SMALL_H - 1).unsigned_abs() as usize]];
+                c.fill_rect_clipped(Rect::new(x, r.y + row, width, 1), color, r);
+            }
+        }
+    }
+
+    fn draw_small_scope(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+        let mid = SMALL_H / 2;
+        let mut prev: Option<i32> = None;
+        for (x, v) in (0..r.w).zip(self.scope) {
+            // Clamped to the 5 rows, so the cast cannot truncate.
+            let y = (mid as f32 - v * 2.5)
+                .round()
+                .clamp(0.0, (SMALL_H - 1) as f32) as i32;
+            let (y0, y1) = match (self.scope_style, prev) {
+                (ScopeStyle::Dots, _) => (y, y),
+                (ScopeStyle::Solid, _) => (y.min(mid), y.max(mid)),
+                (ScopeStyle::Lines, Some(p)) if p < y => (p + 1, y),
+                (ScopeStyle::Lines, Some(p)) if p > y => (y, p - 1),
+                (ScopeStyle::Lines, _) => (y, y),
+            };
+            for yy in y0..=y1 {
+                c.put(r.x + x, r.y + yy, colors[18]);
+            }
+            prev = Some(y);
+        }
+    }
+
     fn draw_scope(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
         let mut prev: Option<i32> = None;
         for (x, v) in (0..r.w).zip(self.scope) {
@@ -725,6 +796,43 @@ mod tests {
         assert_eq!(c.get(0, 15), colors[17]);
         assert_ne!(c.get(1, 15), colors[17], "thin bars are one wide");
         assert_ne!(c.get(0, 8), colors[23], "no peaks");
+    }
+
+    #[test]
+    fn the_small_visualiser_fits_the_spectrum_and_the_scope_into_38_by_5() {
+        let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let small = |v: &Vis| {
+            // Drawn one pixel in, to see that nothing spills out of its rectangle.
+            let mut c = Image::new(40, 7);
+            v.draw_small(&mut c, &skin, Rect::new(1, 1, 38, 5));
+            c
+        };
+        let colors = &skin.vis_colors;
+        let mut v = Vis::new();
+        v.bars[0] = H as f32; // full height
+        v.bars[1] = 0.0;
+        v.bars[18] = H as f32 / 2.0; // the last thick bar, alone in its pair
+        let c = small(&v);
+        assert_eq!(c.get(0, 0), [0, 0, 0, 0], "outside");
+        assert_eq!(c.get(39, 6), [0, 0, 0, 0], "outside");
+        // Bar pair 0, three pixels wide: every row lit, the top one in colour 4.
+        assert_eq!(c.get(1, 1), colors[4]);
+        assert_eq!(c.get(3, 5), colors[17]);
+        assert_eq!(c.get(4, 5), colors[0], "the gap");
+        // The 10th bar starts at x 36 and is cut at the rectangle's edge.
+        assert_eq!(c.get(1 + 36, 5), colors[17]);
+        assert_eq!(c.get(1 + 37, 5), colors[17]);
+        v.mode = VisMode::Oscilloscope;
+        v.scope = [0.0; W];
+        let c = small(&v);
+        assert_eq!(
+            c.get(1, 1 + 2),
+            colors[18],
+            "a flat trace lies on the middle row"
+        );
+        assert_eq!(c.get(1, 1), colors[0]);
+        v.mode = VisMode::Off;
+        assert!(small(&v).data.iter().all(|b| *b == 0));
     }
 
     #[test]

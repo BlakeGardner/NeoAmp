@@ -1,11 +1,11 @@
-//! Drawing of the resizable playlist editor window.
+//! Drawing of the resizable playlist editor window, and of its windowshade bar.
 
 use std::time::Instant;
 
 use crate::canvas::{Image, Rect};
-use crate::font::{TtfFont, bitmap_text_width, draw_bitmap_text};
+use crate::font::{TtfFont, bitmap_text_width, draw_bitmap_chars, draw_bitmap_text};
 use crate::skin::Skin;
-use crate::sprites::pl as p;
+use crate::sprites::{font as f, pl as p, pl_shade as ps};
 use crate::ui::{Control, PlayState, Ui, push_fmt, write_time};
 
 pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect, now: Instant) {
@@ -187,5 +187,65 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
             let sprite = p::menu_item(items_x, it.sprite_row(), hot);
             skin.blit(c, sprite, ox + item.x, oy + item.y);
         }
+    }
+}
+
+/// Draw the playlist in windowshade mode: a bar as wide as the playlist showing the current
+/// track's number, title and length.
+pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
+    let (ox, oy, w) = (r.x, r.y, r.w);
+    let pressed = |ctl: Control| ui.pressed == Some(ctl);
+    let clip = r.intersect(&c.bounds());
+
+    let sheet = skin.sheet(ps::FILL.sheet);
+    c.tile_h(sheet, ps::FILL.rect(), Rect::new(ox, oy, w, ps::H));
+    skin.blit(c, ps::LEFT, ox, oy);
+    skin.blit(c, ps::right(ui.active), ox + w - ps::RIGHT_W, oy);
+    if pressed(Control::PlShade) {
+        let x = ox + w - p::SHADE_FROM_RIGHT;
+        skin.blit(c, ps::UNSHADE_PRESSED, x, oy + p::TITLE_BTN_Y);
+    }
+    if pressed(Control::PlClose) {
+        let x = ox + w - p::CLOSE_FROM_RIGHT;
+        skin.blit(c, p::CLOSE_PRESSED, x, oy + p::TITLE_BTN_Y);
+    }
+
+    let Some(track) = ui.track() else {
+        return;
+    };
+    let fits = usize::try_from((w - ps::TITLE_SPARE) / f::GLYPH_W).unwrap_or(0);
+    let (tx, ty) = ps::TITLE_POS;
+    draw_bitmap_chars(c, skin, fitted(ui.title(), fits), ox + tx, oy + ty, clip);
+
+    if let Some(secs) = track.seconds {
+        let mut time = String::with_capacity(8);
+        write_time(&mut time, secs);
+        let x = ox + w - ps::TIME_FROM_RIGHT - bitmap_text_width(&time);
+        draw_bitmap_text(c, skin, &time, x, oy + ty, clip);
+    }
+}
+
+/// At most `fits` characters of `title`; one too long ends in "…", as in Webamp.
+fn fitted(title: &str, fits: usize) -> impl Iterator<Item = char> + '_ {
+    let cut = title.chars().nth(fits).is_some();
+    let kept = if cut { fits.saturating_sub(1) } else { fits };
+    title
+        .chars()
+        .take(kept)
+        .chain((cut && fits > 0).then_some('…'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_titles_are_cut_short_with_an_ellipsis() {
+        let fit = |title: &str, n| fitted(title, n).collect::<String>();
+        assert_eq!(fit("1. Short", 41), "1. Short");
+        assert_eq!(fit("12345", 5), "12345", "exactly as long as fits");
+        assert_eq!(fit("123456", 5), "1234…");
+        assert_eq!(fit("Ünïcödé", 3), "Ün…", "counted in characters");
+        assert_eq!(fit("anything", 0), "");
     }
 }

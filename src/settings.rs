@@ -154,6 +154,8 @@ pub struct WindowLayout {
     /// The main window's top-left corner. `None` lets NeoAmp place it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub main: Option<[i32; 2]>,
+    /// The main window is in windowshade mode, collapsed to a bar.
+    pub main_shade: bool,
     pub eq: WindowConfig,
     pub playlist: WindowConfig,
 }
@@ -163,6 +165,7 @@ impl Default for WindowLayout {
         WindowLayout {
             scale: 1.0,
             main: None,
+            main_shade: false,
             eq: WindowConfig::default(),
             playlist: WindowConfig {
                 size: Some([p::MIN_W, p::MIN_H]),
@@ -204,11 +207,14 @@ impl WindowLayout {
 #[serde(default)]
 pub struct WindowConfig {
     pub open: bool,
+    /// In windowshade mode, collapsed to a bar.
+    pub shade: bool,
     /// From the main window's top-left corner to this window's. `None` docks it below the
     /// main window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<[i32; 2]>,
-    /// In skin pixels. Only the playlist can be resized.
+    /// In skin pixels. Only the playlist can be resized. In windowshade mode it keeps the
+    /// height it opens out to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<[i32; 2]>,
 }
@@ -217,6 +223,7 @@ impl Default for WindowConfig {
     fn default() -> Self {
         WindowConfig {
             open: true,
+            shade: false,
             offset: None,
             size: None,
         }
@@ -314,12 +321,15 @@ impl Settings {
                 current: ui.current,
             },
             windows: WindowLayout {
+                main_shade: ui.main_shade,
                 eq: WindowConfig {
                     open: ui.eq_open,
+                    shade: ui.eq_shade,
                     ..WindowConfig::default()
                 },
                 playlist: WindowConfig {
                     open: ui.pl_open,
+                    shade: ui.pl_shade,
                     size: Some([ui.pl_size.0, ui.pl_size.1]),
                     offset: None,
                 },
@@ -352,6 +362,9 @@ impl Settings {
         ui.bands = self.eq.bands.map(slider);
         ui.eq_open = self.windows.eq.open;
         ui.pl_open = self.windows.playlist.open;
+        ui.main_shade = self.windows.main_shade;
+        ui.eq_shade = self.windows.eq.shade;
+        ui.pl_shade = self.windows.playlist.shade;
         if let Some([w, h]) = self.windows.playlist.size {
             // Snaps to the resize grid and keeps the minimum size.
             ui.resize_playlist((w, h));
@@ -646,13 +659,17 @@ mod tests {
             windows: WindowLayout {
                 scale: 1.5,
                 main: Some([-100, 64]),
+                main_shade: true,
                 eq: WindowConfig {
                     open: false,
+                    shade: true,
                     offset: Some([0, 174]),
                     size: None,
                 },
+                // Shaded, it still keeps the size it opens out to.
                 playlist: WindowConfig {
                     open: true,
+                    shade: true,
                     offset: Some([413, 0]),
                     size: Some([300, 145]),
                 },
@@ -764,7 +781,9 @@ mod tests {
         for line in [
             "volume = 0.78\n",
             "vis = \"analyzer\"\n",
+            "main_shade = false\n",
             "[windows.playlist]\n",
+            "shade = false\n",
         ] {
             assert!(text.contains(line), "{line:?} in {text}");
         }

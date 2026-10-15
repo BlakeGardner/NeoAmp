@@ -1,10 +1,10 @@
-//! Drawing of the 275x116 equalizer window.
+//! Drawing of the 275x116 equalizer window, and of its 275x14 windowshade bar.
 
 use std::time::Instant;
 
 use crate::canvas::{Image, Rect};
 use crate::skin::Skin;
-use crate::sprites::eq as e;
+use crate::sprites::{Sheet, Third, eq as e, eq_shade as es};
 use crate::ui::{Control, Ui};
 
 pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
@@ -25,7 +25,8 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
     if pressed(Control::EqClose) {
         skin.blit(c, e::CLOSE_PRESSED, ox + e::CLOSE.x, oy + e::CLOSE.y);
     }
-    if pressed(Control::EqShade) {
+    // Skins without eq_ex.bmp have no pressed shade button: theirs stays as the bar draws it.
+    if pressed(Control::EqShade) && skin.has_own_sheet(Sheet::EqEx) {
         skin.blit(c, e::SHADE_PRESSED, ox + e::SHADE.x, oy + e::SHADE.y);
     }
 
@@ -67,6 +68,44 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
             pressed(Control::EqBand(i)),
         );
     }
+}
+
+/// Draw the equalizer in windowshade mode: a bar with the volume and balance sliders.
+pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
+    let (ox, oy) = (r.x, r.y);
+    let pressed = |ctl: Control| ui.pressed == Some(ctl);
+
+    let background = if ui.active {
+        es::BACKGROUND
+    } else {
+        es::BACKGROUND_INACTIVE
+    };
+    skin.blit(c, background, ox, oy);
+    if pressed(Control::EqShade) {
+        skin.blit(c, es::UNSHADE_PRESSED, ox + e::SHADE.x, oy + e::SHADE.y);
+    }
+    if pressed(Control::EqClose) {
+        skin.blit(c, es::CLOSE_PRESSED, ox + e::CLOSE.x, oy + e::CLOSE.y);
+    }
+
+    // Both values are clamped (balance to -1..=1), so the casts stay in range.
+    let travel = |rect: Rect, fraction: f32| {
+        rect.x + (fraction * (rect.w - es::THUMB_W) as f32).round() as i32
+    };
+    let volume = ui.volume;
+    skin.blit(
+        c,
+        es::volume_thumb(Third::of(volume)),
+        ox + travel(es::VOLUME, volume),
+        oy + es::VOLUME.y,
+    );
+    let balance = (ui.balance + 1.0) / 2.0;
+    skin.blit(
+        c,
+        es::balance_thumb(Third::of(balance)),
+        ox + travel(es::BALANCE, balance),
+        oy + es::BALANCE.y,
+    );
 }
 
 fn draw_slider(c: &mut Image, skin: &Skin, r: Rect, value: f32, pressed: bool) {

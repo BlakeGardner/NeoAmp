@@ -75,12 +75,18 @@ playlist files in [src/playlist_file.rs](../src/playlist_file.rs) and
 
 ## Phase 4: Windowshade mode
 
-- [ ] Collapsed main window, EQ and playlist, from each window's shade button
-      and by double-clicking a title bar.
-- [ ] Load `eq_ex.bmp` (needed by the collapsed EQ). `SHEET_FILES` in
-      [src/skin.rs](../src/skin.rs) doesn't list it.
-- [ ] Read the `[WindowShade]` and `[EqualizerWS]` sections of `region.txt`.
-      `parse_region` only keeps `[Normal]` and `[Equalizer]`.
+Done: see "Windowshade" in the README. The bars are drawn by `draw_shade` in
+[src/main_window.rs](../src/main_window.rs),
+[src/eq_window.rs](../src/eq_window.rs) and
+[src/playlist_window.rs](../src/playlist_window.rs), from the sprites in
+`main_shade`, `eq_shade` and `pl_shade` in [src/sprites.rs](../src/sprites.rs).
+
+- [x] Collapsed main window, EQ and playlist, from each window's shade button,
+      by double-clicking a title bar, and with Ctrl+W (the main window, or in
+      the playlist the playlist). Windows docked below move with it, and the
+      state is saved.
+- [x] Load `eq_ex.bmp` (needed by the collapsed EQ).
+- [x] Read the `[WindowShade]` and `[EqualizerWS]` sections of `region.txt`.
 
 ## Phase 5: Smaller items
 

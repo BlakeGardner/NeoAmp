@@ -417,8 +417,8 @@ struct Pane {
     window: Arc<Window>,
     canvas: Image,
     cursor: PhysicalPosition<f64>,
-    /// The diagonal resize cursor is showing instead of the default arrow.
-    resize_cursor: bool,
+    /// The pointer's look: the default arrow, or a resize cursor over the playlist's grip.
+    cursor_icon: CursorIcon,
     focused: bool,
     opened_at: Instant,
 }
@@ -896,10 +896,19 @@ impl App {
         // TOML cannot hold a path that is not valid Unicode (`load_skin` says so once).
         settings.skin = self.skin_path.clone().filter(|p| p.to_str().is_some());
         self.update_layout();
+        // Positions from the window layer; which windows are open, shaded and how big, from the
+        // interface.
         let mut windows = self.layout.clone();
-        windows.eq.open = settings.windows.eq.open;
-        windows.playlist.open = settings.windows.playlist.open;
-        windows.playlist.size = settings.windows.playlist.size;
+        windows.main_shade = settings.windows.main_shade;
+        for kind in [WindowKind::Eq, WindowKind::Playlist] {
+            if let (Some(to), Some(from)) =
+                (windows.window_mut(kind), settings.windows.window(kind))
+            {
+                to.open = from.open;
+                to.shade = from.shade;
+                to.size = from.size;
+            }
+        }
         settings.windows = windows;
         settings
     }
@@ -1228,7 +1237,7 @@ impl App {
             window,
             canvas: Image::new(w, h),
             cursor: PhysicalPosition::new(0.0, 0.0),
-            resize_cursor: false,
+            cursor_icon: CursorIcon::Default,
             focused: false,
             opened_at: Instant::now(),
         });
@@ -1492,6 +1501,86 @@ impl App {
             .collect()
     }
 
+    /// Window `kind` went into or out of windowshade mode: resize it, and move the windows
+    /// hanging below it by as much as it shrank or grew, so that they stay docked to it, as
+    /// in Webamp. A closed window that would hang below it has the place it reopens at moved
+    /// the same way. Without docking, the window only changes size.
+    fn reshade(&mut self, kind: WindowKind, el: &ActiveEventLoop) {
+        // Heights in screen pixels before and after, from the sizes asked for rather than
+        // those the window reports, which may lag behind a request.
+        let Some(scale) = self.pane(kind).map(|p| p.scale(self.ui.scale())) else {
+            self.sync_panes(el);
+            return;
+        };
+        let shaded = self.ui.is_shaded(kind);
+        let height = |shaded| {
+            let size = scaled_size(self.ui.window_size_shaded(kind, shaded), scale);
+            i32::try_from(size.height).unwrap_or(0)
+        };
+        let (before, after) = (height(!shaded), height(shaded));
+        let below = self.hanging_below(kind, before);
+        self.sync_panes(el);
+        let dh = after - before;
+        if dh == 0 {
+            return;
+        }
+        for (k, r) in below {
+            if let Some(p) = self.pane(k) {
+                p.window
+                    .set_outer_position(PhysicalPosition::new(r.x, r.y.saturating_add(dh)));
+            } else if let Some((dx, dy)) = self.offsets[kind_index(k)] {
+                self.offsets[kind_index(k)] = Some((dx, dy.saturating_add(dh)));
+            }
+        }
+    }
+
+    /// The windows, open or closed, that hang below `kind` (see [`dock::hanging_below`]),
+    /// with where they are now, taking `kind` to be `height` screen pixels high.
+    fn hanging_below(&self, kind: WindowKind, height: i32) -> Vec<(WindowKind, Rect)> {
+        if !self.docking || self.redock.contains(&WindowKind::Main) {
+            return Vec::new();
+        }
+        let Some(main) = self.pane(WindowKind::Main).and_then(Pane::rect) else {
+            return Vec::new();
+        };
+        let rects: Vec<(WindowKind, Rect)> = WindowKind::ALL
+            .into_iter()
+            .filter_map(|k| {
+                let r = self.window_rect(k, main)?;
+                let h = if k == kind { height } else { r.h };
+                Some((k, Rect::new(r.x, r.y, r.w, h)))
+            })
+            .collect();
+        let Some(root) = rects.iter().position(|(k, _)| *k == kind) else {
+            return Vec::new();
+        };
+        let only: Vec<Rect> = rects.iter().map(|(_, r)| *r).collect();
+        dock::hanging_below(root, &only)
+            .into_iter()
+            .map(|i| rects[i])
+            .collect()
+    }
+
+    /// Where window `kind` is, with the main window at `main`: an open window's rectangle, or
+    /// for a closed one, the place it would reopen at. `None` for a window whose place is not
+    /// known yet, such as one waiting to be re-docked.
+    fn window_rect(&self, kind: WindowKind, main: Rect) -> Option<Rect> {
+        if self.redock.contains(&kind) {
+            return None;
+        }
+        if let Some(pane) = self.pane(kind) {
+            return pane.rect();
+        }
+        let (dx, dy) = self.offsets[kind_index(kind)]?;
+        let size = scaled_size(self.ui.window_size(kind), self.applied_scale);
+        Some(Rect::new(
+            main.x.saturating_add(dx),
+            main.y.saturating_add(dy),
+            i32::try_from(size.width).ok()?,
+            i32::try_from(size.height).ok()?,
+        ))
+    }
+
     /// Start moving `kind`: by hand when positions are known (so we can snap), otherwise
     /// handing the move to the compositor.
     fn begin_drag(&mut self, kind: WindowKind) {
@@ -1594,32 +1683,39 @@ impl App {
         let scale = pane.scale(self.ui.scale());
         let travel = |now: f64, then: f64| round_px((now - then) / scale);
         let (w, h) = resize.size;
+        // The windowshade bar keeps its height, and the height the playlist opens out to.
         let size = (
             w.saturating_add(travel(pointer.x, resize.start.x)),
-            h.saturating_add(travel(pointer.y, resize.start.y)),
+            if self.ui.pl_shade {
+                h
+            } else {
+                h.saturating_add(travel(pointer.y, resize.start.y))
+            },
         );
         if self.ui.resize_playlist(size) {
             self.sync_panes(el);
         }
     }
 
-    /// Show the diagonal resize cursor over the playlist's grip and while resizing, as Winamp
-    /// did with its skins' `PSIZE.CUR`. `pos` is the pointer in canvas coordinates.
+    /// Show a resize cursor over the playlist's grip and while resizing, as Winamp did with
+    /// its skins' `PSIZE.CUR` (and `PWSSIZE.CUR` for the windowshade bar, whose grip only
+    /// changes the width). `pos` is the pointer in canvas coordinates.
     fn update_cursor(&mut self, kind: WindowKind, pos: (i32, i32)) {
         let resizing = kind == WindowKind::Playlist && self.resize.is_some();
         // While another control or a window is being dragged, the cursor stays as it is.
         let idle = self.ui.pressed.is_none() && self.drag.is_none() && self.resize.is_none();
-        let want = resizing || (idle && self.ui.hit(kind, pos.0, pos.1) == Some(Control::PlResize));
+        let grip = resizing || (idle && self.ui.hit(kind, pos.0, pos.1) == Some(Control::PlResize));
+        let want = match (grip, self.ui.pl_shade) {
+            (false, _) => CursorIcon::Default,
+            (true, false) => CursorIcon::NwseResize,
+            (true, true) => CursorIcon::EwResize,
+        };
         let Some(pane) = self.pane_mut(kind) else {
             return;
         };
-        if pane.resize_cursor != want {
-            pane.resize_cursor = want;
-            pane.window.set_cursor(if want {
-                CursorIcon::NwseResize
-            } else {
-                CursorIcon::Default
-            });
+        if pane.cursor_icon != want {
+            pane.cursor_icon = want;
+            pane.window.set_cursor(want);
         }
     }
 
@@ -1635,6 +1731,7 @@ impl App {
                     }
                 }
                 Action::Relayout => self.sync_panes(el),
+                Action::Reshade(kind) => self.reshade(kind, el),
                 Action::OpenFiles => self.show_dialog(Purpose::PlayFiles),
                 Action::OpenFolder => self.show_dialog(Purpose::PlayFolder),
                 Action::AlwaysOnTop => self.apply_window_level(),
@@ -1691,9 +1788,10 @@ impl App {
     }
 
     /// What a key pressed in window `kind` does. The playlist has keys of its own, as in
-    /// Winamp: there the arrows move through the entries rather than change the volume, and
-    /// Ctrl+A selects every entry rather than keeping the windows on top. On macOS, Cmd takes
-    /// Ctrl's place (see [`ctrl_held`]).
+    /// Winamp: there the arrows move through the entries rather than change the volume,
+    /// Ctrl+A selects every entry rather than keeping the windows on top, and Ctrl+W shades
+    /// the playlist rather than the main window. On macOS, Cmd takes Ctrl's place (see
+    /// [`ctrl_held`]).
     fn key_cmd(&self, kind: WindowKind, event: &KeyEvent) -> Option<KeyCmd> {
         if kind == WindowKind::Playlist
             && let Some(cmd) = self.playlist_key(event)
@@ -1707,6 +1805,16 @@ impl App {
             Key::Character(s) => match (s.to_ascii_lowercase().as_str(), ctrl, alt) {
                 ("a", true, _) => KeyCmd::ToggleAlwaysOnTop,
                 ("d", true, _) => KeyCmd::ToggleDoubleSize,
+                // Windowshade for the main window, or in the playlist for the playlist, as in
+                // Winamp. Held down, it toggles once rather than flickering.
+                ("w", true, false) if !event.repeat => {
+                    let shaded = if kind == WindowKind::Playlist {
+                        WindowKind::Playlist
+                    } else {
+                        WindowKind::Main
+                    };
+                    KeyCmd::ToggleShade(shaded)
+                }
                 ("f", _, true) => KeyCmd::MainMenu,
                 ("s", _, true) => KeyCmd::SkinsMenu,
                 ("l", false, false) if shift => KeyCmd::OpenFolder,
