@@ -118,6 +118,10 @@ pub(super) struct Mixer {
     rate: u32,
     eq: Equalizer,
     eq_version: u32,
+    /// The left and right gains the last block ended on. A change of volume or balance glides
+    /// to the new gains over the next block rather than jumping, which would click (and step
+    /// audibly through a fade-out). `None` before the first block.
+    gains: Option<(f32, f32)>,
     /// One block of stereo from the ring.
     stereo: Vec<f32>,
     /// The same block mixed to mono for the visualiser.
@@ -140,6 +144,7 @@ impl Mixer {
             eq: Equalizer::default(),
             // Differs from the shared version's start (0), so the first call reads the settings.
             eq_version: u32::MAX,
+            gains: None,
             stereo: vec![0.0; MAX_FRAMES * 2],
             mono: vec![0.0; MAX_FRAMES],
         }
@@ -164,10 +169,17 @@ impl Mixer {
             .len()
             / 2;
 
-        let (gl, gr) = gains(self.shared.volume.load(), self.shared.balance.load());
+        let to = gains(self.shared.volume.load(), self.shared.balance.load());
+        let from = self.gains.replace(to).unwrap_or(to);
+        // A block is a few thousand frames at most, so the conversions are exact.
+        let step = 1.0 / got.max(1) as f32;
         let frames_out = out.chunks_exact_mut(channels);
         let input = self.stereo.chunks_exact(2).take(got);
-        for ((frame, lr), mono) in frames_out.zip(input).zip(self.mono.iter_mut()) {
+        for (i, ((frame, lr), mono)) in frames_out.zip(input).zip(self.mono.iter_mut()).enumerate()
+        {
+            let k = (i + 1) as f32 * step;
+            let gl = from.0 + (to.0 - from.0) * k;
+            let gr = from.1 + (to.1 - from.1) * k;
             let (l, r) = self.eq.process(lr[0], lr[1]);
             *mono = 0.5 * (l + r);
             let (l, r) = ((l * gl).clamp(-1.0, 1.0), (r * gr).clamp(-1.0, 1.0));
@@ -296,6 +308,20 @@ mod tests {
         let mut mono = [0.0f32; 1];
         rig.mixer.render(&mut mono, 1);
         assert_eq!(mono, [0.1875]);
+    }
+
+    #[test]
+    fn a_volume_change_glides_over_the_next_block() {
+        let mut rig = rig();
+        queue(&mut rig, &[1.0; 2]);
+        let mut out = [0.0f32; 2];
+        rig.mixer.render(&mut out, 2);
+        assert_eq!(out, [1.0, 1.0], "the first block starts at the volume set");
+        rig.shared.volume.store(0.0);
+        queue(&mut rig, &[1.0; 8]);
+        let mut out = [0.0f32; 8];
+        rig.mixer.render(&mut out, 2);
+        assert_eq!(out, [0.75, 0.75, 0.5, 0.5, 0.25, 0.25, 0.0, 0.0]);
     }
 
     #[test]

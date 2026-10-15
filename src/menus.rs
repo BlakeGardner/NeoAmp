@@ -9,7 +9,7 @@ use crate::library::Entry;
 use crate::menu::{Item, escape};
 use crate::playlist::SortKey;
 use crate::shortcut::{Key, Shortcut};
-use crate::ui::{KeyCmd, ListCmd, Ui};
+use crate::ui::{InfoOf, KeyCmd, ListCmd, Ui};
 use crate::vis::{AnalyzerStyle, Bands, Falloff, ScopeStyle, VisMode};
 use crate::zoom::Zoom;
 
@@ -84,6 +84,8 @@ pub enum AppCommand {
     SaveList,
     /// Show the Jump to file dialog.
     JumpToFile,
+    /// Show the File info dialog.
+    FileInfo(InfoOf),
 }
 
 /// What the menus list from disk, as it was when the menu opened.
@@ -237,6 +239,11 @@ fn playback() -> Vec<Item<Command>> {
         key("&Play", KeyCmd::Play, Shortcut::char('X')),
         key("P&ause", KeyCmd::Pause, Shortcut::char('C')),
         key("&Stop", KeyCmd::Stop, Shortcut::char('V')),
+        key(
+            "Stop w/ fade&out",
+            KeyCmd::FadeOut,
+            Shortcut::char('V').shift(),
+        ),
         key("&Next", KeyCmd::Next, Shortcut::char('B')),
         Item::separator(),
         key(

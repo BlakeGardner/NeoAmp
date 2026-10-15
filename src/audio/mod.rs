@@ -47,14 +47,31 @@ pub struct Format {
 /// The formats symphonia is built to decode. Their extensions decide which files a folder adds
 /// to the playlist and which files the open dialog shows. Files named explicitly are always
 /// tried, whatever their extension: symphonia probes the contents.
-pub const FORMATS: [Format; 4] = [
+pub const FORMATS: [Format; 8] = [
     Format {
         name: "MP3 audio",
         extensions: &["mp3"],
     },
     Format {
+        name: "MP1 and MP2 audio",
+        extensions: &["mp2", "mp1"],
+    },
+    Format {
+        name: "AAC audio",
+        extensions: &["aac"],
+    },
+    // AAC or Apple Lossless (ALAC) in an MP4 file.
+    Format {
+        name: "MPEG-4 audio",
+        extensions: &["m4a", "m4b", "mp4"],
+    },
+    Format {
         name: "WAV audio",
         extensions: &["wav", "wave"],
+    },
+    Format {
+        name: "AIFF audio",
+        extensions: &["aiff", "aif", "aifc"],
     },
     Format {
         name: "FLAC audio",
@@ -83,6 +100,50 @@ pub struct TrackInfo {
     pub channels: usize,
     /// Average bitrate in kbit/s, from the file size and length.
     pub kbps: Option<u32>,
+}
+
+/// A file's tags, as the file info dialog shows them. Tags the file lacks, or leaves empty, are
+/// `None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tags {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// The year, or the whole date, as the file writes it.
+    pub year: Option<String>,
+    /// The track number, with the number of tracks when the file gives it ("7/12").
+    pub track: Option<String>,
+    pub genre: Option<String>,
+    pub comment: Option<String>,
+}
+
+impl Tags {
+    /// "Artist - Title", or just the title, as the playlist names an entry.
+    #[must_use]
+    pub fn playlist_title(&self) -> Option<String> {
+        match (&self.artist, &self.title) {
+            (Some(a), Some(t)) => Some(format!("{a} - {t}")),
+            (None, Some(t)) => Some(t.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Everything the file info dialog shows about a file.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FileDetails {
+    pub tags: Tags,
+    /// The kind of file, as symphonia names its reader ("MPEG-4 Part 14", "Free Lossless Audio
+    /// Codec Native", ...).
+    pub format: String,
+    /// The codec, as symphonia names its decoder ("Advanced Audio Coding", ...).
+    pub codec: String,
+    /// The length, sample rate, channels and average bitrate.
+    pub info: TrackInfo,
+    /// Bits per sample, for PCM and lossless audio; lossy codecs have none.
+    pub bits_per_sample: Option<u32>,
+    /// The file's size in bytes.
+    pub size: Option<u64>,
 }
 
 /// Something the audio engine reports back to the UI.
@@ -390,6 +451,14 @@ pub fn probe(path: &Path) -> Result<TrackInfo> {
     source::probe(path).with_context(|| format!("reading {}", path.display()))
 }
 
+/// Read everything the file info dialog shows about a file, without decoding it.
+///
+/// # Errors
+/// Fails if the file cannot be opened or holds no audio symphonia can decode.
+pub fn details(path: &Path) -> Result<FileDetails> {
+    source::details(path).with_context(|| format!("reading {}", path.display()))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -402,6 +471,11 @@ mod tests {
         assert!(is_audio_file(Path::new("x.flac")));
         assert!(is_audio_file(Path::new("x.Wave")));
         assert!(is_audio_file(Path::new("x.oga")));
+        for name in [
+            "x.m4a", "x.M4B", "x.mp4", "x.aac", "x.aiff", "x.aif", "x.mp2", "x.mp1",
+        ] {
+            assert!(is_audio_file(Path::new(name)), "{name}");
+        }
         assert!(!is_audio_file(Path::new("skin.wsz")));
         assert!(!is_audio_file(Path::new("noext")));
     }

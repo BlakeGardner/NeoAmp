@@ -10,9 +10,7 @@
 use std::time::Instant;
 
 use crate::canvas::{Image, Rect};
-use crate::classic::{
-    self, FACE, FRAME, GRAY_TEXT, SELECTION, SELECTION_TEXT, TEXT, WINDOW, line, px,
-};
+use crate::classic::{self, FACE, GRAY_TEXT, SELECTION, SELECTION_TEXT, TEXT, WINDOW, line, px};
 use crate::font::TtfFont;
 use crate::menu::Measure;
 use crate::ui::{Track, push_fmt};
@@ -694,23 +692,8 @@ impl Jump {
             (Part::JumpButton, l.jump, JUMP),
             (Part::CloseButton, l.close, CLOSE),
         ] {
-            c.fill_rect(r, FACE);
             let default = part == Part::JumpButton;
-            let face = if default {
-                classic::frame(c, r, t, FRAME);
-                Rect::new(r.x + t, r.y + t, r.w - 2 * t, r.h - 2 * t)
-            } else {
-                r
-            };
-            let down = self.pushed(part);
-            if down {
-                classic::frame(c, face, t, classic::SHADOW);
-            } else {
-                classic::button(c, face, t);
-            }
-            let shift = if down { t } else { 0 };
-            let tx = r.x + (r.w - font.width(text)) / 2 + shift;
-            font.draw(c, text, tx, centred(r) + shift, TEXT, r);
+            classic::push_button(c, font, r, t, text, default, self.pushed(part));
         }
     }
 }
@@ -929,7 +912,7 @@ mod tests {
         assert_eq!(c.get(l.edit.x + 10, l.edit.y), classic::SHADOW);
         assert_eq!(
             c.get(l.jump.x, l.jump.y),
-            FRAME,
+            classic::FRAME,
             "the default button's frame"
         );
         let row = Rect::new(l.rows.x, l.rows.y + l.row_h, l.rows.w, l.row_h);

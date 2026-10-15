@@ -1,4 +1,5 @@
-//! Classic Winamp skin (.wsz) loading: sprite sheets, viscolor.txt, pledit.txt, region.txt.
+//! Classic Winamp skin (.wsz) loading: sprite sheets, viscolor.txt, pledit.txt, region.txt and
+//! the mouse pointers (`.cur` files, see [`crate::cursor`]).
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -7,6 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::canvas::{Image, Rect};
+use crate::cursor::{self, CursorImage, SkinCursor};
 use crate::sprites::{Sheet, Sprite, eq, eq_shade, main, main_shade};
 
 /// Largest sheet dimension we accept from an untrusted archive (real sheets are under 400px).
@@ -113,6 +115,8 @@ pub struct Skin {
     pub main_shade_mask: Option<Mask>,
     pub eq_mask: Option<Mask>,
     pub eq_shade_mask: Option<Mask>,
+    /// The mouse pointers the skin has; the system's show where it has none.
+    cursors: HashMap<SkinCursor, CursorImage>,
 }
 
 impl std::fmt::Debug for Skin {
@@ -131,6 +135,7 @@ impl std::fmt::Debug for Skin {
             .field("borrowed", &self.borrowed)
             .field("pledit", &self.pledit)
             .field("has_regions", &has_regions)
+            .field("cursors", &self.cursors.len())
             .finish_non_exhaustive()
     }
 }
@@ -214,6 +219,18 @@ impl Skin {
         let regions = text("region.txt")
             .map(|t| parse_region(&t))
             .unwrap_or_default();
+        let mut cursors = HashMap::new();
+        for which in SkinCursor::ALL {
+            let Some(bytes) = files.get(which.file_name()) else {
+                continue;
+            };
+            match cursor::parse(bytes) {
+                Ok(image) => {
+                    cursors.insert(which, image);
+                }
+                Err(e) => log::warn!("{name}: cannot decode {}: {e:#}", which.file_name()),
+            }
+        }
         let mask = |polys: Option<&Polygons>, w, h| polys.map(|p| region_mask(p, w, h));
         Ok(Skin {
             name: name.to_string(),
@@ -227,11 +244,16 @@ impl Skin {
             eq_mask: mask(regions.equalizer.as_ref(), eq::W, eq::H),
             eq_shade_mask: mask(regions.equalizer_ws.as_ref(), eq::W, eq_shade::H),
             regions,
+            cursors,
         })
     }
 
-    /// Fill in sheets this skin is missing from `base` (Winamp falls back per file).
+    /// Fill in sheets and pointers this skin is missing from `base` (Winamp falls back per
+    /// file).
     pub fn fill_missing_from(&mut self, base: &Skin) {
+        for (which, image) in &base.cursors {
+            self.cursors.entry(*which).or_insert_with(|| image.clone());
+        }
         // Skins without balance.bmp reuse the volume slider graphics.
         if !self.sheets.contains_key(&Sheet::Balance)
             && let Some(v) = self.sheets.get(&Sheet::Volume)
@@ -245,6 +267,12 @@ impl Skin {
             self.sheets.insert(*k, v.clone());
             self.borrowed.push(*k);
         }
+    }
+
+    /// The skin's pointer for `which`, if it has one.
+    #[must_use]
+    pub fn cursor(&self, which: SkinCursor) -> Option<&CursorImage> {
+        self.cursors.get(&which)
     }
 
     #[must_use]
@@ -540,6 +568,24 @@ mod tests {
         assert_eq!(skin.sheet(Sheet::Main).h, main::H);
         assert!(skin.main_mask.is_none() && skin.main_shade_mask.is_none());
         assert!(skin.has_own_sheet(Sheet::EqEx));
+        // Winamp 2.91's own pointers, and only those.
+        let has: Vec<SkinCursor> = SkinCursor::ALL
+            .into_iter()
+            .filter(|c| skin.cursor(*c).is_some())
+            .collect();
+        assert_eq!(
+            has,
+            [
+                SkinCursor::Close,
+                SkinCursor::EqSlid,
+                SkinCursor::EqTitle,
+                SkinCursor::MainMenu,
+                SkinCursor::PosBar,
+                SkinCursor::PSize,
+                SkinCursor::TitleBar,
+                SkinCursor::VolBal,
+            ]
+        );
     }
 
     #[test]
@@ -548,8 +594,19 @@ mod tests {
         let mut files = HashMap::new();
         let main_bmp = image_bmp(main::W, main::H);
         files.insert("main.bmp".to_string(), main_bmp);
+        files.insert("normal.cur".to_string(), b"damaged".to_vec());
         let mut skin = Skin::from_files(&files, "partial").unwrap();
+        assert!(skin.cursor(SkinCursor::TitleBar).is_none());
         skin.fill_missing_from(&base);
+        assert_eq!(
+            skin.cursor(SkinCursor::TitleBar),
+            base.cursor(SkinCursor::TitleBar),
+            "pointers are borrowed too"
+        );
+        assert!(
+            skin.cursor(SkinCursor::Normal).is_none(),
+            "a damaged one is skipped"
+        );
         assert!(skin.has_own_sheet(Sheet::Main));
         assert!(skin.has_sheet(Sheet::EqEx) && !skin.has_own_sheet(Sheet::EqEx));
         assert!(!skin.has_sheet(Sheet::NumsEx), "never borrowed");

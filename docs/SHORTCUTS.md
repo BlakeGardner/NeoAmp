@@ -10,8 +10,9 @@ See [macOS differences](#macos-differences).
 
 The code is `App::key_cmd` and `App::playlist_key` in
 [src/app.rs](../src/app.rs), with the menus' keys in
-[src/menu.rs](../src/menu.rs) and the Jump to file dialog's in
-[src/jump.rs](../src/jump.rs).
+[src/menu.rs](../src/menu.rs), the Jump to file dialog's in
+[src/jump.rs](../src/jump.rs) and the File info dialog's in
+[src/info_window.rs](../src/info_window.rs).
 
 ## Main, equalizer and playlist windows
 
@@ -26,6 +27,7 @@ These work in whichever of the three windows has the focus. The playlist has
 | X | X | Play; resumes when paused, and starts the track again when it is already playing |
 | C | C | Pause, or resume when paused |
 | V | V | Stop |
+| Shift+V | ⇧V | Fade out over 3 seconds, then stop (also Shift-click on Stop) |
 | B | B | Next track |
 | Left | ← | Back 5 seconds (while playing or paused) |
 | Right | → | Forward 5 seconds (while playing or paused) |
@@ -41,6 +43,7 @@ These work in whichever of the three windows has the focus. The playlist has
 | L | L | Open files; they replace the playlist |
 | Shift+L | ⇧L | Open a folder; its files replace the playlist |
 | J | J | Jump to file: search the playlist and play an entry |
+| Alt+3 | ⌥3 | File info: the current track's tags and details |
 
 ### Windows and display
 
@@ -68,8 +71,9 @@ These work in whichever of the three windows has the focus. The playlist has
 While the playlist has the focus, these come before the keys above. The other
 keys above still work there, except Up and Down (which move through the list
 instead of setting the volume), Ctrl+A (which selects every entry instead of
-keeping the windows on top) and Ctrl+W (which shades the playlist instead of
-the main window).
+keeping the windows on top), Ctrl+W (which shades the playlist instead of the
+main window) and Alt+3 (which shows the selected entry instead of the current
+track).
 
 | Key | macOS | Action |
 | --- | --- | --- |
@@ -93,9 +97,10 @@ the main window).
 | Ctrl+O | ⌘O | Load a playlist file, replacing the list |
 | Ctrl+S | ⌘S | Save the list to a playlist file |
 | Ctrl+W | ⌘W | Windowshade the playlist: collapse it to a bar, or open it out again |
+| Alt+3 | ⌥3 | File info for the first selected entry (or the one at the cursor) |
 
-The sort keys go by the digit keys' position, so they work on layouts where
-Shift turns 1 into another character.
+The sort keys and Alt+3 go by the digit keys' position, so they work on
+layouts where Shift turns 1 into another character or 3 needs Shift.
 
 ### Clicks with modifiers
 
@@ -136,6 +141,14 @@ added to the search.
 | Enter | Return | Play the highlighted entry and close the dialog |
 | Escape | Esc | Close the dialog |
 
+## File info dialog
+
+The dialog only shows a file's tags and details; its one button is Close.
+
+| Key | macOS | Action |
+| --- | --- | --- |
+| Enter, Escape or Space | Return, Esc or Space | Close the dialog |
+
 ## macOS differences
 
 - Cmd replaces Ctrl, and Option replaces Alt, in every shortcut.
@@ -150,5 +163,5 @@ added to the search.
 ## Not implemented yet
 
 Winamp shortcuts that NeoAmp does not have yet (see the
-[roadmap](ROADMAP.md)): Ctrl+L (open a URL), Alt+3 (file info), Ctrl+P
-(preferences) and Shift+V (fade out and stop).
+[roadmap](ROADMAP.md)): Ctrl+L (open a URL), which waits for internet radio
+(Phase 6), and Ctrl+P (preferences), since NeoAmp has no Preferences dialog.

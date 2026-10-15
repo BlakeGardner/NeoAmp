@@ -9,6 +9,7 @@
 //! scale factor, rounded. `upscale::Upscaler` stretches each canvas over its whole window: exact
 //! squares at whole-number scales, sharp-bilinear in between.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,14 +24,17 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::monitor::MonitorHandle;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
-use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
+use winit::window::{Cursor, CursorIcon, CustomCursor, Window, WindowId, WindowLevel};
 
 use crate::audio::{Player, Scanner};
 use crate::canvas::{Image, Rect};
+use crate::cursor::SkinCursor;
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::eqf::{self, AutoLoad};
 use crate::file_dialog::{FileDialog, Purpose};
-use crate::font::TtfFont;
+use crate::font::{FontLibrary, TtfFont};
+use crate::info::Outcome as InfoOutcome;
+use crate::info_window::InfoWindow;
 use crate::jump::Outcome as JumpOutcome;
 use crate::jump_window::JumpWindow;
 use crate::library::{self, Entry};
@@ -44,7 +48,7 @@ use crate::shortcut::Shortcut;
 use crate::skin::Skin;
 use crate::sprites::pl::TRACK_H;
 use crate::ui::{
-    Action, Control, CursorMove, KeyCmd, ListCmd, MenuRequest, Mods, PlayState, Track, Transport,
+    Action, CursorMove, InfoOf, KeyCmd, ListCmd, MenuRequest, Mods, PlayState, Track, Transport,
     Ui, WindowKind,
 };
 use crate::upscale::{Upscaler, window_to_canvas};
@@ -155,6 +159,12 @@ fn shortcut_key(event: &KeyEvent, m: ModifiersState) -> Key {
     }
 }
 
+/// Whether `event` is for the 3 key of the row of digits (Alt+3 is file info). It goes by
+/// position, like the playlist's sort keys, so it works on layouts where 3 needs Shift.
+fn is_digit_3(event: &KeyEvent) -> bool {
+    event.physical_key == PhysicalKey::Code(KeyCode::Digit3)
+}
+
 /// Load the base skin, apply the options and either render a screenshot or open the windows.
 ///
 /// Opening the windows restores the saved settings and playlist (see [`crate::settings`]),
@@ -174,10 +184,11 @@ pub fn run(opts: Options) -> Result<()> {
         .as_deref()
         .map(|p| load_skin(p, &base))
         .transpose()?;
-    let font = TtfFont::load_system(TtfFont::DEFAULT_PX);
+    let mut fonts = FontLibrary::default();
 
     if let Some(out) = &opts.screenshot {
         let skin = custom.as_ref().unwrap_or(&base);
+        let font = TtfFont::load_playlist(&skin.pledit.font, TtfFont::DEFAULT_PX, &mut fonts);
         return render_screenshot(Ui::demo(), skin, font.as_ref(), out);
     }
 
@@ -195,6 +206,8 @@ pub fn run(opts: Options) -> Result<()> {
         (None, _) => restore_skin(settings.skin.as_deref(), &base),
     };
     let autoload = store.as_ref().map(Store::load_autoload).unwrap_or_default();
+    let font_family = custom.as_ref().unwrap_or(&base).pledit.font.clone();
+    let font = TtfFont::load_playlist(&font_family, TtfFont::DEFAULT_PX, &mut fonts);
 
     let mut ui = Ui::new();
     settings.apply(&mut ui);
@@ -218,6 +231,9 @@ pub fn run(opts: Options) -> Result<()> {
         custom,
         skin_path,
         font,
+        font_family,
+        fonts,
+        pointers: HashMap::new(),
         panes: Vec::with_capacity(3),
         drag: None,
         resize: None,
@@ -241,10 +257,13 @@ pub fn run(opts: Options) -> Result<()> {
         dialog: None,
         popups: Popups::default(),
         jump: None,
+        info: None,
         menu_skins: Vec::new(),
         menu_presets: Vec::new(),
         focused: false,
         focus_lost: None,
+        title: crate::ui::APP_NAME.to_owned(),
+        title_scratch: String::new(),
         swallow_release: false,
         wheel_rest: (WindowKind::Main, 0.0),
     };
@@ -408,6 +427,38 @@ fn unmanaged_preference() -> Option<bool> {
     }
 }
 
+/// A mouse pointer a window shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Pointer {
+    /// One of the skin's.
+    Skin(SkinCursor),
+    /// The system's, where the skin has none.
+    System(CursorIcon),
+}
+
+/// The system's pointer for where the skin has none of its own: a resize arrow over the
+/// playlist's grip (only sideways in its windowshade bar, whose grip only sets the width), and
+/// the arrow everywhere else.
+fn system_pointer(which: SkinCursor) -> CursorIcon {
+    match which {
+        SkinCursor::PSize => CursorIcon::NwseResize,
+        SkinCursor::PWsSize => CursorIcon::EwResize,
+        _ => CursorIcon::Default,
+    }
+}
+
+/// How many times larger to make the skin's pointers on a desktop scaled by `scale_factor`, so
+/// that they keep their size next to the system's: whole steps, since they are pixel art. macOS
+/// scales them itself.
+fn pointer_scale(scale_factor: f64) -> u16 {
+    if cfg!(target_os = "macos") {
+        1
+    } else {
+        // A small whole number, so the cast cannot truncate.
+        scale_factor.round().clamp(1.0, 8.0) as u16
+    }
+}
+
 /// One OS window hosting one NeoAmp window.
 struct Pane {
     kind: WindowKind,
@@ -417,8 +468,8 @@ struct Pane {
     window: Arc<Window>,
     canvas: Image,
     cursor: PhysicalPosition<f64>,
-    /// The pointer's look: the default arrow, or a resize cursor over the playlist's grip.
-    cursor_icon: CursorIcon,
+    /// The pointer the window shows; `None` until one is set, or once the skin changes.
+    pointer: Option<Pointer>,
     focused: bool,
     opened_at: Instant,
 }
@@ -495,7 +546,14 @@ struct App {
     custom: Option<Skin>,
     /// The file `custom` came from, to be remembered.
     skin_path: Option<PathBuf>,
+    /// The playlist's font: the one the skin names, if the system has it.
     font: Option<TtfFont>,
+    /// The family the skin named when `font` was loaded.
+    font_family: String,
+    /// The system's fonts, where the skin's is looked for.
+    fonts: FontLibrary,
+    /// The skin's pointers made ready for the windows, at each scale a window has needed.
+    pointers: HashMap<(SkinCursor, u16), CustomCursor>,
     panes: Vec<Pane>,
     drag: Option<Drag>,
     resize: Option<Resize>,
@@ -541,6 +599,8 @@ struct App {
     popups: Popups,
     /// The Jump to file dialog, while it is open.
     jump: Option<JumpWindow>,
+    /// The File info dialog, while it is open.
+    info: Option<InfoWindow>,
     /// The skins and preset files the open menu lists; its commands number them.
     menu_skins: Vec<Entry>,
     menu_presets: Vec<Entry>,
@@ -548,6 +608,10 @@ struct App {
     focused: bool,
     /// When the last of our windows lost the focus.
     focus_lost: Option<Instant>,
+    /// The main window's title as last set: the current track, as in Winamp's taskbar entry.
+    title: String,
+    /// Where the title is written each frame, to be compared with `title` without allocating.
+    title_scratch: String,
     /// A click that closed a menu went down; its release does nothing either.
     swallow_release: bool,
     /// Mouse wheel travel over a window not yet turned into whole steps.
@@ -578,9 +642,30 @@ impl App {
                 log::info!("loaded skin {}", s.name);
                 self.custom = Some(s);
                 self.skin_path = Some(install_skin(path, self.store.as_ref()));
+                self.skin_changed();
             }
             Err(e) => log::error!("cannot load skin {}: {e:#}", path.display()),
         }
+    }
+
+    fn skin(&self) -> &Skin {
+        self.custom.as_ref().unwrap_or(&self.base)
+    }
+
+    /// Another skin is showing: forget the old one's pointers, and load the playlist font the
+    /// new one names, unless that is the one loaded already.
+    fn skin_changed(&mut self) {
+        self.pointers.clear();
+        for p in &mut self.panes {
+            p.pointer = None;
+        }
+        let family = &self.skin().pledit.font;
+        if family.to_lowercase() == self.font_family.to_lowercase() {
+            return;
+        }
+        let family = family.clone();
+        self.font = TtfFont::load_playlist(&family, TtfFont::DEFAULT_PX, &mut self.fonts);
+        self.font_family = family;
     }
 
     /// The current file's name, which auto-load presets go by.
@@ -653,6 +738,7 @@ impl App {
             AppCommand::BaseSkin => {
                 self.custom = None;
                 self.skin_path = None;
+                self.skin_changed();
             }
             AppCommand::Skin(i) => {
                 if let Some(path) = self.menu_skins.get(i).map(|e| e.path.clone()) {
@@ -686,6 +772,49 @@ impl App {
             AppCommand::LoadList => self.show_dialog(Purpose::LoadList),
             AppCommand::SaveList => self.show_dialog(Purpose::SaveList),
             AppCommand::JumpToFile => self.open_jump(el),
+            AppCommand::FileInfo(of) => self.open_info(of, el),
+        }
+    }
+
+    /// Show the File info dialog about the track `of` names, or that track in the dialog if it
+    /// is open already. With an empty playlist there is nothing to show.
+    fn open_info(&mut self, of: InfoOf, el: &ActiveEventLoop) {
+        let Some(path) = self.ui.info_track(of).map(|t| t.path.clone()) else {
+            return;
+        };
+        if let Some(info) = self.info.as_mut() {
+            info.show(path);
+            return;
+        }
+        let scale_factor = self
+            .pane(WindowKind::Main)
+            .map_or(1.0, |p| p.window.scale_factor());
+        // Like the Jump to file dialog, it follows the zoom but not double size.
+        let opened = InfoWindow::open(
+            el,
+            self.ui.zoom.factor(),
+            scale_factor,
+            self.ui.always_on_top,
+            path,
+        );
+        match opened {
+            Ok(info) => self.info = Some(info),
+            Err(e) => log::error!("cannot show the File info dialog: {e:#}"),
+        }
+    }
+
+    /// An event for the File info dialog's window.
+    fn info_event(&mut self, event: WindowEvent, now: Instant) {
+        let Some(info) = self.info.as_mut() else {
+            return;
+        };
+        let focus_event = matches!(event, WindowEvent::Focused(_));
+        if info.window_event(event) == InfoOutcome::Close {
+            // A closed window reports no more focus changes, so the focus it had is lost now.
+            self.info = None;
+        }
+        if self.info.is_none() || focus_event {
+            self.focus_changed(now);
         }
     }
 
@@ -809,6 +938,7 @@ impl App {
         self.panes.iter().any(|p| p.focused)
             || self.popups.has_focus()
             || self.jump.as_ref().is_some_and(JumpWindow::has_focus)
+            || self.info.as_ref().is_some_and(InfoWindow::has_focus)
     }
 
     /// A window of ours gained or lost the focus.
@@ -1080,13 +1210,14 @@ impl App {
         }
     }
 
-    /// Once per frame: take in scan results and engine events, hand the engine the current
-    /// settings, and read back the position, bitrate and visualiser samples.
-    fn sync_audio(&mut self, el: &ActiveEventLoop) {
+    /// Once per frame: take in scan results and engine events, move a fade-out on, hand the
+    /// engine the current settings, and read back the position, bitrate and visualiser
+    /// samples.
+    fn sync_audio(&mut self, el: &ActiveEventLoop, now: Instant) {
         while let Some((i, path, info)) = self.scanner.poll() {
             self.ui.set_track_info(i, &path, &info);
         }
-        let mut actions = Vec::new();
+        let mut actions = self.ui.advance_fade(now);
         if let Some(player) = self.player.as_mut() {
             while let Some(event) = player.poll() {
                 self.ui.audio_event(event, &mut actions);
@@ -1098,7 +1229,7 @@ impl App {
         let Some(player) = self.player.as_mut() else {
             return;
         };
-        player.set_volume(self.ui.volume);
+        player.set_volume(self.ui.output_volume(now));
         player.set_balance(self.ui.balance);
         player.set_eq(&self.ui.eq_settings());
         if self.ui.state != PlayState::Stopped {
@@ -1177,7 +1308,7 @@ impl App {
         at: Option<PhysicalPosition<i32>>,
     ) -> Result<()> {
         let title = match kind {
-            WindowKind::Main => "NeoAmp",
+            WindowKind::Main => self.title.as_str(),
             WindowKind::Eq => "NeoAmp Equalizer",
             WindowKind::Playlist => "NeoAmp Playlist",
         };
@@ -1237,7 +1368,7 @@ impl App {
             window,
             canvas: Image::new(w, h),
             cursor: PhysicalPosition::new(0.0, 0.0),
-            cursor_icon: CursorIcon::Default,
+            pointer: None,
             focused: false,
             opened_at: Instant::now(),
         });
@@ -1697,25 +1828,63 @@ impl App {
         }
     }
 
-    /// Show a resize cursor over the playlist's grip and while resizing, as Winamp did with
-    /// its skins' `PSIZE.CUR` (and `PWSSIZE.CUR` for the windowshade bar, whose grip only
-    /// changes the width). `pos` is the pointer in canvas coordinates.
-    fn update_cursor(&mut self, kind: WindowKind, pos: (i32, i32)) {
-        let resizing = kind == WindowKind::Playlist && self.resize.is_some();
-        // While another control or a window is being dragged, the cursor stays as it is.
-        let idle = self.ui.pressed.is_none() && self.drag.is_none() && self.resize.is_none();
-        let grip = resizing || (idle && self.ui.hit(kind, pos.0, pos.1) == Some(Control::PlResize));
-        let want = match (grip, self.ui.pl_shade) {
-            (false, _) => CursorIcon::Default,
-            (true, false) => CursorIcon::NwseResize,
-            (true, true) => CursorIcon::EwResize,
+    /// Show the skin's pointer for where the mouse is over window `kind`, or the system's
+    /// where the skin has none (see [`Ui::cursor_at`]). `pos` is the pointer in canvas
+    /// coordinates. While a control, a window or the playlist's grip is being dragged, the
+    /// pointer stays as it was when the drag began, as under Windows' mouse capture.
+    fn update_cursor(&mut self, kind: WindowKind, pos: (i32, i32), el: &ActiveEventLoop) {
+        if self.ui.pressed.is_some() || self.drag.is_some() || self.resize.is_some() {
+            return;
+        }
+        let which = self.ui.cursor_at(kind, pos.0, pos.1);
+        let want = if self.skin().cursor(which).is_some() {
+            Pointer::Skin(which)
+        } else {
+            Pointer::System(system_pointer(which))
         };
-        let Some(pane) = self.pane_mut(kind) else {
+        let Some(pane) = self.pane(kind) else {
             return;
         };
-        if pane.cursor_icon != want {
-            pane.cursor_icon = want;
-            pane.window.set_cursor(want);
+        if pane.pointer == Some(want) {
+            return;
+        }
+        let k = pointer_scale(pane.window.scale_factor());
+        let cursor: Cursor = match want {
+            Pointer::Skin(which) => match self.skin_pointer(which, k, el) {
+                Some(custom) => custom.into(),
+                None => system_pointer(which).into(),
+            },
+            Pointer::System(icon) => icon.into(),
+        };
+        if let Some(pane) = self.pane_mut(kind) {
+            pane.window.set_cursor(cursor);
+            pane.pointer = Some(want);
+        }
+    }
+
+    /// The skin's pointer `which`, `k` times larger, made ready for the windows the first time
+    /// it is needed. `None` if the skin has none, or the platform refuses it (logged).
+    fn skin_pointer(
+        &mut self,
+        which: SkinCursor,
+        k: u16,
+        el: &ActiveEventLoop,
+    ) -> Option<CustomCursor> {
+        if let Some(cursor) = self.pointers.get(&(which, k)) {
+            return Some(cursor.clone());
+        }
+        let image = self.skin().cursor(which)?.scaled(k);
+        let (hx, hy) = image.hotspot;
+        match CustomCursor::from_rgba(image.rgba, image.w, image.h, hx, hy) {
+            Ok(source) => {
+                let cursor = el.create_custom_cursor(source);
+                self.pointers.insert((which, k), cursor.clone());
+                Some(cursor)
+            }
+            Err(e) => {
+                log::warn!("cannot use the skin's {}: {e}", which.file_name());
+                None
+            }
         }
     }
 
@@ -1784,7 +1953,7 @@ impl App {
             }
             _ => {}
         }
-        self.update_cursor(kind, (x, y));
+        self.update_cursor(kind, (x, y), el);
     }
 
     /// What a key pressed in window `kind` does. The playlist has keys of its own, as in
@@ -1801,6 +1970,9 @@ impl App {
         let ctrl = ctrl_held(self.modifiers);
         let alt = self.modifiers.alt_key();
         let shift = self.modifiers.shift_key();
+        if alt && !ctrl && is_digit_3(event) {
+            return Some(KeyCmd::FileInfo(InfoOf::Current));
+        }
         Some(match &shortcut_key(event, self.modifiers) {
             Key::Character(s) => match (s.to_ascii_lowercase().as_str(), ctrl, alt) {
                 ("a", true, _) => KeyCmd::ToggleAlwaysOnTop,
@@ -1827,6 +1999,7 @@ impl App {
                 ("z", false, false) => KeyCmd::Prev,
                 ("x", false, false) => KeyCmd::Play,
                 ("c", false, false) => KeyCmd::Pause,
+                ("v", false, false) if shift => KeyCmd::FadeOut,
                 ("v", false, false) => KeyCmd::Stop,
                 ("b", false, false) => KeyCmd::Next,
                 ("l", false, false) => KeyCmd::OpenFiles,
@@ -1862,6 +2035,9 @@ impl App {
             if let Some(key) = key {
                 return list(ListCmd::Sort(key));
             }
+        }
+        if alt && !ctrl && is_digit_3(event) {
+            return Some(KeyCmd::FileInfo(InfoOf::Selection));
         }
         match &event.logical_key {
             Key::Character(s) if ctrl && !alt => match s.to_ascii_lowercase().as_str() {
@@ -1916,6 +2092,20 @@ impl App {
         let whole = whole as i32;
         if whole != 0 {
             self.ui.wheel(kind, whole);
+        }
+    }
+
+    /// Show the current track in the main window's title, for the taskbar and the window
+    /// switcher, when it has changed.
+    fn sync_title(&mut self) {
+        self.title_scratch.clear();
+        self.ui.write_window_title(&mut self.title_scratch);
+        if self.title_scratch == self.title {
+            return;
+        }
+        std::mem::swap(&mut self.title, &mut self.title_scratch);
+        if let Some(p) = self.pane(WindowKind::Main) {
+            p.window.set_title(&self.title);
         }
     }
 
@@ -2011,6 +2201,10 @@ impl ApplicationHandler for App {
             self.jump_event(event, now, el);
             return;
         }
+        if self.info.as_ref().is_some_and(|i| i.id() == id) {
+            self.info_event(event, now);
+            return;
+        }
         if self.popups.owns(id) {
             match &event {
                 WindowEvent::KeyboardInput { event, .. } => self.menu_key(event, el),
@@ -2051,6 +2245,10 @@ impl ApplicationHandler for App {
             } => {
                 // Moved to a monitor with a different desktop scale. Answer with our own size,
                 // or winit applies its rounding of the old logical size after this returns.
+                if let Some(p) = self.pane_mut(kind) {
+                    // The skin's pointers are sized for the desktop's scale.
+                    p.pointer = None;
+                }
                 let wanted = scaled_size(self.ui.window_size(kind), self.ui.scale() * scale_factor);
                 if let Err(e) = inner_size_writer.request_inner_size(wanted) {
                     log::warn!("keeping winit's size after a scale change: {e}");
@@ -2087,7 +2285,7 @@ impl ApplicationHandler for App {
                     let actions = self.ui.mouse_move(kind, x, y);
                     self.handle(actions, el);
                 }
-                self.update_cursor(kind, (x, y));
+                self.update_cursor(kind, (x, y), el);
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 self.mouse_input(kind, state, button, now, el);
@@ -2119,10 +2317,14 @@ impl ApplicationHandler for App {
             self.finish_dialog(el);
             self.popups.tick(el, now);
             self.check_menu_focus(now);
-            self.sync_audio(el);
+            self.sync_audio(el, now);
             self.ui.tick(now);
+            self.sync_title();
             if let Some(jump) = self.jump.as_mut() {
                 jump.tick(&self.ui.tracks, self.ui.playlist_version(), now);
+            }
+            if let Some(info) = self.info.as_mut() {
+                info.tick();
             }
             for p in &self.panes {
                 p.window.request_redraw();

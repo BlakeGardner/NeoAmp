@@ -16,7 +16,7 @@ and [SETTINGS.md](SETTINGS.md) for every key.
 
 ## Phase 2: Popup menus
 
-Done except **I**: menus drawn like Windows 2000's in windows of their own
+Done: menus drawn like Windows 2000's in windows of their own
 ([src/menu.rs](../src/menu.rs), [src/menus.rs](../src/menus.rs),
 [src/popup.rs](../src/popup.rs)). See "Menus" in the README.
 
@@ -30,7 +30,7 @@ Done except **I**: menus drawn like Windows 2000's in windows of their own
       waits for Phase 6.
 - [x] **O** opens the options menu.
 - [x] **A** toggles always on top.
-- [ ] **I** opens file info (see Phase 5).
+- [x] **I** opens file info (see Phase 5).
 - [x] **V** opens the visualizer menu.
 - [x] EQ **PRESETS**: built-in presets (Rock, Classical, …), load and save,
       `.eqf` import, Reset / Flat.
@@ -54,8 +54,8 @@ playlist files in [src/playlist_file.rs](../src/playlist_file.rs) and
   - [x] REM: remove selected, crop, clear, and MISC REM > Remove all dead
         files.
   - [x] SEL: select all, none, invert.
-  - [x] MISC: sort (title, file name, path), reverse, randomize. FILE INFO
-        waits for the file info dialog (Phase 5); MISC OPTIONS does nothing.
+  - [x] MISC: sort (title, file name, path), reverse, randomize, and FILE
+        INFO (Phase 5); MISC OPTIONS does nothing.
   - [x] LIST OPTS: new, save and load list.
 - [x] Shift- and Ctrl-click multi-select (Cmd-click on macOS).
 - [x] Drag rows to reorder, and Alt+Up / Alt+Down.
@@ -90,20 +90,27 @@ Done: see "Windowshade" in the README. The bars are drawn by `draw_shade` in
 
 ## Phase 5: Smaller items
 
-- [ ] More formats. symphonia 0.6 has `aac`, `alac`, `isomp4` (M4A), `aiff`
-      and `mp1`/`mp2` as cargo features: enable them in `Cargo.toml` and add
-      them to `FORMATS` in [src/audio/mod.rs](../src/audio/mod.rs), which also
-      feeds the open dialog's filters.
-- [ ] Show the current song in the OS window title, for the taskbar and
-      Alt+Tab. `App::open_pane` always uses "NeoAmp".
-- [ ] Honour `Font=` in `pledit.txt`. It is parsed but ignored, and the
-      playlist always uses the first font in `CANDIDATES` it finds
-      ([src/font.rs](../src/font.rs)).
-- [ ] Use the skin's cursors (`.cur` files).
-- [ ] File info dialog (the **I** button, Alt+3).
-- [ ] Shortcuts: Ctrl+L (open URL, needs Phase 6), Alt+3 (file info), Ctrl+P
-      (preferences, if there is a Preferences dialog), Shift+V (fade out and
-      stop).
+Done except Ctrl+L, which waits for Phase 6, and Ctrl+P, which waits for a
+Preferences dialog (see Optional). See "File info", "Skin fonts and
+pointers" and "Stop with fadeout" in the README.
+
+- [x] More formats: symphonia's `aac`, `alac`, `isomp4` (M4A), `aiff` and
+      `mpa` (MP1, MP2, MP3) features, listed in `FORMATS` in
+      [src/audio/mod.rs](../src/audio/mod.rs).
+- [x] Show the current song in the OS window title, for the taskbar and
+      Alt+Tab: "3. Artist - Title - NeoAmp [Paused]", as Winamp wrote it.
+- [x] Honour `Font=` in `pledit.txt`, looking the family up among the
+      system's fonts with fontdb ([src/font.rs](../src/font.rs)).
+- [x] Use the skin's cursors (`.cur` files, [src/cursor.rs](../src/cursor.rs)),
+      borrowing the base skin's where a skin has none.
+- [x] File info dialog (the **I** button, Alt+3, MISC > FILE INFO),
+      [src/info.rs](../src/info.rs). It shows the tags but cannot edit them
+      (the user chose read-only over writing tags with `lofty`).
+- [ ] Shortcuts:
+  - [ ] Ctrl+L (open URL) needs Phase 6.
+  - [x] Alt+3 (file info).
+  - [ ] Ctrl+P (preferences) needs a Preferences dialog (see Optional).
+  - [x] Shift+V (fade out and stop), and Shift-click on Stop.
 
 ## Phase 6: Internet radio
 

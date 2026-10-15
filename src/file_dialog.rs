@@ -197,7 +197,8 @@ mod tests {
         assert_eq!(types.len(), FORMATS.len() + 2);
         assert_eq!(
             types[0].label,
-            "All supported types (*.mp3;*.wav;*.wave;*.flac;*.ogg;*.oga;*.m3u;*.m3u8;*.pls)"
+            "All supported types (*.mp3;*.mp2;*.mp1;*.aac;*.m4a;*.m4b;*.mp4;*.wav;*.wave;*.aiff;*.aif;\
+             *.aifc;*.flac;*.ogg;*.oga;*.m3u;*.m3u8;*.pls)"
         );
         for ext in audio::extensions() {
             assert!(types[0].extensions.iter().any(|e| e == ext));
@@ -210,7 +211,7 @@ mod tests {
 
     #[test]
     fn each_format_is_listed_in_both_cases() {
-        let wav = &file_types()[2];
+        let wav = &file_types()[5];
         assert_eq!(wav.label, "WAV audio (*.wav;*.wave)");
         assert_eq!(wav.extensions, ["wav", "WAV", "wave", "WAVE"]);
     }

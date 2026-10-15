@@ -4,10 +4,11 @@
 use std::fmt::Write as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::audio::{EQ_RANGE_DB, EqSettings, Event, TrackInfo};
 use crate::canvas::{Image, Rect};
+use crate::cursor::SkinCursor;
 use crate::eqf::{self, Preset};
 use crate::font::TtfFont;
 use crate::menus::{AppCommand, Command, MenuKind};
@@ -28,10 +29,14 @@ const MARQUEE_SEPARATOR: &str = "  ***  ";
 const DOUBLE_CLICK_MS: u128 = 400;
 /// Time display blink period while paused (on for half, off for half).
 const BLINK_MS: u128 = 1000;
+/// The app's name, which ends the main window's title.
+pub const APP_NAME: &str = "NeoAmp";
 /// The volume of a first start, before any settings are saved.
 pub const DEFAULT_VOLUME: f32 = 0.78;
 /// How far Up, Down and a notch of the mouse wheel move the volume.
 const VOLUME_STEP: f32 = 0.02;
+/// How long Shift+V takes to fade the music out before it stops.
+pub const FADE_OUT: Duration = Duration::from_secs(3);
 
 /// The three classic windows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -359,6 +364,16 @@ pub struct MenuRequest {
     pub keyboard: bool,
 }
 
+/// Which file the File info dialog shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InfoOf {
+    /// The current track: the clutter bar's I, and Alt+3 outside the playlist.
+    Current,
+    /// The playlist's first selected entry, else the one at its keyboard cursor: MISC > FILE
+    /// INFO, and Alt+3 in the playlist.
+    Selection,
+}
+
 /// Playback commands for the audio engine. The UI state has already changed to match.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Transport {
@@ -388,6 +403,8 @@ pub enum KeyCmd {
     Play,
     Pause,
     Stop,
+    /// Fade out, then stop.
+    FadeOut,
     Next,
     /// Same as the eject button.
     OpenFiles,
@@ -407,6 +424,8 @@ pub enum KeyCmd {
     SeekForward,
     /// Open the Jump to file dialog.
     JumpToFile,
+    /// Show the File info dialog.
+    FileInfo(InfoOf),
     /// Replace the playlist with a playlist file's entries.
     LoadList,
     /// Save the playlist to a file.
@@ -490,6 +509,16 @@ pub struct Layout {
     pub size: (i32, i32),
 }
 
+/// A fade-out before stopping (Shift+V).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fade {
+    Off,
+    /// Asked for: it starts at the next frame (see [`Ui::advance_fade`]).
+    Requested,
+    /// Fading since then.
+    Since(Instant),
+}
+
 /// Selected playlist entries being dragged to a new place.
 #[derive(Clone, Copy, Debug)]
 struct RowDrag {
@@ -510,6 +539,8 @@ pub struct Ui {
     seek_to: Option<f32>,
     /// Tracks that failed to open in a row; when every track has, playback stops.
     failures: usize,
+    /// A fade-out under way. Playing, pausing or stopping otherwise cancels it.
+    fade: Fade,
     pub volume: f32,
     pub balance: f32,
     pub shuffle: bool,
@@ -611,6 +642,7 @@ impl Ui {
             elapsed: 0.0,
             seek_to: None,
             failures: 0,
+            fade: Fade::Off,
             volume: DEFAULT_VOLUME,
             balance: 0.0,
             shuffle: false,
@@ -812,6 +844,20 @@ impl Ui {
         (self.orphan.is_none() && self.current < self.tracks.len()).then_some(self.current)
     }
 
+    /// The track the File info dialog shows: the current one, or the playlist's first selected
+    /// entry, else the one at its keyboard cursor. `None` with an empty playlist.
+    #[must_use]
+    pub fn info_track(&self, of: InfoOf) -> Option<&Track> {
+        match of {
+            InfoOf::Current => self.track(),
+            InfoOf::Selection => {
+                let first = self.selected.iter().position(|s| *s);
+                let i = first.unwrap_or(self.pl_cursor);
+                self.tracks.get(i).or_else(|| self.track())
+            }
+        }
+    }
+
     /// Length of the current track in seconds; 0 while unknown.
     #[must_use]
     pub fn track_len(&self) -> f32 {
@@ -862,6 +908,7 @@ impl Ui {
         self.state = PlayState::Playing;
         self.elapsed = 0.0;
         self.seek_to = None;
+        self.fade = Fade::Off;
         self.shuffler.mark(self.current);
         actions.push(Action::Audio(Transport::Open(self.current)));
     }
@@ -877,6 +924,7 @@ impl Ui {
 
     /// Pause, or resume when already paused.
     pub fn pause(&mut self, actions: &mut Vec<Action>) {
+        self.fade = Fade::Off;
         match self.state {
             PlayState::Playing => {
                 self.state = PlayState::Paused;
@@ -897,11 +945,59 @@ impl Ui {
         self.state = PlayState::Stopped;
         self.elapsed = 0.0;
         self.seek_to = None;
+        self.fade = Fade::Off;
         self.vis.reset();
         if self.orphan.take().is_some() {
             // Back to an entry of the playlist: the one that followed, or the last.
             self.current = self.current.min(self.tracks.len().saturating_sub(1));
             self.refresh_title();
+        }
+    }
+
+    /// Fade the music out, then stop (Shift+V, or Shift-click on Stop). Paused, it stops at
+    /// once; asked again while fading, nothing changes.
+    pub fn fade_out(&mut self, actions: &mut Vec<Action>) {
+        match self.state {
+            PlayState::Playing if self.fade == Fade::Off => self.fade = Fade::Requested,
+            PlayState::Playing | PlayState::Stopped => {}
+            PlayState::Paused => self.stop(actions),
+        }
+    }
+
+    /// Whether a fade-out is under way.
+    #[must_use]
+    pub fn is_fading(&self) -> bool {
+        self.fade != Fade::Off
+    }
+
+    /// Move a fade-out on to `now`, once a frame: it starts at the first frame after it was
+    /// asked for, and stops playback once it has run for [`FADE_OUT`].
+    #[must_use = "the returned actions must be performed by the window layer"]
+    pub fn advance_fade(&mut self, now: Instant) -> Vec<Action> {
+        let mut actions = Vec::new();
+        match self.fade {
+            Fade::Requested => self.fade = Fade::Since(now),
+            Fade::Since(t) if now.saturating_duration_since(t) >= FADE_OUT => {
+                self.stop(&mut actions);
+            }
+            Fade::Off | Fade::Since(_) => {}
+        }
+        actions
+    }
+
+    /// The volume to play at, at `now`: the slider's, lowered as a fade-out goes on, the way
+    /// sliding the volume down evenly would. The slider itself stays where it is. Stopped, it
+    /// is nothing: the device may play a last block before a stop reaches it, which must not
+    /// come back at full volume after a fade.
+    #[must_use]
+    pub fn output_volume(&self, now: Instant) -> f32 {
+        match self.fade {
+            _ if self.state == PlayState::Stopped => 0.0,
+            Fade::Since(t) => {
+                let secs = now.saturating_duration_since(t).as_secs_f32();
+                self.volume * (1.0 - secs / FADE_OUT.as_secs_f32()).clamp(0.0, 1.0)
+            }
+            Fade::Off | Fade::Requested => self.volume,
         }
     }
 
@@ -1051,6 +1147,8 @@ impl Ui {
                     self.set_track_info(self.current, &path, &info);
                 }
             }
+            // A track that ends while fading out stops there, rather than starting the next.
+            Event::Finished if self.is_fading() => self.stop(actions),
             Event::Finished => self.advance(actions),
             Event::Failed(why) => {
                 if let Some(t) = self.track() {
@@ -1393,6 +1491,22 @@ impl Ui {
         &self.title_text
     }
 
+    /// Write the main window's title into `buf`, as Winamp's read in the taskbar: the current
+    /// entry's number and title, then the app's name, and "[Paused]" or "[Stopped]" unless it
+    /// plays ("3. Artist - Title - NeoAmp [Paused]"). With an empty playlist, just the name.
+    pub fn write_window_title(&self, buf: &mut String) {
+        if self.title_text.is_empty() {
+            buf.push_str(APP_NAME);
+            return;
+        }
+        push_fmt(buf, format_args!("{} - {APP_NAME}", self.title_text));
+        match self.state {
+            PlayState::Playing => {}
+            PlayState::Paused => buf.push_str(" [Paused]"),
+            PlayState::Stopped => buf.push_str(" [Stopped]"),
+        }
+    }
+
     /// The characters the marquee shows for the current track at `now`, without allocating.
     pub fn title_scroll_chars(&self, now: Instant) -> impl Iterator<Item = char> + '_ {
         let len = self.title_chars.len().max(1);
@@ -1526,6 +1640,62 @@ impl Ui {
             (WindowKind::Eq, true) => Some(Self::hit_eq_shade(x, y)),
             (WindowKind::Playlist, false) => self.hit_pl(x, y, w, h),
             (WindowKind::Playlist, true) => Some(Self::hit_pl_shade(x, y, w)),
+        }
+    }
+
+    /// The skin's pointer for window-local point (`x`, `y`) of `kind`, as Winamp chose them:
+    /// one per button of the title bars, the sliders and the playlist's grip and scroll bar,
+    /// and one for the rest of each window. In the windowshade bars the buttons keep theirs,
+    /// except the main window's options button, which has its own (Webamp and Winamp's
+    /// Skinner's Atlas are the sources).
+    #[must_use]
+    pub fn cursor_at(&self, kind: WindowKind, x: i32, y: i32) -> SkinCursor {
+        use Control::*;
+        let hit = self.hit(kind, x, y);
+        match (kind, self.is_shaded(kind)) {
+            (WindowKind::Main, false) => match hit {
+                Some(MainClose) => SkinCursor::Close,
+                Some(MainMinimize) => SkinCursor::Min,
+                Some(MainShade) => SkinCursor::WinBut,
+                Some(MainOptions) => SkinCursor::MainMenu,
+                Some(MainTitle) => SkinCursor::TitleBar,
+                Some(PosBar) => SkinCursor::PosBar,
+                Some(Volume | Balance) => SkinCursor::VolBal,
+                _ if m::MARQUEE_TARGET.contains(x, y) => SkinCursor::SongName,
+                _ => SkinCursor::Normal,
+            },
+            (WindowKind::Main, true) => match hit {
+                Some(MainClose) => SkinCursor::Close,
+                Some(MainMinimize) => SkinCursor::Min,
+                Some(MainShade) => SkinCursor::WinBut,
+                Some(MainOptions) => SkinCursor::MMenu,
+                Some(PosBar) => SkinCursor::WsPosBar,
+                _ => SkinCursor::WsNormal,
+            },
+            (WindowKind::Eq, false) => match hit {
+                Some(EqClose) => SkinCursor::EqClose,
+                Some(EqTitle | EqShade) => SkinCursor::EqTitle,
+                Some(EqBand(_) | EqPreamp) => SkinCursor::EqSlid,
+                _ => SkinCursor::EqNormal,
+            },
+            (WindowKind::Eq, true) => match hit {
+                Some(EqClose) => SkinCursor::EqClose,
+                _ => SkinCursor::EqTitle,
+            },
+            (WindowKind::Playlist, false) => match hit {
+                Some(PlClose) => SkinCursor::PClose,
+                Some(PlShade) => SkinCursor::PWinBut,
+                Some(PlTitle) => SkinCursor::PTBar,
+                Some(PlResize) => SkinCursor::PSize,
+                Some(PlScroll) => SkinCursor::PVScroll,
+                _ => SkinCursor::PNormal,
+            },
+            (WindowKind::Playlist, true) => match hit {
+                Some(PlClose) => SkinCursor::PClose,
+                Some(PlShade) => SkinCursor::PWinBut,
+                Some(PlResize) => SkinCursor::PWsSize,
+                _ => SkinCursor::PWsNorm,
+            },
         }
     }
 
@@ -2039,6 +2209,8 @@ impl Ui {
             Prev | PlMiniPrev => self.prev(&mut actions),
             Play | PlMiniPlay => self.play(&mut actions),
             Pause | PlMiniPause => self.pause(&mut actions),
+            // Shift-click fades out first, as Shift+V does.
+            Stop | PlMiniStop if self.mods.shift => self.fade_out(&mut actions),
             Stop | PlMiniStop => self.stop(&mut actions),
             Next | PlMiniNext => self.next(&mut actions),
             Eject | PlMiniEject => actions.push(Action::OpenFiles),
@@ -2069,10 +2241,9 @@ impl Ui {
             ClutterV => actions.push(Self::menu(MenuKind::Vis, kind, None)),
             EqPresets => actions.push(Self::menu(MenuKind::EqPresets, kind, Some(e::PRESETS))),
             ClutterA => self.toggle_always_on_top(&mut actions),
-            // Press-only visuals: the file info dialog is not implemented. The playlist's menu
-            // buttons were handled above.
-            MainTitle | EqTitle | PlTitle | ClutterI | PlAdd | PlRem | PlSel | PlMisc
-            | PlListOpts => {}
+            ClutterI => actions.push(Action::App(AppCommand::FileInfo(InfoOf::Current))),
+            // Title bars only drag; the playlist's menu buttons were handled above.
+            MainTitle | EqTitle | PlTitle | PlAdd | PlRem | PlSel | PlMisc | PlListOpts => {}
         }
         actions
     }
@@ -2094,9 +2265,9 @@ impl Ui {
             SortList => actions.push(popup(MenuKind::PlaylistSort)),
             SaveList => actions.push(Action::App(AppCommand::SaveList)),
             LoadList => actions.push(Action::App(AppCommand::LoadList)),
-            // Streams (URLs), the file info dialog and Winamp's miscellaneous options are not
-            // implemented.
-            AddUrl | FileInfo | MiscOptions => {}
+            FileInfo => actions.push(Action::App(AppCommand::FileInfo(InfoOf::Selection))),
+            // Streams (URLs) and Winamp's miscellaneous options are not implemented.
+            AddUrl | MiscOptions => {}
         }
     }
 
@@ -2181,6 +2352,7 @@ impl Ui {
             KeyCmd::Play => self.play(&mut actions),
             KeyCmd::Pause => self.pause(&mut actions),
             KeyCmd::Stop => self.stop(&mut actions),
+            KeyCmd::FadeOut => self.fade_out(&mut actions),
             KeyCmd::Next => self.next(&mut actions),
             KeyCmd::OpenFiles => actions.push(Action::OpenFiles),
             KeyCmd::OpenFolder => actions.push(Action::OpenFolder),
@@ -2207,6 +2379,7 @@ impl Ui {
             KeyCmd::SeekBack => self.seek(self.elapsed - 5.0, &mut actions),
             KeyCmd::SeekForward => self.seek(self.elapsed + 5.0, &mut actions),
             KeyCmd::JumpToFile => actions.push(Action::App(AppCommand::JumpToFile)),
+            KeyCmd::FileInfo(of) => actions.push(Action::App(AppCommand::FileInfo(of))),
             KeyCmd::LoadList => actions.push(Action::App(AppCommand::LoadList)),
             KeyCmd::SaveList => actions.push(Action::App(AppCommand::SaveList)),
             KeyCmd::List(cmd) => self.list_command(cmd, &mut actions),
@@ -2354,6 +2527,87 @@ mod tests {
         // Changing track while paused plays the new one.
         assert_eq!(ui.state, PlayState::Playing);
         assert_eq!(ui.key(KeyCmd::Prev), vec![audio(Transport::Open(1))]);
+    }
+
+    #[test]
+    fn shift_v_fades_out_then_stops() {
+        let mut ui = Ui::demo();
+        ui.volume = 0.8;
+        let t0 = Instant::now();
+        assert_eq!(ui.key(KeyCmd::FadeOut), vec![], "nothing stops yet");
+        assert!(ui.is_fading());
+        assert_eq!(ui.output_volume(t0), 0.8, "it starts at the next frame");
+        assert_eq!(ui.advance_fade(t0), vec![]);
+        let half = t0 + FADE_OUT / 2;
+        assert!((ui.output_volume(half) - 0.4).abs() < 1e-6);
+        assert_eq!(ui.volume, 0.8, "the slider stays put");
+        assert_eq!(ui.advance_fade(half), vec![]);
+        assert_eq!(ui.state, PlayState::Playing);
+        assert_eq!(ui.advance_fade(t0 + FADE_OUT), vec![audio(Transport::Stop)]);
+        assert_eq!(ui.state, PlayState::Stopped);
+        assert!(!ui.is_fading());
+        assert_eq!(ui.output_volume(t0 + FADE_OUT), 0.0, "silent while stopped");
+        assert_eq!(ui.key(KeyCmd::FadeOut), vec![], "stopped: nothing to fade");
+        assert!(!ui.is_fading());
+        let _ = ui.key(KeyCmd::Play);
+        assert_eq!(ui.output_volume(t0), 0.8, "full volume for what plays next");
+    }
+
+    #[test]
+    fn a_fade_out_gives_way_to_other_transport_and_to_the_end_of_the_track() {
+        let mut ui = Ui::demo();
+        let now = Instant::now();
+        let _ = ui.key(KeyCmd::FadeOut);
+        let _ = ui.advance_fade(now);
+        assert_eq!(ui.key(KeyCmd::Next), vec![audio(Transport::Open(1))]);
+        assert!(!ui.is_fading(), "a new track plays at full volume");
+        let _ = ui.key(KeyCmd::FadeOut);
+        let _ = ui.key(KeyCmd::Pause);
+        assert!(!ui.is_fading(), "pausing cancels it");
+        // Paused, it just stops.
+        assert_eq!(ui.key(KeyCmd::FadeOut), vec![audio(Transport::Stop)]);
+        let _ = ui.key(KeyCmd::Play);
+        let _ = ui.key(KeyCmd::FadeOut);
+        let mut actions = Vec::new();
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Stop)], "not the next track");
+        // Shift-click on Stop fades out too.
+        let _ = ui.key(KeyCmd::Play);
+        ui.mods.shift = true;
+        assert_eq!(click(&mut ui, Main, m::STOP), vec![]);
+        assert!(ui.is_fading());
+        ui.mods.shift = false;
+        assert_eq!(click(&mut ui, Main, m::STOP), vec![audio(Transport::Stop)]);
+    }
+
+    #[test]
+    fn file_info_shows_the_current_track_or_the_selected_entry() {
+        let mut ui = Ui::demo();
+        let _ = ui.key(KeyCmd::Next);
+        let info = |of| Action::App(AppCommand::FileInfo(of));
+        assert_eq!(
+            click(&mut ui, Main, m::CLUTTER_I),
+            vec![info(InfoOf::Current)]
+        );
+        assert_eq!(
+            ui.key(KeyCmd::FileInfo(InfoOf::Selection)),
+            vec![info(InfoOf::Selection)]
+        );
+        let path = |t: Option<&Track>| t.map(|t| t.path.clone());
+        assert_eq!(path(ui.info_track(InfoOf::Current)), path(ui.tracks.get(1)));
+        // The demo selects the first entry.
+        assert_eq!(
+            path(ui.info_track(InfoOf::Selection)),
+            path(ui.tracks.first())
+        );
+        ui.selected.fill(false);
+        ui.selected[4] = true;
+        ui.selected[5] = true;
+        assert_eq!(
+            path(ui.info_track(InfoOf::Selection)),
+            path(ui.tracks.get(4))
+        );
+        assert!(Ui::new().info_track(InfoOf::Selection).is_none());
     }
 
     #[test]
@@ -3085,6 +3339,67 @@ mod tests {
         assert_eq!(ui.title(), "3. Justin F. - Rolling Llama (Radio Edit)");
         ui.clear_playlist(&mut Vec::new());
         assert_eq!(ui.title(), "");
+    }
+
+    #[test]
+    fn the_window_title_names_the_track_and_whether_it_plays() {
+        let title = |ui: &Ui| {
+            let mut s = String::new();
+            ui.write_window_title(&mut s);
+            s
+        };
+        let mut ui = Ui::demo();
+        assert_eq!(
+            title(&ui),
+            "1. DJ Mike Llama - Llama Whippin' Intro - NeoAmp"
+        );
+        let _ = ui.key(KeyCmd::Pause);
+        assert_eq!(
+            title(&ui),
+            "1. DJ Mike Llama - Llama Whippin' Intro - NeoAmp [Paused]"
+        );
+        let _ = ui.key(KeyCmd::Next);
+        let _ = ui.key(KeyCmd::Stop);
+        assert_eq!(
+            title(&ui),
+            "2. Nullsoft - Winamp 2.91 Theme - NeoAmp [Stopped]"
+        );
+        assert_eq!(title(&Ui::new()), "NeoAmp");
+    }
+
+    #[test]
+    fn each_part_of_the_windows_has_its_pointer() {
+        let mut ui = Ui::demo();
+        let at = |ui: &Ui, kind, r: Rect| ui.cursor_at(kind, r.x + 1, r.y + 1);
+        assert_eq!(at(&ui, Main, m::CLOSE), SkinCursor::Close);
+        assert_eq!(at(&ui, Main, m::OPTIONS), SkinCursor::MainMenu);
+        assert_eq!(ui.cursor_at(Main, 100, 5), SkinCursor::TitleBar);
+        assert_eq!(at(&ui, Main, m::BALANCE), SkinCursor::VolBal);
+        assert_eq!(at(&ui, Main, m::POSBAR), SkinCursor::PosBar);
+        assert_eq!(at(&ui, Main, m::MARQUEE), SkinCursor::SongName);
+        assert_eq!(at(&ui, Main, m::PLAY), SkinCursor::Normal);
+        assert_eq!(at(&ui, Eq, e::band(3)), SkinCursor::EqSlid);
+        assert_eq!(at(&ui, Eq, e::SHADE), SkinCursor::EqTitle);
+        assert_eq!(at(&ui, Eq, e::ON), SkinCursor::EqNormal);
+        let (w, h) = ui.pl_size;
+        assert_eq!(ui.cursor_at(Playlist, w - 3, h - 3), SkinCursor::PSize);
+        assert_eq!(ui.cursor_at(Playlist, 50, 5), SkinCursor::PTBar);
+        assert_eq!(ui.cursor_at(Playlist, w - 10, 40), SkinCursor::PVScroll);
+        assert_eq!(ui.cursor_at(Playlist, 50, 40), SkinCursor::PNormal);
+        ui.main_shade = true;
+        ui.eq_shade = true;
+        ui.pl_shade = true;
+        assert_eq!(at(&ui, Main, m::OPTIONS), SkinCursor::MMenu);
+        assert_eq!(at(&ui, Main, m::CLOSE), SkinCursor::Close);
+        assert_eq!(at(&ui, Main, ms::POSBAR), SkinCursor::WsPosBar);
+        assert_eq!(at(&ui, Main, ms::PLAY), SkinCursor::WsNormal);
+        assert_eq!(at(&ui, Eq, es::VOLUME), SkinCursor::EqTitle);
+        assert_eq!(at(&ui, Eq, e::CLOSE), SkinCursor::EqClose);
+        assert_eq!(
+            ui.cursor_at(Playlist, w - ps::RESIZE_FROM_RIGHT + 2, 5),
+            SkinCursor::PWsSize
+        );
+        assert_eq!(ui.cursor_at(Playlist, 50, 5), SkinCursor::PWsNorm);
     }
 
     #[test]

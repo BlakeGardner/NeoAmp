@@ -11,8 +11,8 @@ usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.p
 
   <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto a window)
   <audio file/folder>  replace the playlist and play the first (dropping onto a window
-                       adds instead); folders add their MP3, WAV, FLAC and Ogg Vorbis files,
-                       and .m3u, .m3u8 and .pls playlists their entries
+                       adds instead); folders add their MP3, MP2, AAC, M4A, WAV, AIFF, FLAC
+                       and Ogg Vorbis files, and .m3u, .m3u8 and .pls playlists their entries
   --scale <factor>     zoom the windows (default: the saved zoom, else from the screen
                        height, 1.5 at 1440p)
   --screenshot <png>   render one frame at 1x to a PNG and exit
@@ -20,16 +20,17 @@ usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.p
 Settings and the playlist are remembered between runs; NEOAMP_CONFIG_DIR=<folder> keeps
 them somewhere other than the platform's config folder.
 
-keys: Z/X/C/V/B transport, L open files, Shift+L open a folder, S shuffle, R repeat,
-      J jump to file, Ctrl+T time mode, Ctrl+D double size, Ctrl+A always on top,
-      Ctrl+W windowshade, Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
+keys: Z/X/C/V/B transport, Shift+V fade out and stop, L open files, Shift+L open a
+      folder, S shuffle, R repeat, J jump to file, Alt+3 file info, Ctrl+T time mode,
+      Ctrl+D double size, Ctrl+A always on top, Ctrl+W windowshade,
+      Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
       Alt+G equalizer, Alt+E playlist, Alt+F main menu (or right-click), Alt+S skins,
       arrows volume/seek
 in the playlist: arrows, PgUp/PgDn, Home/End move (Shift selects), Enter plays,
       Ctrl+A / Ctrl+I select all / invert, Delete / Ctrl+Delete / Alt+Delete remove
       selected / crop / dead files, Alt+Up/Down move entries, Ctrl+Shift+1/2/3 sort,
       Ctrl+R reverse, Ctrl+Shift+R randomize, Ctrl+N / Ctrl+O / Ctrl+S new/load/save,
-      Ctrl+W windowshade the playlist
+      Ctrl+W windowshade the playlist, Alt+3 file info for the selected entry
 on macOS, Cmd takes Ctrl's place and Option is Alt";
 
 /// Classic skins are `.wsz` files; any other path is audio for the playlist.

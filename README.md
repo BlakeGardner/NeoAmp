@@ -2,8 +2,8 @@
 
 NeoAmp is a music player in Rust with a pixel-exact reproduction of the
 classic Winamp 2.x interface (main window, equalizer and playlist editor),
-drawn with classic Winamp skins, that plays MP3, WAV, FLAC and Ogg Vorbis
-files. The transport buttons, position bar, volume, balance and ten-band
+drawn with classic Winamp skins, that plays MP3, MP2, AAC, M4A (AAC and
+Apple Lossless), WAV, AIFF, FLAC and Ogg Vorbis files. The transport buttons, position bar, volume, balance and ten-band
 equalizer all act on the audio, and the visualizer shows what is actually
 playing.
 
@@ -23,8 +23,9 @@ program does the same:
 - `src/sprites.rs` holds the sprite coordinates and window layout, which are
   identical for every classic skin.
 - `src/skin.rs` reads a `.wsz` (zip + BMP/PNG), `viscolor.txt`,
-  `pledit.txt` and `region.txt`, and falls back per sheet to the embedded
-  base skin for anything a skin leaves out.
+  `pledit.txt`, `region.txt` and the mouse pointers (`src/cursor.rs`), and
+  falls back per file to the embedded base skin for anything a skin leaves
+  out (see [Skin fonts and pointers](#skin-fonts-and-pointers)).
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
   three windows and their windowshade bars; `src/ui.rs` holds state, hit
   testing and input.
@@ -41,9 +42,10 @@ program does the same:
 - `src/playlist.rs` sorts, moves and shuffles playlist entries;
   `src/playlist_file.rs` loads and saves playlist files through `src/m3u.rs`
   and `src/pls.rs` (see [Playlist](#playlist)).
-- `src/jump.rs` is the Jump to file dialog and `src/jump_window.rs` its
-  window; `src/classic.rs` holds the Windows 2000 colours and bevels it
-  shares with the menus.
+- `src/jump.rs` is the Jump to file dialog and `src/info.rs` the File info
+  dialog; `src/jump_window.rs` and `src/info_window.rs` give them windows
+  through `src/dialog_window.rs`, and `src/classic.rs` holds the Windows 2000
+  colours, bevels and buttons they share with the menus.
 - `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
   the samples being played into the spectrum analyzer and oscilloscope.
 - `src/settings.rs` remembers the settings and the playlist between runs (see
@@ -85,7 +87,8 @@ Playback follows Winamp's own input plugin, DSP, output plugin chain, spread
 over three threads:
 
 - A decoder thread reads the file with [symphonia](https://crates.io/crates/symphonia)
-  (pure Rust: MP3, WAV, FLAC, Ogg Vorbis), converts it to stereo, resamples it
+  (pure Rust: MP3, MP1 and MP2, AAC, AAC and Apple Lossless in MP4, WAV,
+  AIFF, FLAC, Ogg Vorbis), converts it to stereo, resamples it
   to the sound card's rate with [rubato](https://crates.io/crates/rubato), and
   keeps about half a second queued in a lock-free ring buffer.
 - The sound card's callback, through [cpal](https://crates.io/crates/cpal),
@@ -109,6 +112,15 @@ All three platforms behave the same:
 
 A background thread reads tags ("Artist - Title") and lengths for the
 playlist as files are added.
+
+**Stop with fadeout.** Shift+V, Shift-click on Stop, or Playback > Stop w/
+fadeout lowers the volume evenly to nothing over 3 seconds, then stops, as
+Winamp's Shift+V did (how long Winamp's own fade took is not documented; 3
+seconds is NeoAmp's choice). The volume slider stays where it is. Playing,
+pausing, stopping or changing track cancels the fade, and a track that ends
+while fading stops there rather than starting the next. The output glides
+from one volume to the next over each block of audio it plays, so the fade,
+like dragging the volume slider, never clicks.
 
 ## Scaling
 
@@ -192,10 +204,12 @@ Windows 2000 did, grey and bevelled, whatever skin is loaded:
 - **Sort** and **Remove misc**: the playlist's MISC > SORT LIST and
   REM > MISC REM (see [Playlist](#playlist)).
 
-The Playback submenu also holds Jump to file... (**J**).
+The Playback submenu also holds Stop w/ fadeout (**Shift+V**) and Jump to
+file... (**J**).
 
 The `A` in the clutter bar toggles always on top, and stays down while it is
-on, as `D` does for double size. The `I` (file info) does nothing yet.
+on, as `D` does for double size. The `I` opens the File info dialog (see
+[File info](#file-info)).
 
 Menus open where Windows opened them: dropping down from the button that opens
 them, or at the pointer for a right-click, turned the other way at the screen's
@@ -248,8 +262,11 @@ Cancelling changes nothing. The windows keep drawing while the dialog is open.
 The same dialogs open skins and equalizer presets from the menus, starting in
 NeoAmp's skins and presets folders.
 
-The dialog starts on "All supported types" and also offers MP3, WAV, FLAC,
-Ogg Vorbis and playlists one at a time. Saving a playlist offers M3U8, M3U and
+The dialog starts on "All supported types" and also offers each format (MP3,
+MP1 and MP2, AAC, MPEG-4 audio, WAV, AIFF, FLAC, Ogg Vorbis) and playlists
+one at a time. MPEG-4 audio covers `.m4a`, `.m4b` and `.mp4`, so a folder
+added to the playlist brings its `.mp4` videos too, and plays their sound,
+as Winamp did. Saving a playlist offers M3U8, M3U and
 PLS, and starts on `Playlist.m3u8`. The platforms differ a little:
 
 - **Windows:** the standard Open dialog, with the file types in its drop-down.
@@ -297,7 +314,7 @@ MISC does nothing (it is Winamp's misc options) and LIST OPTS loads a list.
 | ADD | URL (not yet: see Phase 6 of the roadmap), folder, files |
 | REM | misc (opens a menu with Remove all dead files), all, crop, selected |
 | SEL | invert, none, all |
-| MISC | sort (opens a menu: by title, file name, or path; reverse; randomize), file info and misc options (neither does anything yet) |
+| MISC | sort (opens a menu: by title, file name, or path; reverse; randomize), file info (for the first selected entry, see [File info](#file-info)) and misc options (does nothing yet) |
 | LIST OPTS | new (empties the list), save, load |
 
 **Removing the track that plays.** As in Winamp, it plays on; when it ends,
@@ -343,6 +360,78 @@ Home and End move the caret in the search box. Clipboard paste is not
 supported. The dialog is an ordinary window with the system's own title bar,
 so the window manager places and moves it; it is drawn with softbuffer like
 the menus, at the same size, in Tahoma where the system has it.
+
+## File info
+
+The `I` in the clutter bar, **Alt+3** or the playlist's MISC > FILE INFO
+opens a dialog drawn like Windows 2000's, as Winamp's was, about one file:
+the current track, or from the playlist (MISC > FILE INFO, or Alt+3 while the
+playlist has the focus) the first selected entry. It shows the file's path,
+its tags (title, artist, album, year, track, genre and comment) and what it
+holds (format, codec, length, average bitrate, sample rate, channels, bits
+per sample for PCM and lossless audio, and its size). Winamp's dialog could
+also edit the tags; NeoAmp's only shows them, in read-only boxes, and never
+writes to music files. Enter, Escape, Space or Close closes it; asking for
+another file while it is open shows that one instead.
+
+The file is read on a thread of its own, so the dialog opens at once and
+fills in a moment later; a file that cannot be read says why. Tags come from
+whatever the file holds (ID3v1 and ID3v2, APE, Vorbis comments, FLAC, MP4 and
+RIFF INFO tags); a Vorbis DESCRIPTION counts as the comment. Like the Jump
+to file dialog, it is an ordinary window with the system's title bar, drawn
+with softbuffer in Tahoma where the system has it, and it has no clipboard:
+its text cannot be selected or copied.
+
+## Skin fonts and pointers
+
+**The playlist's font** is the one the skin's `pledit.txt` names (`Font=`),
+as in Winamp, at the size Winamp used. Nearly every skin names Arial, which
+is found as before: Arial, else Liberation Sans or DejaVu Sans. Any other
+font is looked up by family name, ignoring case, among the system's fonts
+with [fontdb](https://crates.io/crates/fontdb) (pure Rust; it indexes the
+fonts once, the first time a skin names a font other than Arial, in a few
+milliseconds here):
+
+- Windows: `%WINDIR%\Fonts` and the user's own fonts folder.
+- macOS: `/Library/Fonts`, `/System/Library/Fonts` and `~/Library/Fonts`.
+- Linux: the folders fontconfig's configuration lists (read without
+  fontconfig itself), or `/usr/share/fonts` and `~/.local/share/fonts` if it
+  has none.
+
+Where the font is missing, Courier New, Times New Roman and Arial Narrow are
+replaced by fonts made to their measurements (Liberation Mono, Serif and Sans
+Narrow, or Cousine and Tinos), and Tahoma by Wine's, if installed. Any other
+missing font, and Windows' bitmap fonts (`.fon`, such as MS Sans Serif),
+which fontdb cannot read, give way to the default, as Webamp's fallback to
+Arial does.
+
+**Mouse pointers.** Winamp skins can carry their own pointers as `.cur` files,
+one for each part of the windows: `TITLEBAR.CUR` over the main title bar,
+`VOLBAL.CUR` over the volume and balance sliders, `PSIZE.CUR` over the
+playlist's grip, and so on through the 24 Winamp read (`NORMAL.CUR`,
+`EQSLID.CUR`, `PTBAR.CUR`, ...). NeoAmp shows them where Winamp did, following
+Webamp's map of them and Winamp's Skinner's Atlas. A skin without one of them
+borrows the built-in skin's, as with its bitmaps; the built-in Winamp 2.91
+skin has eight (`CLOSE`, `EQSLID`, `EQTITLE`, `MAINMENU`, `POSBAR`, `PSIZE`,
+`TITLEBAR` and `VOLBAL`). Where neither has one, the system's arrow shows, or
+over the playlist's grip a resize arrow. While a slider, a window or the grip
+is dragged, the pointer stays as it was when the drag began, as Windows kept
+it.
+
+- A `.cur` file holding an animated cursor (`.ani`), which Winamp allowed,
+  shows its first frame, still.
+- Pixels that invert the screen behind them, which only Windows cursors can
+  have, are left transparent.
+- On a desktop scaled up (200%, say), Windows, X11 and Wayland would draw a
+  skin's pointer at its own pixel size, smaller than the system's; NeoAmp
+  enlarges it by the nearest whole number. macOS enlarges it itself.
+
+**The window title.** The main window's title names the current track, as
+Winamp's did in the taskbar: "3. Artist - Title - NeoAmp", with "[Paused]"
+or "[Stopped]" added unless it plays, and just "NeoAmp" with an empty
+playlist. The taskbar, the window switcher and the like show it; on X11 with
+override-redirect windows (see above) there is no taskbar entry to show it
+in.
 
 ## Saved settings
 
@@ -423,9 +512,9 @@ sudo apt install libasound2-dev
 cargo run --release
 ```
 
-Play files, whole folders or playlist files (folders add their MP3, WAV, FLAC
-and Ogg Vorbis files, sorted by name; `.m3u`, `.m3u8` and `.pls` files add
-their entries); they replace the saved playlist and the first one starts
+Play files, whole folders or playlist files (folders add their MP3, MP2,
+AAC, M4A, WAV, AIFF, FLAC and Ogg Vorbis files, sorted by name; `.m3u`,
+`.m3u8` and `.pls` files add their entries); they replace the saved playlist and the first one starts
 playing. Without any, the playlist from last time comes back. Dropping files,
 folders or playlists onto any window adds them to the playlist too, and starts
 them if nothing is playing. Eject picks files in a dialog (see
@@ -462,10 +551,12 @@ cargo run --release -- --screenshot shot.png
 | Action | Mouse | Keyboard |
 | --- | --- | --- |
 | Previous / Play / Pause / Stop / Next | transport buttons | Z X C V B |
+| Fade out, then stop | Shift-click Stop; Playback > Stop w/ fadeout | Shift+V |
 | Open files (they replace the playlist) | either eject button | L |
 | Open a folder (it replaces the playlist) | Play Folder... in the main menu | Shift+L |
 | Play a playlist entry | double-click it | Enter (playlist) |
 | Jump to file (search the playlist) | Playback > Jump to file... | J |
+| File info (tags and details) | the `I` in the clutter bar; MISC > FILE INFO (selected entry) | Alt+3 (in the playlist: the selected entry) |
 | Select playlist entries | click, Shift-click, Ctrl-click (Cmd on macOS); SEL menu | Up / Down / PgUp / PgDn / Home / End, with Shift to extend; Ctrl+A all, Ctrl+I invert (playlist) |
 | Move the selected entries | drag them | Alt+Up / Alt+Down (playlist) |
 | Remove entries | REM menu | Delete: selected, Ctrl+Delete: crop, Alt+Delete: dead files (playlist) |
@@ -512,14 +603,15 @@ most Mac apps.
 ## Scope and limitations
 
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
-- The file info dialog, cursors (`.cur`) and the minibrowser window are not
+- The minibrowser window and a Preferences dialog (Winamp's Ctrl+P) are not
   implemented. The menus leave out what NeoAmp cannot do yet
   (Play Location, Preferences and the like) rather than grey it.
+- The File info dialog shows tags but cannot edit them.
 - Internet radio is not supported yet: ADD > URL does nothing, Winamp's
   Ctrl+L (open a URL) is not implemented, and stream URLs in playlist files
-  are skipped. The playlist's FILE INFO and MISC OPTIONS items do nothing,
-  and there is no right-click menu for the playlist's entries (a right-click
-  there opens the main menu).
+  are skipped. The playlist's MISC OPTIONS item does nothing, and there is no
+  right-click menu for the playlist's entries (a right-click there opens the
+  main menu).
 - The Jump to file dialog's search box has no clipboard (paste) or text
   selection, and the dialog keeps its highlight by position, not by entry, if
   the playlist changes while it is open.
@@ -528,5 +620,6 @@ most Mac apps.
   that device is PipeWire's or PulseAudio's, which move the stream to another
   output when one disappears. On Windows and macOS, losing the device (say,
   unplugging headphones) silences playback until the app restarts.
-- The playlist uses a system TrueType font (Arial, Liberation Sans or
-  DejaVu Sans, whichever exists) at the size Winamp used.
+- The playlist's font must be a TrueType or OpenType font the system has
+  (see [Skin fonts and pointers](#skin-fonts-and-pointers)); Windows' bitmap
+  fonts give way to the default. Skins' animated pointers stand still.

@@ -9,7 +9,8 @@
 //! - [`canvas`]: the RGBA framebuffer and clipped blits.
 //! - [`sprites`]: sprite coordinates and window layout shared by every classic skin.
 //! - [`dock`]: the magnetic snapping and window-attachment geometry.
-//! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`).
+//! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`, and
+//!   the mouse pointers in [`cursor`]).
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
 //! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own, and
 //!   [`shortcut`] writes their keyboard shortcuts the platform's way (⌘ on macOS).
@@ -17,22 +18,27 @@
 //! - [`zoom`]: how far the skin is enlarged for today's screens.
 //! - [`playlist`]: sorting, moving and shuffling playlist entries; [`playlist_file`] loads and
 //!   saves playlists as M3U ([`m3u`]) or PLS ([`pls`]).
-//! - [`jump`]: the Jump to file dialog, drawn like Windows 2000's dialogs ([`classic`]).
+//! - [`jump`]: the Jump to file dialog, and [`info`] the File info dialog, drawn like Windows
+//!   2000's dialogs ([`classic`]).
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
-//!   the menus (`popup`) and of the Jump to file dialog (`jump_window`), and the platform's
-//!   file dialogs (`file_dialog`).
+//!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window` and
+//!   `info_window`), and the platform's file dialogs (`file_dialog`).
 
 pub mod app;
 pub mod audio;
 pub mod canvas;
 pub mod classic;
+pub mod cursor;
+mod dialog_window;
 pub mod dock;
 mod eq_window;
 pub mod eqf;
 mod file_dialog;
 pub mod font;
+pub mod info;
+mod info_window;
 pub mod jump;
 mod jump_window;
 pub mod library;

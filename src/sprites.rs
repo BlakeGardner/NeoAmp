@@ -117,6 +117,9 @@ pub mod main {
     pub const DIGIT_Y: i32 = 26;
 
     pub const MARQUEE: Rect = Rect::new(111, 27, 154, 6);
+    /// Where the song title's pointer (`SONGNAME.CUR`) shows: the text and 3 pixels above and
+    /// below it, as in Webamp.
+    pub const MARQUEE_TARGET: Rect = Rect::new(111, 24, 154, 12);
     pub const MARQUEE_CHARS: usize = 31;
     pub const KBPS_POS: (i32, i32) = (111, 43);
     pub const KHZ_POS: (i32, i32) = (156, 43);

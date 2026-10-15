@@ -5,6 +5,7 @@
 //! one-pixel line, which Windows keeps thin when it scales.
 
 use crate::canvas::{Image, Rect};
+use crate::font::TtfFont;
 
 /// Buttons, menus and dialogs.
 pub const FACE: [u8; 4] = [0xD4, 0xD0, 0xC8, 0xFF];
@@ -60,6 +61,53 @@ pub fn button(c: &mut Image, r: Rect, t: i32) {
 /// The sunken edge of an edit box or a list.
 pub fn sunken(c: &mut Image, r: Rect, t: i32) {
     bevel(c, r, t, [SHADOW, DARK_SHADOW], [HILIGHT, FACE]);
+}
+
+/// The etched line of a group box, around the inside of `r`.
+pub fn etched(c: &mut Image, r: Rect, t: i32) {
+    bevel(c, r, t, [SHADOW, HILIGHT], [HILIGHT, SHADOW]);
+}
+
+/// A group box: an etched frame filling `r`, with `caption` set into its top edge. The frame's
+/// top runs through the middle of the caption.
+pub fn group_box(c: &mut Image, font: &TtfFont, r: Rect, t: i32, scale: f64, caption: &str) {
+    let lh = font.line_height();
+    let top = r.y + lh / 2;
+    etched(c, Rect::new(r.x, top, r.w, r.bottom() - top), t);
+    let x = r.x + px(8, scale);
+    let pad = px(2, scale);
+    let w = font.width(caption) + 2 * pad;
+    c.fill_rect(Rect::new(x, r.y, w, lh), FACE);
+    font.draw(c, caption, x + pad, r.y, TEXT, r);
+}
+
+/// A push button with `label` centred on it, pushed in while `down`. The default button, which
+/// Enter presses, has a black frame around it.
+pub fn push_button(
+    c: &mut Image,
+    font: &TtfFont,
+    r: Rect,
+    t: i32,
+    label: &str,
+    default: bool,
+    down: bool,
+) {
+    c.fill_rect(r, FACE);
+    let face = if default {
+        frame(c, r, t, FRAME);
+        Rect::new(r.x + t, r.y + t, r.w - 2 * t, r.h - 2 * t)
+    } else {
+        r
+    };
+    if down {
+        frame(c, face, t, SHADOW);
+    } else {
+        button(c, face, t);
+    }
+    let shift = if down { t } else { 0 };
+    let tx = r.x + (r.w - font.width(label)) / 2 + shift;
+    let ty = r.y + (r.h - font.line_height()) / 2 + shift;
+    font.draw(c, label, tx, ty, TEXT, r);
 }
 
 /// A one-line frame around the inside of `r`.

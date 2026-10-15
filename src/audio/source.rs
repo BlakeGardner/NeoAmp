@@ -14,7 +14,7 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{MetadataOptions, StandardTag};
 use symphonia::core::units::{Duration, Time, TimeBase, Timestamp};
 
-use super::TrackInfo;
+use super::{FileDetails, Tags, TrackInfo};
 
 /// How much audio the bitrate readout averages over, in seconds.
 const BITRATE_WINDOW: f64 = 0.5;
@@ -45,9 +45,9 @@ struct Opened {
     info: TrackInfo,
 }
 
-fn open_format(path: &Path) -> Result<Opened> {
+fn open_format(path: &Path) -> Result<(Opened, FileDetails)> {
     let file = File::open(path)?;
-    let file_len = file.metadata().map(|m| m.len()).ok();
+    let size = file.metadata().map(|m| m.len()).ok();
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -81,44 +81,83 @@ fn open_format(path: &Path) -> Result<Opened> {
         // Frame counts stay far below 2^52, so the conversion is exact.
         .or_else(|| track.num_frames.map(|n| n as f64 / f64::from(rate)))
         .filter(|s| *s > 0.0);
-    let kbps = file_len.zip(seconds).map(|(bytes, secs)| {
+    let kbps = size.zip(seconds).map(|(bytes, secs)| {
         // Both are positive and the result is a few thousand at most.
         (bytes as f64 * 8.0 / secs / 1000.0).round() as u32
     });
+    let codec = symphonia::default::get_codecs()
+        .get_audio_decoder(params.codec)
+        .map_or_else(String::new, |d| d.codec.info.long_name.to_owned());
+    let bits_per_sample = params.bits_per_sample;
     let track_id = track.id;
     let time_base = track.time_base;
-    let title = tagged_title(format.as_mut());
-    Ok(Opened {
+    let tags = read_tags(format.as_mut());
+    let info = TrackInfo {
+        title: tags.playlist_title(),
+        seconds,
+        sample_rate: rate,
+        channels,
+        kbps,
+    };
+    let details = FileDetails {
+        tags,
+        format: format.format_info().long_name.to_owned(),
+        codec,
+        info: info.clone(),
+        bits_per_sample,
+        size,
+    };
+    let opened = Opened {
         format,
         track_id,
         time_base,
-        info: TrackInfo {
-            title,
-            seconds,
-            sample_rate: rate,
-            channels,
-            kbps,
-        },
-    })
+        info,
+    };
+    Ok((opened, details))
 }
 
 /// Read a file's tags and length without decoding it.
 pub(super) fn probe(path: &Path) -> Result<TrackInfo> {
-    open_format(path).map(|o| o.info)
+    open_format(path).map(|(o, _)| o.info)
 }
 
-/// "Artist - Title" (or just the title) from every metadata revision read so far.
-fn tagged_title(format: &mut dyn FormatReader) -> Option<String> {
-    let mut artist = None;
-    let mut title = None;
+/// Read everything the file info dialog shows, without decoding the file.
+pub(super) fn details(path: &Path) -> Result<FileDetails> {
+    open_format(path).map(|(_, d)| d)
+}
+
+/// The tags in every metadata revision read so far. Where a tag appears more than once, the
+/// first non-empty value counts, from the oldest revision on, and in each the media's tags
+/// before the track's.
+fn read_tags(format: &mut dyn FormatReader) -> Tags {
+    let mut tags = Tags::default();
+    let mut track_number = None;
+    let mut track_total = None;
     let mut log = format.metadata();
     loop {
         if let Some(rev) = log.current() {
             let per_track = rev.per_track.iter().flat_map(|t| &t.metadata.tags);
             for tag in rev.media.tags.iter().chain(per_track) {
-                let (slot, value) = match &tag.std {
-                    Some(StandardTag::Artist(v)) => (&mut artist, v),
-                    Some(StandardTag::TrackTitle(v)) => (&mut title, v),
+                let Some(std) = &tag.std else {
+                    continue;
+                };
+                let (slot, value) = match std {
+                    StandardTag::TrackTitle(v) => (&mut tags.title, v.to_string()),
+                    StandardTag::Artist(v) => (&mut tags.artist, v.to_string()),
+                    StandardTag::Album(v) => (&mut tags.album, v.to_string()),
+                    StandardTag::Genre(v) => (&mut tags.genre, v.to_string()),
+                    // Vorbis comments often hold the comment as DESCRIPTION.
+                    StandardTag::Comment(v) | StandardTag::Description(v) => {
+                        (&mut tags.comment, v.to_string())
+                    }
+                    StandardTag::RecordingDate(v) | StandardTag::ReleaseDate(v) => {
+                        (&mut tags.year, v.to_string())
+                    }
+                    StandardTag::RecordingYear(y) | StandardTag::ReleaseYear(y) => {
+                        (&mut tags.year, y.to_string())
+                    }
+                    StandardTag::TrackNumber(n) => (&mut track_number, n.to_string()),
+                    StandardTag::TrackTotal(n) => (&mut track_total, n.to_string()),
                     _ => continue,
                 };
                 let value = value.trim();
@@ -131,16 +170,16 @@ fn tagged_title(format: &mut dyn FormatReader) -> Option<String> {
             break;
         }
     }
-    match (artist, title) {
-        (Some(a), Some(t)) => Some(format!("{a} - {t}")),
-        (None, Some(t)) => Some(t),
-        _ => None,
-    }
+    tags.track = match (track_number, track_total) {
+        (Some(n), Some(total)) => Some(format!("{n}/{total}")),
+        (n, _) => n,
+    };
+    tags
 }
 
 impl Source {
     pub(super) fn open(path: &Path) -> Result<Source> {
-        let opened = open_format(path)?;
+        let (opened, _) = open_format(path)?;
         let track = opened
             .format
             .tracks()
@@ -339,6 +378,101 @@ pub(super) mod tests {
         assert_eq!(out[2 * 7], out[2 * 7 + 1]);
         assert!((out[2 * 7] - 700.0 / 32768.0).abs() < 1e-6);
         assert!(src.take_kbps().is_some());
+    }
+
+    /// A 16-bit big-endian AIFF of `frames` frames of mono at 8 kHz; frame `i` is `i * 10`.
+    fn write_aiff(name: &str, frames: u32) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("neoamp-{}-{name}.aiff", std::process::id()));
+        let data_len = frames * 2;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"FORM");
+        b.extend_from_slice(&(4 + 26 + 16 + data_len).to_be_bytes());
+        b.extend_from_slice(b"AIFFCOMM");
+        b.extend_from_slice(&18u32.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&frames.to_be_bytes());
+        b.extend_from_slice(&16u16.to_be_bytes());
+        // 8000 as an 80-bit extended float: 1.953125 x 2^12.
+        b.extend_from_slice(&(16_383u16 + 12).to_be_bytes());
+        b.extend_from_slice(&(8000u64 << (63 - 12)).to_be_bytes());
+        b.extend_from_slice(b"SSND");
+        b.extend_from_slice(&(8 + data_len).to_be_bytes());
+        b.extend_from_slice(&[0; 8]);
+        for i in 0..frames {
+            b.extend_from_slice(&((i * 10) as i16).to_be_bytes());
+        }
+        std::fs::write(&path, b).unwrap();
+        path
+    }
+
+    #[test]
+    fn aiff_probes_and_decodes() {
+        let path = write_aiff("aiff", 4000);
+        let info = probe(&path).unwrap();
+        let mut src = Source::open(&path).unwrap();
+        let out = read_all(&mut src);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!((info.sample_rate, info.channels), (8000, 1));
+        assert!((info.seconds.unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(out.len(), 4000 * 2);
+        assert!((out[2 * 7] - 70.0 / 32768.0).abs() < 1e-6);
+    }
+
+    /// An ID3v2.3 tag holding `frames`: (frame id, text). Comments get a language and an
+    /// empty description.
+    fn id3v2(frames: &[(&str, &str)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (id, text) in frames {
+            let mut data = vec![0u8]; // ISO-8859-1
+            if *id == "COMM" {
+                data.extend_from_slice(b"eng\0");
+            }
+            data.extend_from_slice(text.as_bytes());
+            body.extend_from_slice(id.as_bytes());
+            body.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            body.extend_from_slice(&[0, 0]);
+            body.extend_from_slice(&data);
+        }
+        let n = u32::try_from(body.len()).unwrap();
+        let mut tag = b"ID3\x03\x00\x00".to_vec();
+        // The size in four 7-bit bytes.
+        tag.extend((0..4).rev().map(|i| ((n >> (7 * i)) & 0x7F) as u8));
+        tag.extend_from_slice(&body);
+        tag
+    }
+
+    #[test]
+    fn details_read_the_tags_and_the_stream() {
+        let wav = write_wav("tagged", 8000, 2, 8000, |_, _| 0);
+        let mut bytes = id3v2(&[
+            ("TIT2", "Rolling Llama"),
+            ("TPE1", "Justin F."),
+            ("TALB", "  "),
+            ("TYER", "1999"),
+            ("TRCK", "3/9"),
+            ("TCON", "Rock"),
+            ("COMM", "Radio edit"),
+        ]);
+        bytes.extend_from_slice(&std::fs::read(&wav).unwrap());
+        std::fs::remove_file(&wav).unwrap();
+        let path = std::env::temp_dir().join(format!("neoamp-{}-tagged.wav", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let d = details(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let t = &d.tags;
+        assert_eq!(t.title.as_deref(), Some("Rolling Llama"));
+        assert_eq!(t.artist.as_deref(), Some("Justin F."));
+        assert_eq!(t.album, None, "blank tags count as missing");
+        assert_eq!(t.year.as_deref(), Some("1999"));
+        assert_eq!(t.track.as_deref(), Some("3/9"));
+        assert_eq!(t.genre.as_deref(), Some("Rock"));
+        assert_eq!(t.comment.as_deref(), Some("Radio edit"));
+        assert_eq!(d.info.title.as_deref(), Some("Justin F. - Rolling Llama"));
+        assert_eq!((d.info.sample_rate, d.info.channels), (8000, 2));
+        assert_eq!(d.bits_per_sample, Some(16));
+        assert_eq!(d.size, Some(u64::try_from(bytes.len()).unwrap()));
+        assert!(d.format.contains("Waveform"), "{}", d.format);
+        assert!(d.codec.contains("PCM"), "{}", d.codec);
     }
 
     #[test]

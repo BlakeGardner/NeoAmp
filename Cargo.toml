@@ -14,12 +14,16 @@ doctest = false
 winit = "0.30"
 pixels = "0.17"
 zip = { version = "9", default-features = false, features = ["deflate"] }
-image = { version = "0.25", default-features = false, features = ["bmp", "png"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "png", "ico"] }
 fontdue = "0.9"
+# The system's fonts by family name, for the font a skin's pledit.txt names. Pure Rust; on Linux
+# it reads fontconfig's configuration files to find the font folders.
+fontdb = "0.23"
 anyhow = "1"
 log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }
-symphonia = { version = "0.6", features = ["mp3"] }
+# AAC and ALAC come in MP4 (M4A) files; mpa is MP1, MP2 and MP3.
+symphonia = { version = "0.6", features = ["aac", "alac", "isomp4", "aiff", "mpa"] }
 cpal = "0.18"
 rtrb = "0.4"
 rubato = "5"
