@@ -8,7 +8,9 @@ use std::time::Instant;
 
 use crate::audio::{EQ_RANGE_DB, EqSettings, Event, TrackInfo};
 use crate::canvas::{Image, Rect};
+use crate::eqf::{self, Preset};
 use crate::font::TtfFont;
+use crate::menus::{AppCommand, Command, MenuKind};
 use crate::skin::{Mask, Skin};
 use crate::sprites::{eq as e, main as m, pl as p};
 use crate::vis::Vis;
@@ -183,8 +185,29 @@ pub enum Action {
     Relayout,
     /// Eject: ask for files to play. They replace the playlist (see [`Ui::clear_playlist`]).
     OpenFiles,
+    /// Ask for a folder whose files replace the playlist.
+    OpenFolder,
+    /// `always_on_top` changed: restack the windows.
+    AlwaysOnTop,
+    /// Show a menu.
+    OpenMenu(MenuRequest),
+    /// A menu command that needs files or dialogs.
+    App(AppCommand),
     /// Tell the audio engine.
     Audio(Transport),
+}
+
+/// Which menu to open, and where.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MenuRequest {
+    pub kind: MenuKind,
+    /// The window it opens from.
+    pub window: WindowKind,
+    /// Drop down from this control (in the window's skin pixels) instead of opening at the
+    /// pointer.
+    pub below: Option<Rect>,
+    /// Opened from the keyboard: the first item starts highlighted, and mnemonics show.
+    pub keyboard: bool,
 }
 
 /// Playback commands for the audio engine. The UI state has already changed to match.
@@ -217,6 +240,13 @@ pub enum KeyCmd {
     Next,
     /// Same as the eject button.
     OpenFiles,
+    /// Play a folder.
+    OpenFolder,
+    ToggleAlwaysOnTop,
+    /// Open the main menu.
+    MainMenu,
+    /// Open the skins menu.
+    SkinsMenu,
     ToggleShuffle,
     ToggleRepeat,
     ToggleTimeMode,
@@ -291,6 +321,8 @@ pub struct Ui {
     pub stereo: bool,
     pub vis: Vis,
     pub double_size: bool,
+    /// The windows stay above other applications' windows.
+    pub always_on_top: bool,
     /// How far the windows are enlarged; double size doubles it again (see [`Ui::scale`]).
     pub zoom: Zoom,
     /// The zoom the screen's height calls for, restored by [`KeyCmd::ZoomReset`]. While
@@ -368,6 +400,7 @@ impl Ui {
             stereo: false,
             vis: Vis::new(),
             double_size: false,
+            always_on_top: false,
             zoom: Zoom::MIN,
             default_zoom: Zoom::MIN,
             active: true,
@@ -736,6 +769,22 @@ impl Ui {
             enabled: self.eq_on,
             preamp_db: slider_db(self.preamp),
             bands_db: self.bands.map(slider_db),
+        }
+    }
+
+    /// Set the equalizer's sliders to `preset`. Whether it is on stays as it was.
+    pub fn apply_preset(&mut self, preset: &Preset) {
+        self.preamp = db_slider(preset.preamp);
+        self.bands = preset.bands.map(db_slider);
+    }
+
+    /// The equalizer's sliders as a preset called `name`.
+    #[must_use]
+    pub fn eq_preset(&self, name: &str) -> Preset {
+        Preset {
+            name: name.to_owned(),
+            preamp: slider_db(self.preamp),
+            bands: self.bands.map(slider_db),
         }
     }
 
@@ -1242,10 +1291,72 @@ impl Ui {
             }
             EqOn => self.eq_on = !self.eq_on,
             EqAuto => self.eq_auto = !self.eq_auto,
-            // Press-only visuals: menus, dialogs and window shading are not implemented.
-            MainTitle | EqTitle | PlTitle | MainOptions | MainShade | ClutterO | ClutterA
-            | ClutterI | ClutterV | EqShade | EqPresets | PlShade | PlAdd | PlRem | PlSel
-            | PlMisc | PlListOpts | PlTrack(_) => {}
+            MainOptions => actions.push(Self::menu(MenuKind::Main, kind, Some(m::OPTIONS))),
+            ClutterO => actions.push(Self::menu(MenuKind::Options, kind, None)),
+            ClutterV => actions.push(Self::menu(MenuKind::Vis, kind, None)),
+            EqPresets => actions.push(Self::menu(MenuKind::EqPresets, kind, Some(e::PRESETS))),
+            ClutterA => self.toggle_always_on_top(&mut actions),
+            // Press-only visuals: the file info dialog, window shading and the playlist's
+            // menus are not implemented.
+            MainTitle | EqTitle | PlTitle | MainShade | ClutterI | EqShade | PlShade | PlAdd
+            | PlRem | PlSel | PlMisc | PlListOpts | PlTrack(_) => {}
+        }
+        actions
+    }
+
+    fn menu(kind: MenuKind, window: WindowKind, below: Option<Rect>) -> Action {
+        Action::OpenMenu(MenuRequest {
+            kind,
+            window,
+            below,
+            keyboard: false,
+        })
+    }
+
+    fn toggle_always_on_top(&mut self, actions: &mut Vec<Action>) {
+        self.always_on_top = !self.always_on_top;
+        actions.push(Action::AlwaysOnTop);
+    }
+
+    /// The right button was let go at (`x`, `y`) in window `kind`: the visualizer's menu over
+    /// the visualizer, the main menu anywhere else.
+    #[must_use = "the returned actions must be performed by the window layer"]
+    pub fn context_menu(&mut self, kind: WindowKind, x: i32, y: i32) -> Vec<Action> {
+        if self.pressed.is_some() {
+            // In the middle of a left-button drag.
+            return Vec::new();
+        }
+        let menu = if kind == WindowKind::Main && self.hit(kind, x, y) == Some(Control::Vis) {
+            MenuKind::Vis
+        } else {
+            MenuKind::Main
+        };
+        vec![Self::menu(menu, kind, None)]
+    }
+
+    /// Carry out a menu command.
+    #[must_use = "the returned actions must be performed by the window layer"]
+    pub fn command(&mut self, cmd: Command) -> Vec<Action> {
+        let mut actions = Vec::new();
+        match cmd {
+            Command::Key(k) => return self.key(k),
+            Command::TimeRemaining(on) => self.remaining_mode = on,
+            Command::Zoom(zoom) => self.set_zoom(zoom, &mut actions),
+            Command::VisMode(mode) => self.vis.mode = mode,
+            Command::AnalyzerStyle(style) => self.vis.analyzer.style = style,
+            Command::Bands(bands) => self.vis.analyzer.bands = bands,
+            Command::TogglePeaks => self.vis.analyzer.peaks = !self.vis.analyzer.peaks,
+            Command::Falloff(f) => self.vis.analyzer.falloff = f,
+            Command::PeakFalloff(f) => self.vis.analyzer.peak_falloff = f,
+            Command::ScopeStyle(style) => self.vis.scope_style = style,
+            Command::Preset(i) => {
+                if let Some(preset) = eqf::built_in(i) {
+                    self.apply_preset(&preset);
+                }
+            }
+            Command::ResetEq => self.apply_preset(&Preset::flat("")),
+            Command::Exit => actions.push(Action::Close),
+            Command::App(c) => actions.push(Action::App(c)),
         }
         actions
     }
@@ -1275,6 +1386,22 @@ impl Ui {
             KeyCmd::Stop => self.stop(&mut actions),
             KeyCmd::Next => self.next(&mut actions),
             KeyCmd::OpenFiles => actions.push(Action::OpenFiles),
+            KeyCmd::OpenFolder => actions.push(Action::OpenFolder),
+            KeyCmd::ToggleAlwaysOnTop => self.toggle_always_on_top(&mut actions),
+            KeyCmd::MainMenu | KeyCmd::SkinsMenu => {
+                let kind = if cmd == KeyCmd::MainMenu {
+                    MenuKind::Main
+                } else {
+                    MenuKind::Skins
+                };
+                // Where the options button opens it.
+                actions.push(Action::OpenMenu(MenuRequest {
+                    kind,
+                    window: WindowKind::Main,
+                    below: Some(m::OPTIONS),
+                    keyboard: true,
+                }));
+            }
             KeyCmd::ToggleShuffle => self.shuffle = !self.shuffle,
             KeyCmd::ToggleRepeat => self.repeat = !self.repeat,
             KeyCmd::ToggleTimeMode => self.remaining_mode = !self.remaining_mode,
@@ -1305,6 +1432,7 @@ fn apply_mask(c: &mut Image, r: Rect, mask: &Mask) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::vis::{Bands, VisMode};
     use WindowKind::{Eq, Main, Playlist};
     use std::time::Duration;
 
@@ -1782,6 +1910,128 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn click(ui: &mut Ui, kind: WindowKind, r: Rect) -> Vec<Action> {
+        let (x, y) = (r.x + 2, r.y + 2);
+        let _ = ui.mouse_down(kind, x, y, Instant::now());
+        ui.mouse_up(kind, x, y)
+    }
+
+    fn menu(kind: MenuKind, window: WindowKind, below: Option<Rect>) -> Vec<Action> {
+        vec![Action::OpenMenu(MenuRequest {
+            kind,
+            window,
+            below,
+            keyboard: false,
+        })]
+    }
+
+    #[test]
+    fn option_buttons_open_their_menus() {
+        let mut ui = Ui::demo();
+        assert_eq!(
+            click(&mut ui, Main, m::OPTIONS),
+            menu(MenuKind::Main, Main, Some(m::OPTIONS))
+        );
+        assert_eq!(
+            click(&mut ui, Main, m::CLUTTER_O),
+            menu(MenuKind::Options, Main, None)
+        );
+        assert_eq!(
+            click(&mut ui, Main, m::CLUTTER_V),
+            menu(MenuKind::Vis, Main, None)
+        );
+        assert_eq!(
+            click(&mut ui, Eq, e::PRESETS),
+            menu(MenuKind::EqPresets, Eq, Some(e::PRESETS))
+        );
+        assert_eq!(
+            click(&mut ui, Main, m::CLUTTER_A),
+            vec![Action::AlwaysOnTop]
+        );
+        assert!(ui.always_on_top);
+        assert_eq!(ui.key(KeyCmd::ToggleAlwaysOnTop), vec![Action::AlwaysOnTop]);
+        assert!(!ui.always_on_top);
+        let keyboard = ui.key(KeyCmd::SkinsMenu);
+        assert!(matches!(
+            keyboard[..],
+            [Action::OpenMenu(MenuRequest {
+                kind: MenuKind::Skins,
+                keyboard: true,
+                ..
+            })]
+        ));
+    }
+
+    #[test]
+    fn right_clicks_open_the_visualizer_menu_or_the_main_one() {
+        let mut ui = Ui::demo();
+        let vis = (m::VIS.x + 5, m::VIS.y + 5);
+        assert_eq!(
+            ui.context_menu(Main, vis.0, vis.1),
+            menu(MenuKind::Vis, Main, None)
+        );
+        assert_eq!(
+            ui.context_menu(Main, 100, 5),
+            menu(MenuKind::Main, Main, None)
+        );
+        assert_eq!(
+            ui.context_menu(Playlist, 100, 30),
+            menu(MenuKind::Main, Playlist, None)
+        );
+        // Not in the middle of a drag.
+        let _ = ui.mouse_down(Main, 120, 60, Instant::now());
+        assert!(ui.context_menu(Main, 100, 5).is_empty());
+    }
+
+    #[test]
+    fn menu_commands_change_the_interface() {
+        let mut ui = Ui::demo();
+        assert!(ui.command(Command::VisMode(VisMode::Off)).is_empty());
+        assert_eq!(ui.vis.mode, VisMode::Off);
+        let _ = ui.command(Command::Bands(Bands::Thin));
+        let _ = ui.command(Command::TogglePeaks);
+        assert_eq!(ui.vis.analyzer.bands, Bands::Thin);
+        assert!(!ui.vis.analyzer.peaks);
+        let _ = ui.command(Command::TimeRemaining(true));
+        assert!(ui.remaining_mode);
+        // Rock: bass up, low mids down.
+        let _ = ui.command(Command::Preset(12));
+        let db = ui.eq_settings().bands_db;
+        assert!(db[0] > 4.0 && db[3] < -4.0, "{db:?}");
+        assert_eq!(ui.eq_preset("x").bands, db);
+        let _ = ui.command(Command::ResetEq);
+        assert_eq!(ui.eq_settings().bands_db, [0.0; 10]);
+        assert_eq!(ui.command(Command::Zoom(Zoom::MAX)), vec![Action::Relayout]);
+        assert_eq!(ui.command(Command::Key(KeyCmd::ToggleShuffle)), vec![]);
+        assert!(ui.shuffle);
+        assert_eq!(ui.command(Command::Exit), vec![Action::Close]);
+        assert_eq!(
+            ui.command(Command::App(AppCommand::OpenSkin)),
+            vec![Action::App(AppCommand::OpenSkin)]
+        );
+    }
+
+    #[test]
+    fn always_on_top_and_double_size_hold_their_clutter_buttons_down() {
+        let skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut ui = Ui::new();
+        let now = Instant::now();
+        let draw = |ui: &Ui| {
+            let mut c = Image::new(m::W, m::H);
+            ui.draw_window(Main, &mut c, &skin, None, now);
+            c
+        };
+        let up = draw(&ui);
+        ui.always_on_top = true;
+        ui.double_size = true;
+        let down = draw(&ui);
+        let differs = |r: Rect| {
+            (r.y..r.bottom()).any(|y| (r.x..r.right()).any(|x| up.get(x, y) != down.get(x, y)))
+        };
+        assert!(differs(m::CLUTTER_A) && differs(m::CLUTTER_D));
+        assert!(!differs(m::CLUTTER_O));
     }
 
     #[test]

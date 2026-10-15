@@ -11,22 +11,29 @@
 //! - [`dock`]: the magnetic snapping and window-attachment geometry.
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`).
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
+//! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own.
+//! - [`eqf`]: equalizer presets, built in and in Winamp's `.eqf` files.
 //! - [`zoom`]: how far the skin is enlarged for today's screens.
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
-//!   an extended M3U file ([`m3u`]).
-//! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, and the native
-//!   file dialog behind the eject button (`open_dialog`).
+//!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
+//! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the menus'
+//!   windows (`popup`) and the platform's file dialogs (`file_dialog`).
 
 pub mod app;
 pub mod audio;
 pub mod canvas;
 pub mod dock;
 mod eq_window;
+pub mod eqf;
+mod file_dialog;
 pub mod font;
+pub mod library;
 pub mod m3u;
 mod main_window;
-mod open_dialog;
+pub mod menu;
+pub mod menus;
 mod playlist_window;
+mod popup;
 pub mod settings;
 pub mod skin;
 pub mod sprites;

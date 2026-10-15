@@ -1,5 +1,5 @@
 //! The 76x16 visualiser: a spectrum analyser and an oscilloscope fed with the samples the
-//! sound card is playing.
+//! sound card is playing, in the styles Winamp's visualization menu offered.
 
 use std::fmt;
 use std::sync::Arc;
@@ -7,13 +7,14 @@ use std::time::{Duration, Instant};
 
 use realfft::num_complex::Complex;
 use realfft::{RealFftPlanner, RealToComplex};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::canvas::{Image, Rect};
+use crate::settings::{lenient, or_default};
 use crate::skin::Skin;
 
-/// Each analyser bar is this wide, followed by a one pixel gap.
-const BAR_W: i32 = 3;
+/// Thick analyser bars are this wide, followed by a one pixel gap.
+const THICK_W: i32 = 3;
 
 /// What the visualiser shows. Saved in the settings as `analyzer`, `oscilloscope` or `off`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -25,7 +26,146 @@ pub enum VisMode {
     Off,
 }
 
-pub const BARS: usize = 19;
+/// How the analyser colours its bars, from `viscolor.txt`'s colours 2 (top) to 17 (bottom).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnalyzerStyle {
+    /// Each row has its own colour, so only tall bars reach the top colours.
+    #[default]
+    Normal,
+    /// The colours start at the top of each bar, so every bar has the hottest tip.
+    Fire,
+    /// Each bar is one colour, that of the row its top reaches.
+    Line,
+}
+
+/// How many analyser bars there are.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bands {
+    /// 19 bars three pixels wide.
+    #[default]
+    Thick,
+    /// 75 bars one pixel wide.
+    Thin,
+}
+
+impl Bands {
+    #[must_use]
+    pub const fn count(self) -> usize {
+        match self {
+            Bands::Thick => 19,
+            Bands::Thin => 75,
+        }
+    }
+}
+
+/// The most bars there can be.
+const MAX_BARS: usize = Bands::Thin.count();
+
+/// How fast the analyser's bars, or its peaks, fall.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Falloff {
+    Slowest,
+    Slow,
+    #[default]
+    Moderate,
+    Fast,
+    Fastest,
+}
+
+impl Falloff {
+    pub const ALL: [Falloff; 5] = [
+        Falloff::Slowest,
+        Falloff::Slow,
+        Falloff::Moderate,
+        Falloff::Fast,
+        Falloff::Fastest,
+    ];
+
+    /// Pixels a second a bar drops. Winamp's five speeds were 3, 6, 12, 16 and 32 apart;
+    /// Moderate is the speed NeoAmp's bars always fell at.
+    fn bar_speed(self) -> f32 {
+        match self {
+            Falloff::Slowest => 7.5,
+            Falloff::Slow => 15.0,
+            Falloff::Moderate => 30.0,
+            Falloff::Fast => 40.0,
+            Falloff::Fastest => 80.0,
+        }
+    }
+
+    /// A falling peak speeds up by this factor every 60th of a second (Winamp's values).
+    fn peak_growth(self) -> f32 {
+        match self {
+            Falloff::Slowest => 1.05,
+            Falloff::Slow => 1.1,
+            Falloff::Moderate => 1.2,
+            Falloff::Fast => 1.4,
+            Falloff::Fastest => 1.6,
+        }
+    }
+}
+
+/// A peak starts falling this many pixels per 60th of a second (Winamp's 3/256).
+const PEAK_START: f32 = 3.0 / 256.0;
+
+/// How the oscilloscope draws the waveform.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScopeStyle {
+    /// One dot per column.
+    Dots,
+    /// Dots joined up.
+    #[default]
+    Lines,
+    /// Filled from the centre line.
+    Solid,
+}
+
+/// The analyser's options, as Winamp's visualization menu set them. Saved in the settings as
+/// the `[analyzer]` table; a value that cannot be used falls back to its default on its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnalyzerOptions {
+    #[serde(deserialize_with = "or_default")]
+    pub style: AnalyzerStyle,
+    #[serde(deserialize_with = "or_default")]
+    pub bands: Bands,
+    pub peaks: bool,
+    #[serde(deserialize_with = "or_default")]
+    pub falloff: Falloff,
+    #[serde(deserialize_with = "slow_or_default")]
+    pub peak_falloff: Falloff,
+}
+
+impl Default for AnalyzerOptions {
+    /// Winamp's own defaults.
+    fn default() -> Self {
+        AnalyzerOptions {
+            style: AnalyzerStyle::Normal,
+            bands: Bands::Thick,
+            peaks: true,
+            falloff: Falloff::Moderate,
+            peak_falloff: Falloff::Slow,
+        }
+    }
+}
+
+/// Like [`or_default`], for the peaks' falloff, whose default is slow.
+fn slow_or_default<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Falloff, D::Error> {
+    Ok(lenient(deserializer)?.unwrap_or(Falloff::Slow))
+}
+
+/// The oscilloscope's options. Saved in the settings as the `[oscilloscope]` table.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScopeOptions {
+    #[serde(deserialize_with = "or_default")]
+    pub style: ScopeStyle,
+}
+
 pub const H: i32 = 16;
 /// Width of the visualiser, and so the number of oscilloscope points.
 pub const W: usize = 76;
@@ -49,6 +189,18 @@ const STALE: Duration = Duration::from_millis(150);
 /// The sample rate assumed until [`Vis::set_sample_rate`] is called.
 const DEFAULT_RATE: u32 = 44_100;
 
+/// The part of the spectrum one bar shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Band {
+    /// The loudest of FFT bins `bins.0..bins.1`, when that range holds any.
+    bins: (usize, usize),
+    /// Otherwise the band is narrower than a bin: the spectrum interpolated at this bin
+    /// position, the band's centre.
+    centre: f32,
+    /// Spectral tilt, in dB.
+    tilt: f32,
+}
+
 /// The FFT and the mapping from its bins to bars.
 struct Analyzer {
     fft: Arc<dyn RealToComplex<f32>>,
@@ -57,22 +209,21 @@ struct Analyzer {
     input: Vec<f32>,
     spectrum: Vec<Complex<f32>>,
     scratch: Vec<Complex<f32>>,
-    /// Bar `i` covers FFT bins `edges[i]..edges[i + 1]`.
-    edges: [usize; BARS + 1],
-    /// Spectral tilt per bar, in dB.
-    tilt: [f32; BARS],
+    rate: u32,
+    bands: Vec<Band>,
 }
 
 impl fmt::Debug for Analyzer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Analyzer")
-            .field("edges", &self.edges)
+            .field("rate", &self.rate)
+            .field("bands", &self.bands.len())
             .finish_non_exhaustive()
     }
 }
 
 impl Analyzer {
-    fn new(rate: u32) -> Analyzer {
+    fn new(rate: u32, count: usize) -> Analyzer {
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE);
         let window = (0..FFT_SIZE)
             .map(|i| {
@@ -86,36 +237,39 @@ impl Analyzer {
             scratch: fft.make_scratch_vec(),
             fft,
             window,
-            edges: [0; BARS + 1],
-            tilt: [0.0; BARS],
+            rate,
+            bands: Vec::with_capacity(MAX_BARS),
         };
-        a.set_rate(rate);
+        a.layout(rate, count);
         a
     }
 
-    fn set_rate(&mut self, rate: u32) {
+    /// Spread `count` bars over the spectrum of audio at `rate`.
+    fn layout(&mut self, rate: u32, count: usize) {
+        self.rate = rate;
         // Sample rates are far below 2^24, so the conversion is exact.
         let rate = rate.max(1) as f32;
         let last_bin = FFT_SIZE / 2;
         let top = MAX_HZ.min(rate / 2.0);
-        let hz = |i: usize| MIN_HZ * (top / MIN_HZ).powf(i as f32 / BARS as f32);
-        for (i, edge) in self.edges.iter_mut().enumerate() {
-            // Non-negative and at most FFT_SIZE / 2, so the cast cannot truncate.
-            *edge = ((hz(i) * FFT_SIZE as f32 / rate).round() as usize).clamp(1, last_bin);
-        }
-        // The lowest bars are narrower than a bin: give each at least one of its own.
-        for i in 1..=BARS {
-            self.edges[i] = self.edges[i].max(self.edges[i - 1] + 1).min(last_bin + 1);
-        }
-        for (i, t) in self.tilt.iter_mut().enumerate() {
-            let centre = (hz(i) * hz(i + 1)).sqrt();
-            *t = TILT_DB_PER_OCTAVE * (centre / 1000.0).log2();
-        }
+        let hz = |i: usize| MIN_HZ * (top / MIN_HZ).powf(i as f32 / count.max(1) as f32);
+        let bin = |f: f32| f * FFT_SIZE as f32 / rate;
+        self.bands.clear();
+        self.bands.extend((0..count).map(|i| {
+            let (lo, hi) = (hz(i), hz(i + 1));
+            // Non-negative and at most FFT_SIZE / 2 + 1, so the casts cannot truncate.
+            let edge = |f: f32| (bin(f).round() as usize).clamp(1, last_bin + 1);
+            let centre = (lo * hi).sqrt();
+            Band {
+                bins: (edge(lo), edge(hi)),
+                centre: bin(centre).min(last_bin as f32),
+                tilt: TILT_DB_PER_OCTAVE * (centre / 1000.0).log2(),
+            }
+        }));
     }
 
-    /// Bar heights in pixels for the `FFT_SIZE` samples of `history` that end just before
-    /// index `head` (a ring buffer).
-    fn bars(&mut self, history: &[f32], head: usize) -> [f32; BARS] {
+    /// Bar heights in pixels into `out` (one per band) for the `FFT_SIZE` samples of `history`
+    /// that end just before index `head` (a ring buffer).
+    fn bars(&mut self, history: &[f32], head: usize, out: &mut [f32]) {
         let start = head + history.len() - FFT_SIZE;
         for (i, (x, w)) in self.input.iter_mut().zip(&self.window).enumerate() {
             *x = history[(start + i) % history.len()] * w;
@@ -125,26 +279,38 @@ impl Analyzer {
             .process_with_scratch(&mut self.input, &mut self.spectrum, &mut self.scratch)
             .is_err()
         {
-            return [0.0; BARS];
+            out.fill(0.0);
+            return;
         }
         // A full-scale sine peaks at N/4 through a Hann window.
         let full_scale = FFT_SIZE as f32 / 4.0;
-        std::array::from_fn(|i| {
-            let bins = &self.spectrum[self.edges[i]..self.edges[i + 1]];
-            let peak = bins.iter().map(|c| c.norm()).fold(0.0f32, f32::max);
-            let db = 20.0 * (peak / full_scale).max(1e-9).log10() + self.tilt[i];
-            ((db + RANGE_DB) / RANGE_DB * H as f32).clamp(0.0, H as f32)
-        })
+        let spectrum = &self.spectrum;
+        let norm = |i: usize| spectrum.get(i).map_or(0.0, |c| c.norm());
+        for (bar, band) in out.iter_mut().zip(&self.bands) {
+            let (lo, hi) = band.bins;
+            let level = if hi > lo {
+                (lo..hi).map(norm).fold(0.0f32, f32::max)
+            } else {
+                // Non-negative and within the spectrum, so the cast cannot truncate.
+                let below = band.centre.floor() as usize;
+                let frac = band.centre - band.centre.floor();
+                norm(below) * (1.0 - frac) + norm(below + 1) * frac
+            };
+            let db = 20.0 * (level / full_scale).max(1e-9).log10() + band.tilt;
+            *bar = ((db + RANGE_DB) / RANGE_DB * H as f32).clamp(0.0, H as f32);
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct Vis {
     pub mode: VisMode,
-    bars: [f32; BARS],
-    peaks: [f32; BARS],
-    peak_hold: [u8; BARS],
-    peak_vel: [f32; BARS],
+    pub analyzer: AnalyzerOptions,
+    pub scope_style: ScopeStyle,
+    bars: [f32; MAX_BARS],
+    peaks: [f32; MAX_BARS],
+    /// How fast each peak is falling, in pixels per 60th of a second.
+    peak_speed: [f32; MAX_BARS],
     last: Option<Instant>,
     /// The most recent samples, a ring written at `head`.
     history: Vec<f32>,
@@ -155,7 +321,7 @@ pub struct Vis {
     heard: Option<Instant>,
     /// The oscilloscope trace, `-1..=1` per pixel column.
     scope: [f32; W],
-    analyzer: Analyzer,
+    spectrum: Analyzer,
 }
 
 impl Default for Vis {
@@ -167,19 +333,21 @@ impl Default for Vis {
 impl Vis {
     #[must_use]
     pub fn new() -> Vis {
+        let analyzer = AnalyzerOptions::default();
         Vis {
             mode: VisMode::Analyzer,
-            bars: [0.0; BARS],
-            peaks: [0.0; BARS],
-            peak_hold: [0; BARS],
-            peak_vel: [0.0; BARS],
+            analyzer,
+            scope_style: ScopeStyle::default(),
+            bars: [0.0; MAX_BARS],
+            peaks: [0.0; MAX_BARS],
+            peak_speed: [0.0; MAX_BARS],
             last: None,
             history: vec![0.0; HISTORY],
             head: 0,
             fresh: false,
             heard: None,
             scope: [0.0; W],
-            analyzer: Analyzer::new(DEFAULT_RATE),
+            spectrum: Analyzer::new(DEFAULT_RATE, analyzer.bands.count()),
         }
     }
 
@@ -192,10 +360,9 @@ impl Vis {
     }
 
     pub fn reset(&mut self) {
-        self.bars = [0.0; BARS];
-        self.peaks = [0.0; BARS];
-        self.peak_hold = [0; BARS];
-        self.peak_vel = [0.0; BARS];
+        self.bars = [0.0; MAX_BARS];
+        self.peaks = [0.0; MAX_BARS];
+        self.peak_speed = [0.0; MAX_BARS];
         self.scope = [0.0; W];
         self.heard = None;
         self.fresh = false;
@@ -203,7 +370,7 @@ impl Vis {
 
     /// The rate of the samples passed to [`Vis::push_samples`].
     pub fn set_sample_rate(&mut self, rate: u32) {
-        self.analyzer.set_rate(rate);
+        self.spectrum.layout(rate, self.analyzer.bands.count());
     }
 
     /// Add mono samples, oldest first, as they are played.
@@ -232,36 +399,46 @@ impl Vis {
             self.heard = Some(now);
             self.fresh = false;
         }
+        let count = self.analyzer.bands.count();
+        if self.spectrum.bands.len() != count {
+            // Switched between thick and thin bands: the old heights mean nothing now.
+            self.spectrum.layout(self.spectrum.rate, count);
+            self.reset();
+        }
         let live = playing
             && self
                 .heard
                 .is_some_and(|t| now.saturating_duration_since(t) < STALE);
-        let targets = if live {
+        let mut targets = [0.0; MAX_BARS];
+        if live {
             self.capture_scope();
-            self.analyzer.bars(&self.history, self.head)
+            self.spectrum
+                .bars(&self.history, self.head, &mut targets[..count]);
         } else {
             self.scope = [0.0; W];
-            [0.0; BARS]
-        };
-        let frames = (dt * 30.0).max(0.0);
-        for (i, target) in targets.into_iter().enumerate() {
-            // Bars jump up instantly and fall about one pixel per frame.
-            self.bars[i] = if target > self.bars[i] {
+        }
+        let fall = self.analyzer.falloff.bar_speed() * dt;
+        let ticks = dt * 60.0;
+        let growth = self.analyzer.peak_falloff.peak_growth().powf(ticks);
+        let bars = self
+            .bars
+            .iter_mut()
+            .zip(&mut self.peaks)
+            .zip(&mut self.peak_speed);
+        for (((bar, peak), speed), target) in bars.zip(targets).take(count) {
+            // Bars jump up at once and fall steadily.
+            *bar = if target > *bar {
                 target
             } else {
-                (self.bars[i] - frames).max(0.0)
+                (*bar - fall).max(0.0)
             };
-            // Peaks hold, then fall with acceleration.
-            if self.bars[i] >= self.peaks[i] {
-                self.peaks[i] = self.bars[i];
-                self.peak_hold[i] = 20;
-                self.peak_vel[i] = 0.0;
-            } else if self.peak_hold[i] > 0 {
-                // A few frames at most, so the cast cannot truncate.
-                self.peak_hold[i] = self.peak_hold[i].saturating_sub(frames.round() as u8);
+            // Peaks ride the bars up, then fall ever faster.
+            if *bar >= *peak {
+                *peak = *bar;
+                *speed = PEAK_START;
             } else {
-                self.peak_vel[i] += 0.15 * frames;
-                self.peaks[i] = (self.peaks[i] - self.peak_vel[i]).max(0.0);
+                *peak = (*peak - *speed * ticks).max(0.0);
+                *speed *= growth;
             }
         }
     }
@@ -287,39 +464,60 @@ impl Vis {
             }
         }
         match self.mode {
-            VisMode::Analyzer => {
-                for (i, (bar, peak)) in self.bars.iter().zip(&self.peaks).enumerate() {
-                    let x = r.x + i32::try_from(i).unwrap_or(0) * (BAR_W + 1);
-                    // Heights are clamped to 0..=16, so the casts cannot truncate.
-                    let h = bar.round().clamp(0.0, H as f32) as i32;
-                    for row in (H - h)..H {
-                        let color = colors[2 + row.unsigned_abs() as usize];
-                        c.fill_rect(Rect::new(x, r.y + row, BAR_W, 1), color);
-                    }
-                    let p = peak.round().clamp(0.0, H as f32) as i32;
-                    if p > 0 {
-                        c.fill_rect(Rect::new(x, r.y + H - p, BAR_W, 1), colors[23]);
-                    }
-                }
-            }
-            VisMode::Oscilloscope => {
-                let mut prev: Option<i32> = None;
-                for (x, v) in (0..r.w).zip(self.scope) {
-                    // Clamped to the 16 rows, so the cast cannot truncate.
-                    let y = (8.0 - v * 8.0).round().clamp(0.0, 15.0) as i32;
-                    let (y0, y1) = match prev {
-                        Some(p) if p < y => (p + 1, y),
-                        Some(p) if p > y => (y, p - 1),
-                        _ => (y, y),
-                    };
-                    for yy in y0..=y1 {
-                        let d = (yy - 8).unsigned_abs() as usize;
-                        c.put(r.x + x, r.y + yy, colors[18 + (d * 5 / 9).min(4)]);
-                    }
-                    prev = Some(y);
-                }
-            }
+            VisMode::Analyzer => self.draw_analyzer(c, colors, r),
+            VisMode::Oscilloscope => self.draw_scope(c, colors, r),
             VisMode::Off => {}
+        }
+    }
+
+    fn draw_analyzer(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+        let (width, pitch) = match self.analyzer.bands {
+            Bands::Thick => (THICK_W, THICK_W + 1),
+            Bands::Thin => (1, 1),
+        };
+        let count = self.analyzer.bands.count();
+        for (x, (bar, peak)) in (0..)
+            .map(|i| r.x + i * pitch)
+            .zip(self.bars.iter().zip(&self.peaks))
+            .take(count)
+        {
+            // Heights are clamped to 0..=16, so the casts cannot truncate.
+            let h = bar.round().clamp(0.0, H as f32) as i32;
+            let top = H - h;
+            for row in top..H {
+                let shade = match self.analyzer.style {
+                    AnalyzerStyle::Normal => row,
+                    AnalyzerStyle::Fire => row - top,
+                    AnalyzerStyle::Line => top,
+                };
+                let color = colors[2 + shade.clamp(0, H - 1).unsigned_abs() as usize];
+                c.fill_rect(Rect::new(x, r.y + row, width, 1), color);
+            }
+            let p = peak.round().clamp(0.0, H as f32) as i32;
+            if self.analyzer.peaks && p > 0 {
+                c.fill_rect(Rect::new(x, r.y + H - p, width, 1), colors[23]);
+            }
+        }
+    }
+
+    fn draw_scope(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+        let mut prev: Option<i32> = None;
+        for (x, v) in (0..r.w).zip(self.scope) {
+            // Clamped to the 16 rows, so the cast cannot truncate.
+            let y = (8.0 - v * 8.0).round().clamp(0.0, 15.0) as i32;
+            let (y0, y1) = match (self.scope_style, prev) {
+                (ScopeStyle::Dots, _) => (y, y),
+                (ScopeStyle::Solid, _) if y >= 8 => (8, y),
+                (ScopeStyle::Solid, _) => (y, 7),
+                (ScopeStyle::Lines, Some(p)) if p < y => (p + 1, y),
+                (ScopeStyle::Lines, Some(p)) if p > y => (y, p - 1),
+                (ScopeStyle::Lines, _) => (y, y),
+            };
+            for yy in y0..=y1 {
+                let d = (yy - 8).unsigned_abs() as usize;
+                c.put(r.x + x, r.y + yy, colors[18 + (d * 5 / 9).min(4)]);
+            }
+            prev = Some(y);
         }
     }
 }
@@ -354,6 +552,7 @@ pub fn demo_signal(t: f64, rate: u32, out: &mut [f32]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -364,29 +563,56 @@ mod tests {
     }
 
     fn loudest_bar(v: &Vis) -> usize {
-        v.bars
+        v.bars[..v.analyzer.bands.count()]
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(b.1))
             .map_or(0, |(i, _)| i)
     }
 
+    fn listening_to(freq: f32, bands: Bands) -> Vis {
+        let mut v = Vis::new();
+        v.analyzer.bands = bands;
+        v.set_sample_rate(48_000);
+        v.push_samples(&tone(freq, 48_000, HISTORY));
+        v.update(Instant::now(), true);
+        v
+    }
+
     #[test]
     fn a_tone_lights_the_bar_for_its_pitch() {
-        let now = Instant::now();
-        let mut low = Vis::new();
-        low.set_sample_rate(48_000);
-        low.push_samples(&tone(100.0, 48_000, HISTORY));
-        low.update(now, true);
-        let mut high = Vis::new();
-        high.set_sample_rate(48_000);
-        high.push_samples(&tone(8000.0, 48_000, HISTORY));
-        high.update(now, true);
+        let (low, high) = (
+            listening_to(100.0, Bands::Thick),
+            listening_to(8000.0, Bands::Thick),
+        );
         let (lo, hi) = (loudest_bar(&low), loudest_bar(&high));
         assert!(lo < 5, "100 Hz peaked in bar {lo}");
         assert!(hi > 14, "8 kHz peaked in bar {hi}");
         // A full-scale tone nearly fills its bar.
         assert!(low.bars[lo] > 12.0);
+    }
+
+    #[test]
+    fn thin_bands_place_tones_in_proportion() {
+        let (low, high) = (
+            listening_to(100.0, Bands::Thin),
+            listening_to(8000.0, Bands::Thin),
+        );
+        let (lo, hi) = (loudest_bar(&low), loudest_bar(&high));
+        // 100 Hz is 15% of the way up the pitch range, 8 kHz 88%.
+        assert!((8..=16).contains(&lo), "100 Hz peaked in bar {lo}");
+        assert!((60..=70).contains(&hi), "8 kHz peaked in bar {hi}");
+        assert!(low.bars[lo] > 12.0);
+    }
+
+    #[test]
+    fn switching_band_width_starts_the_bars_afresh() {
+        let mut v = listening_to(1000.0, Bands::Thick);
+        assert!(v.bars.iter().any(|b| *b > 0.0));
+        v.analyzer.bands = Bands::Thin;
+        v.update(Instant::now(), false);
+        assert_eq!(v.spectrum.bands.len(), 75);
+        assert!(v.bars.iter().all(|b| *b == 0.0));
     }
 
     #[test]
@@ -405,6 +631,32 @@ mod tests {
     }
 
     #[test]
+    fn faster_falloffs_drop_bars_and_peaks_sooner() {
+        let fallen = |falloff: Falloff, peak_falloff: Falloff| {
+            let t0 = Instant::now();
+            let mut v = Vis::new();
+            v.analyzer.falloff = falloff;
+            v.analyzer.peak_falloff = peak_falloff;
+            v.bars[0] = 16.0;
+            v.peaks[0] = 16.0;
+            for k in 0..=15 {
+                v.update(t0 + Duration::from_millis(33 * k), false);
+            }
+            (v.bars[0], v.peaks[0])
+        };
+        let (slow_bar, slow_peak) = fallen(Falloff::Slowest, Falloff::Slowest);
+        let (fast_bar, fast_peak) = fallen(Falloff::Fastest, Falloff::Fastest);
+        assert!(slow_bar > fast_bar, "{slow_bar} vs {fast_bar}");
+        assert!(slow_peak > fast_peak, "{slow_peak} vs {fast_peak}");
+        // 15 frames of 33 ms at 30 pixels a second.
+        let (moderate, _) = fallen(Falloff::Moderate, Falloff::Slow);
+        assert!(
+            (moderate - (16.0 - 30.0 * 0.495)).abs() < 0.01,
+            "{moderate}"
+        );
+    }
+
+    #[test]
     fn the_scope_follows_the_waveform() {
         let mut v = Vis::new();
         let mut ramp: Vec<f32> = (0..HISTORY).map(|i| i as f32 / HISTORY as f32).collect();
@@ -418,12 +670,83 @@ mod tests {
     }
 
     #[test]
-    fn bar_edges_increase_and_stay_in_the_spectrum() {
-        for rate in [8000, 22_050, 44_100, 48_000, 192_000] {
-            let a = Analyzer::new(rate);
-            let edges = a.edges;
-            assert!(edges.windows(2).all(|w| w[0] < w[1]), "{rate}: {edges:?}");
-            assert!(a.edges[BARS] <= FFT_SIZE / 2 + 1);
+    fn bands_stay_in_the_spectrum_and_rise_in_pitch() {
+        for bands in [Bands::Thick, Bands::Thin] {
+            for rate in [8000, 22_050, 44_100, 48_000, 192_000] {
+                let a = Analyzer::new(rate, bands.count());
+                assert_eq!(a.bands.len(), bands.count());
+                assert!(a.bands.windows(2).all(|w| w[0].centre < w[1].centre));
+                for b in &a.bands {
+                    assert!(b.bins.0 <= b.bins.1 && b.bins.1 <= FFT_SIZE / 2 + 1);
+                    assert!(b.centre <= (FFT_SIZE / 2) as f32);
+                }
+            }
         }
+    }
+
+    fn drawn(v: &Vis) -> Image {
+        let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut c = Image::new(W as i32, H);
+        v.draw(&mut c, &skin, Rect::new(0, 0, W as i32, H));
+        c
+    }
+
+    #[test]
+    fn analyzer_styles_colour_bars_by_row_tip_or_height() {
+        let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let colors = skin.vis_colors;
+        let mut v = Vis::new();
+        v.analyzer.peaks = false;
+        v.bars[0] = 4.0; // rows 12..16
+        let bottom_and_top = |v: &Vis| {
+            let c = drawn(v);
+            (c.get(0, 15), c.get(0, 12))
+        };
+        assert_eq!(bottom_and_top(&v), (colors[17], colors[14]), "normal");
+        v.analyzer.style = AnalyzerStyle::Fire;
+        assert_eq!(bottom_and_top(&v), (colors[5], colors[2]), "fire");
+        v.analyzer.style = AnalyzerStyle::Line;
+        assert_eq!(bottom_and_top(&v), (colors[14], colors[14]), "line");
+    }
+
+    #[test]
+    fn thin_bands_are_one_pixel_wide_and_peaks_can_be_hidden() {
+        let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let colors = skin.vis_colors;
+        let mut v = Vis::new();
+        v.bars[0] = 2.0;
+        v.peaks[0] = 8.0;
+        let c = drawn(&v);
+        assert_eq!(c.get(2, 15), colors[17], "thick bars are three wide");
+        assert_eq!(c.get(1, 8), colors[23], "the peak");
+        v.analyzer.bands = Bands::Thin;
+        v.analyzer.peaks = false;
+        let c = drawn(&v);
+        assert_eq!(c.get(0, 15), colors[17]);
+        assert_ne!(c.get(1, 15), colors[17], "thin bars are one wide");
+        assert_ne!(c.get(0, 8), colors[23], "no peaks");
+    }
+
+    #[test]
+    fn scope_styles_draw_dots_lines_or_solid() {
+        let mut v = Vis::new();
+        v.mode = VisMode::Oscilloscope;
+        // A square wave: high for 10 columns, low for 10.
+        for (x, s) in v.scope.iter_mut().enumerate() {
+            *s = if (x / 10) % 2 == 0 { 0.9 } else { -0.9 };
+        }
+        let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let bg = [skin.vis_colors[0], skin.vis_colors[1]];
+        let lit = |v: &Vis, x: i32| {
+            let c = drawn(v);
+            (0..H).filter(|&y| !bg.contains(&c.get(x, y))).count()
+        };
+        v.scope_style = ScopeStyle::Dots;
+        assert_eq!(lit(&v, 10), 1);
+        v.scope_style = ScopeStyle::Lines;
+        assert!(lit(&v, 10) > 10, "the jump is joined up");
+        assert_eq!(lit(&v, 5), 1);
+        v.scope_style = ScopeStyle::Solid;
+        assert!(lit(&v, 5) > 5, "filled down to the centre");
     }
 }

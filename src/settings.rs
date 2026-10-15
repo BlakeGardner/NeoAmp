@@ -1,8 +1,9 @@
-//! What NeoAmp remembers between runs. One folder in the platform's config directory holds
-//! two files:
+//! What NeoAmp remembers between runs. One folder in the platform's config directory holds:
 //!
 //! - `settings.toml`: volume, equalizer, windows, skin, zoom and the like ([`Settings`]).
 //! - `playlist.m3u8`: the playlist, as an extended M3U file (see [`crate::m3u`]).
+//! - `autoload.eqf`: the equalizer's auto-load presets (see [`crate::eqf::AutoLoad`]).
+//! - The skins and presets folders, which the menus list (see [`crate::library`]).
 //!
 //! The folder is `~/.config/neoamp` on Linux (following `XDG_CONFIG_HOME`),
 //! `%APPDATA%\NeoAmp` on Windows and `~/Library/Application Support/NeoAmp` on macOS.
@@ -26,22 +27,34 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::audio::{BANDS, EQ_RANGE_DB};
+use crate::eqf::{self, AutoLoad};
 use crate::m3u;
 use crate::sprites::pl as p;
 use crate::ui::{DEFAULT_VOLUME, Track, Ui, WindowKind, db_slider, slider_db};
-use crate::vis::VisMode;
+use crate::vis::{AnalyzerOptions, ScopeOptions, VisMode};
 use crate::zoom::Zoom;
 
 /// Set to a folder to keep the settings and playlist there instead of the platform's folder.
 pub const DIR_VAR: &str = "NEOAMP_CONFIG_DIR";
 const SETTINGS_FILE: &str = "settings.toml";
 const PLAYLIST_FILE: &str = "playlist.m3u8";
+/// Auto-load equalizer presets, in Winamp's `.eqf` format (see [`eqf::AutoLoad`]).
+const AUTOLOAD_FILE: &str = "autoload.eqf";
 
-/// The folder's name: lowercase where that is the custom, the app's own spelling elsewhere.
+/// The folder's name, and those of the skins and presets folders in it: lowercase where that
+/// is the custom, capitalised elsewhere.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const DIR_NAME: &str = "NeoAmp";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const DIR_NAME: &str = "neoamp";
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const SKINS_DIR: &str = "Skins";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const SKINS_DIR: &str = "skins";
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const PRESETS_DIR: &str = "Presets";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const PRESETS_DIR: &str = "presets";
 
 /// Everything `settings.toml` holds. A key missing from the file keeps its default, so files
 /// written by older versions load unchanged. [`Settings::apply`] brings values into range.
@@ -59,6 +72,8 @@ pub struct Settings {
     #[serde(deserialize_with = "or_default")]
     pub vis: VisMode,
     pub double_size: bool,
+    /// The windows stay above other applications' (Ctrl+A).
+    pub always_on_top: bool,
     /// A zoom picked with Ctrl+= / Ctrl+- or `--scale`. `None` follows the screen's height.
     #[serde(
         skip_serializing_if = "Option::is_none",
@@ -68,6 +83,8 @@ pub struct Settings {
     /// The `.wsz` skin shown. `None` is the built-in base skin.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skin: Option<PathBuf>,
+    pub analyzer: AnalyzerOptions,
+    pub oscilloscope: ScopeOptions,
     pub eq: EqConfig,
     pub playlist: PlaylistConfig,
     pub windows: WindowLayout,
@@ -83,8 +100,11 @@ impl Default for Settings {
             time_remaining: false,
             vis: VisMode::default(),
             double_size: false,
+            always_on_top: false,
             zoom: None,
             skin: None,
+            analyzer: AnalyzerOptions::default(),
+            oscilloscope: ScopeOptions::default(),
             eq: EqConfig::default(),
             playlist: PlaylistConfig::default(),
             windows: WindowLayout::default(),
@@ -97,7 +117,7 @@ impl Default for Settings {
 #[serde(default)]
 pub struct EqConfig {
     pub on: bool,
-    /// The AUTO button. Loading a preset for each file is not implemented yet.
+    /// The AUTO button: load each file's auto-load preset as it starts.
     pub auto: bool,
     pub preamp: f32,
     /// From 60 Hz to 16 kHz.
@@ -206,16 +226,29 @@ impl Default for WindowConfig {
 /// For values whose type is right but whose content may not be: a zoom between the steps, a
 /// visualizer mode this version does not know, a band list of the wrong length. Such a value
 /// falls back to its default on its own instead of costing the whole file.
-fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: DeserializeOwned + Default,
 {
+    Ok(lenient(deserializer)?.unwrap_or_default())
+}
+
+/// The value, or `None` (with a warning) when it is valid TOML but not a usable `T`. For
+/// fields whose fallback is not `T::default()`.
+pub(crate) fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
     let value = toml::Value::deserialize(deserializer)?;
-    Ok(value.try_into().unwrap_or_else(|e| {
-        log::warn!("settings: {e}; using the default instead");
-        T::default()
-    }))
+    match value.try_into() {
+        Ok(v) => Ok(Some(v)),
+        Err(e) => {
+            log::warn!("settings: {e}; using the default instead");
+            Ok(None)
+        }
+    }
 }
 
 /// `v` within `lo..=hi`, or `default` when it is not a number at all.
@@ -264,8 +297,13 @@ impl Settings {
             time_remaining: ui.remaining_mode,
             vis: ui.vis.mode,
             double_size: ui.double_size,
+            always_on_top: ui.always_on_top,
             zoom: (ui.zoom != ui.default_zoom).then_some(ui.zoom),
             skin: None,
+            analyzer: ui.vis.analyzer,
+            oscilloscope: ScopeOptions {
+                style: ui.vis.scope_style,
+            },
             eq: EqConfig {
                 on: ui.eq_on,
                 auto: ui.eq_auto,
@@ -301,7 +339,10 @@ impl Settings {
         ui.repeat = self.repeat;
         ui.remaining_mode = self.time_remaining;
         ui.vis.mode = self.vis;
+        ui.vis.analyzer = self.analyzer;
+        ui.vis.scope_style = self.oscilloscope.style;
         ui.double_size = self.double_size;
+        ui.always_on_top = self.always_on_top;
         ui.eq_on = self.eq.on;
         ui.eq_auto = self.eq.auto;
         fn slider(db: f32) -> f32 {
@@ -344,6 +385,52 @@ impl Store {
     #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Where the Skins menu finds skins, and where skins opened from elsewhere are copied.
+    #[must_use]
+    pub fn skins_dir(&self) -> PathBuf {
+        self.dir.join(SKINS_DIR)
+    }
+
+    /// Where the EQ presets menu finds `.eqf` presets, and where it saves them.
+    #[must_use]
+    pub fn presets_dir(&self) -> PathBuf {
+        self.dir.join(PRESETS_DIR)
+    }
+
+    /// The auto-load presets; none when there are none yet or they cannot be read (logged).
+    /// A file that is not an `.eqf` file is renamed `autoload.eqf.bad`.
+    #[must_use]
+    pub fn load_autoload(&self) -> AutoLoad {
+        let path = self.dir.join(AUTOLOAD_FILE);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return AutoLoad::default(),
+            Err(e) => {
+                log::warn!("cannot read {}: {e}", path.display());
+                return AutoLoad::default();
+            }
+        };
+        match eqf::parse(&bytes) {
+            Ok(presets) => AutoLoad::new(presets),
+            Err(e) => {
+                let bad = with_suffix(&path, ".bad");
+                log::warn!("{}: {e}; keeping it as {}", path.display(), bad.display());
+                if let Err(e) = fs::rename(&path, &bad) {
+                    log::warn!("cannot rename {}: {e}", path.display());
+                }
+                AutoLoad::default()
+            }
+        }
+    }
+
+    /// Replace the auto-load presets file.
+    ///
+    /// # Errors
+    /// Fails if the file cannot be written.
+    pub fn save_autoload(&self, auto: &AutoLoad) -> Result<()> {
+        self.replace(AUTOLOAD_FILE, &eqf::write(auto.presets()))
     }
 
     /// The saved settings, or `None` when there are none yet or they cannot be read (logged).
@@ -501,6 +588,7 @@ impl Saver {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::vis::{AnalyzerStyle, Bands, Falloff, ScopeStyle};
 
     /// A scratch folder, removed again when dropped.
     struct TempDir(PathBuf);
@@ -534,8 +622,19 @@ mod tests {
             time_remaining: true,
             vis: VisMode::Oscilloscope,
             double_size: true,
+            always_on_top: true,
             zoom: Zoom::try_from(2.5).ok(),
             skin: Some(PathBuf::from("/skins/Classic.wsz")),
+            analyzer: AnalyzerOptions {
+                style: AnalyzerStyle::Fire,
+                bands: Bands::Thin,
+                peaks: false,
+                falloff: Falloff::Fastest,
+                peak_falloff: Falloff::Slowest,
+            },
+            oscilloscope: ScopeOptions {
+                style: ScopeStyle::Solid,
+            },
             eq: EqConfig {
                 on: false,
                 auto: true,
@@ -610,6 +709,41 @@ mod tests {
             Settings::from_toml("zoom = 2").unwrap().zoom,
             Zoom::try_from(2.0).ok()
         );
+    }
+
+    #[test]
+    fn visualizer_options_fall_back_one_at_a_time() {
+        let s = Settings::from_toml(
+            "[analyzer]\nstyle = \"plasma\"\nbands = \"thin\"\nfalloff = 3\n\
+             peak_falloff = \"warp\"\n[oscilloscope]\nstyle = \"dots\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.analyzer.style, AnalyzerStyle::Normal);
+        assert_eq!(s.analyzer.bands, Bands::Thin);
+        assert_eq!(s.analyzer.falloff, Falloff::Moderate);
+        assert_eq!(
+            s.analyzer.peak_falloff,
+            Falloff::Slow,
+            "the peaks' own default"
+        );
+        assert!(s.analyzer.peaks);
+        assert_eq!(s.oscilloscope.style, ScopeStyle::Dots);
+    }
+
+    #[test]
+    fn auto_load_presets_are_kept_in_an_eqf_file() {
+        let tmp = TempDir::new("autoload");
+        let store = tmp.store();
+        assert_eq!(store.load_autoload(), AutoLoad::default());
+        let mut auto = AutoLoad::default();
+        auto.set("song.mp3", eqf::Preset::flat(""));
+        store.save_autoload(&auto).unwrap();
+        assert_eq!(store.load_autoload(), auto);
+        fs::write(tmp.0.join("autoload.eqf"), "not presets").unwrap();
+        assert_eq!(store.load_autoload(), AutoLoad::default());
+        assert!(tmp.0.join("autoload.eqf.bad").exists());
+        assert_ne!(store.skins_dir(), store.presets_dir());
+        assert!(store.skins_dir().starts_with(&tmp.0));
     }
 
     /// What docs/SETTINGS.md promises about reading and writing the file.

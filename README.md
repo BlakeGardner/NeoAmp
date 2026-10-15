@@ -31,8 +31,12 @@ program does the same:
   each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
   docking. `src/upscale.rs` draws the framebuffer over the whole window (see
   [Scaling](#scaling)), and `src/zoom.rs` picks the zoom.
-- `src/open_dialog.rs` shows the platform's file dialog behind the eject
-  button (see [Opening files](#opening-files)).
+- `src/menu.rs` draws popup menus and handles the pointer and keyboard in
+  them; `src/menus.rs` holds NeoAmp's own menus, and `src/popup.rs` gives each
+  open menu its window (see [Menus](#menus)). `src/eqf.rs` reads and writes
+  equalizer presets, and `src/library.rs` lists the skins and presets folders.
+- `src/file_dialog.rs` shows the platform's file dialogs (see
+  [Opening files](#opening-files)).
 - `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
   the samples being played into the spectrum analyzer and oscilloscope.
 - `src/settings.rs` remembers the settings and the playlist between runs (see
@@ -121,13 +125,72 @@ at those scales would make some rows and columns a pixel wider than others,
 which garbles the bitmap fonts. Windows are sized to whole screen pixels and the
 image is stretched to fill them exactly, so docked windows meet without gaps.
 
+## Menus
+
+Winamp 2.x used the system's own menus, so NeoAmp draws its menus the way
+Windows 2000 did, grey and bevelled, whatever skin is loaded:
+
+- **Main menu**: the options button at the left of the main title bar,
+  **Alt+F**, or a right-click on any window. It plays a file or a folder,
+  shows or hides the equalizer and playlist, and holds the Skins, Options,
+  Playback and Visualization submenus, and Exit.
+- **Options**: the `O` in the clutter bar (also in the main menu). Time
+  elapsed or remaining, always on top, double size, the zoom, repeat and
+  shuffle.
+- **Visualization**: the `V` in the clutter bar, or a right-click on the
+  visualizer. The mode, and Winamp's analyzer and oscilloscope styles and
+  falloff speeds.
+- **EQ presets**: the equalizer's PRESETS button. Winamp's built-in presets,
+  your own, `.eqf` files, auto-load presets and Reset (see
+  [Saved settings](#saved-settings)).
+- **Skins**: **Alt+S** (also in the main menu). The skins in NeoAmp's skins
+  folder, the built-in base skin, and Open Skin... for any other.
+
+The `A` in the clutter bar toggles always on top, and stays down while it is
+on, as `D` does for double size. The `I` (file info) does nothing yet.
+
+Menus open where Windows opened them: dropping down from the button that opens
+them, or at the pointer for a right-click, turned the other way at the screen's
+edge. Submenus open when the pointer rests on their item for a moment, or at
+once on a click. The keyboard works as in Windows: the arrow keys move and open
+and close submenus, Enter chooses, Escape closes, and a letter picks the item
+it is underlined in (underlines appear once a key has been used). A click
+anywhere else, or switching to another application, closes the menu. Menus grow
+with the zoom, as Windows' grow with the desktop's scale, but not with double
+size, which Winamp's never did; their text is drawn at that size, so it stays
+sharp.
+
+The text is Tahoma, Windows 2000's menu font, where the system has it (Windows
+and macOS do, and so does Wine); elsewhere it is the playlist's font.
+
+Each open menu is a small window of its own, since a menu reaches past the
+NeoAmp window it opens from. These windows are drawn in software with
+[softbuffer](https://crates.io/crates/softbuffer), from the people behind
+winit, because they must appear at once: setting up a GPU surface, as the main
+windows use, can take a tenth of a second. softbuffer needs no system
+libraries to build. Where the platforms differ:
+
+- **X11** (including XWayland): menus are override-redirect windows, as other
+  toolkits' menus are, so they land exactly where they are put. COSMIC's
+  compositor redraws override-redirect XWayland windows only about once a
+  second, so there the highlight may lag behind the pointer; this has not
+  been tried on COSMIC yet.
+- **Windows and macOS:** menus are borderless windows kept above the others;
+  on Windows they stay off the taskbar. Neither has been tried yet.
+- **Pure Wayland** lets no window choose its position, so menus open wherever
+  the compositor puts them.
+
 ## Opening files
 
-Eject (in the main window, or the small one in the playlist's bottom bar) or
-**L** opens the platform's own file dialog, through
-[rfd](https://crates.io/crates/rfd). Pick one file or several: as with
+Eject (in the main window, or the small one in the playlist's bottom bar),
+**L** or Play File... in the main menu opens the platform's own file dialog,
+through [rfd](https://crates.io/crates/rfd). Pick one file or several: as with
 Winamp's "Open file(s)", they replace the playlist and the first one plays.
+**Shift+L** or Play Folder... picks a folder instead, whose playable files
+(sorted by name, subfolders included) replace the playlist in the same way.
 Cancelling changes nothing. The windows keep drawing while the dialog is open.
+The same dialogs open skins and equalizer presets from the menus, starting in
+NeoAmp's skins and presets folders.
 
 The dialog starts on "All supported types" and also offers MP3, WAV, FLAC and
 Ogg Vorbis one at a time. The platforms differ a little:
@@ -148,13 +211,13 @@ Ogg Vorbis one at a time. The platforms differ a little:
 ## Saved settings
 
 NeoAmp starts the way it was left: volume, balance, the equalizer, shuffle,
-repeat, the time display, the visualizer mode, which windows are open and
-where, the playlist's size, the skin, the zoom and double size, and the
-playlist with its current entry. The playlist comes back stopped, as in
-Winamp. NeoAmp saves within a couple of seconds of a change and again on
-exit, so a crash loses little.
+repeat, the time display, the visualizer and its options, which windows are
+open and where, the playlist's size, the skin, the zoom, double size and
+always on top, and the playlist with its current entry. The playlist comes
+back stopped, as in Winamp. NeoAmp saves within a couple of seconds of a change
+and again on exit, so a crash loses little.
 
-Two files share one folder:
+Two files share one folder, with the skins and presets the menus list:
 
 | Platform | Folder |
 | --- | --- |
@@ -171,12 +234,20 @@ Two files share one folder:
 - `playlist.m3u8` is the playlist as an extended M3U file, which other players
   can open too. Entries whose length it records are not scanned again at
   startup.
+- `skins/` (`Skins\` on Windows and macOS) holds the skins the Skins menu
+  lists. A skin opened from anywhere else, dropped onto a window or given on
+  the command line is copied in, so it stays listed.
+- `presets/` (`Presets\`) holds equalizer presets saved from EQ presets >
+  Save > Preset..., as Winamp `.eqf` files, and lists them under Load.
+- `autoload.eqf` holds the auto-load presets: equalizer settings kept for one
+  file name each (EQ presets > Save > Auto-load preset). With AUTO on, a
+  file's preset loads as it starts.
 
 [docs/SETTINGS.md](docs/SETTINGS.md) describes every setting: what it
 controls, the values it takes and its default.
 
-`NEOAMP_CONFIG_DIR=<folder>` keeps both files somewhere else. `--screenshot`
-neither reads nor writes them. Files, a skin or `--scale` given on the command
+`NEOAMP_CONFIG_DIR=<folder>` keeps all of it somewhere else. `--screenshot`
+neither reads nor writes any of it. Files, a skin or `--scale` given on the command
 line take precedence over what was saved and are remembered in turn, so files
 replace the saved playlist.
 
@@ -227,10 +298,10 @@ them if nothing is playing. Eject picks files in a dialog (see
 cargo run --release -- ~/Music/some-album
 ```
 
-Load another classic skin by passing it on the command line or by dropping a
-`.wsz` onto the window. It stays until another one replaces it; until there is
-a skins menu, deleting the `skin` line from `settings.toml` (see
-[Saved settings](#saved-settings)) goes back to the built-in skin:
+Load another classic skin from the Skins menu (**Alt+S**), by passing it on
+the command line or by dropping a `.wsz` onto the window. It is copied into
+the skins folder and stays until another one replaces it; **<Base Skin>** in
+the Skins menu goes back to the built-in skin:
 
 ```bash
 cargo run --release -- ~/Downloads/Classic.wsz
@@ -255,16 +326,23 @@ cargo run --release -- --screenshot shot.png
 | --- | --- | --- |
 | Previous / Play / Pause / Stop / Next | transport buttons | Z X C V B |
 | Open files (they replace the playlist) | either eject button | L |
+| Open a folder (it replaces the playlist) | Play Folder... in the main menu | Shift+L |
 | Play a playlist entry | double-click it | |
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
 | Equalizer / Playlist windows | EQ / PL buttons, window close buttons | Alt+G / Alt+E |
+| Main menu | the options button at the left of the title bar, or right-click | Alt+F |
+| Options menu | the `O` in the clutter bar | |
+| Always on top | the `A` in the clutter bar | Ctrl+A |
 | Double size (doubles the zoom) | the `D` in the clutter bar | Ctrl+D |
-| Zoom in / out / back to default | | Ctrl+= / Ctrl+- / Ctrl+0 |
+| Zoom in / out / back to default | Options > Zoom | Ctrl+= / Ctrl+- / Ctrl+0 |
 | Volume, balance, EQ bands and preamp | drag the sliders (the marquee shows the value) | Up / Down: volume |
 | Seek | drag the position bar; it seeks when you let go | Left / Right: 5 seconds |
 | Equalizer on / off | the ON button | |
+| EQ presets, and auto-load presets with AUTO on | the PRESETS button | |
 | Visualizer mode (analyzer, scope, off) | click the visualizer | |
+| Visualizer styles and falloff | the `V` in the clutter bar, or right-click the visualizer | |
+| Skins | Skins in the main menu | Alt+S |
 | Move a window (docked ones follow the main window) | drag its title bar | |
 | Resize the playlist | drag the grip in its bottom-right corner | |
 | Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS | |
@@ -272,12 +350,15 @@ cargo run --release -- --screenshot shot.png
 ## Scope and limitations
 
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
-- Windowshade mode, the options menus, cursors (`.cur`) and the minibrowser
-  window are not implemented.
-- The playlist can be replaced (eject) or added to (command line, drag and
-  drop) but not edited, and shuffle does not change the order yet. Winamp's
-  Shift+L (open a folder) and Ctrl+L (open a URL) are not implemented, nor
-  are EQ presets and AUTO.
+- Windowshade mode, the file info dialog, cursors (`.cur`) and the minibrowser
+  window are not implemented. The menus leave out what NeoAmp cannot do yet
+  (Play Location, Preferences, Jump to file and the like) rather than grey it.
+- The playlist can be replaced (eject, Play Folder) or added to (command line,
+  drag and drop) but not edited: its ADD, REM, SEL, MISC and LIST OPTS menus
+  show but do nothing. Shuffle does not change the order yet, and Winamp's
+  Ctrl+L (open a URL) is not implemented.
+- Ctrl+A toggles always on top in every window; in Winamp's playlist it
+  selected every entry, which waits for playlist editing.
 - Tracks play back to back with a short gap, not gaplessly.
 - The output device is opened once, at startup, and never reopened. On Linux
   that device is PipeWire's or PulseAudio's, which move the stream to another

@@ -37,16 +37,26 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
         }
     }
 
-    // Clutter bar (O A I D V).
+    // Clutter bar (O A I D V). A and D stay down while always on top and double size are on.
     skin.blit(c, m::CLUTTER_BG, ox + m::CLUTTER.x, oy + m::CLUTTER.y);
-    for (ctl, rect, sprite) in [
-        (Control::ClutterO, m::CLUTTER_O, m::CLUTTER_O_PRESSED),
-        (Control::ClutterA, m::CLUTTER_A, m::CLUTTER_A_PRESSED),
-        (Control::ClutterI, m::CLUTTER_I, m::CLUTTER_I_PRESSED),
-        (Control::ClutterD, m::CLUTTER_D, m::CLUTTER_D_PRESSED),
-        (Control::ClutterV, m::CLUTTER_V, m::CLUTTER_V_PRESSED),
+    for (ctl, rect, sprite, on) in [
+        (Control::ClutterO, m::CLUTTER_O, m::CLUTTER_O_PRESSED, false),
+        (
+            Control::ClutterA,
+            m::CLUTTER_A,
+            m::CLUTTER_A_PRESSED,
+            ui.always_on_top,
+        ),
+        (Control::ClutterI, m::CLUTTER_I, m::CLUTTER_I_PRESSED, false),
+        (
+            Control::ClutterD,
+            m::CLUTTER_D,
+            m::CLUTTER_D_PRESSED,
+            ui.double_size,
+        ),
+        (Control::ClutterV, m::CLUTTER_V, m::CLUTTER_V_PRESSED, false),
     ] {
-        if pressed(ctl) {
+        if pressed(ctl) || on {
             skin.blit(c, sprite, ox + rect.x, oy + rect.y);
         }
     }

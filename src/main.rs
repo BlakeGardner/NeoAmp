@@ -19,9 +19,10 @@ usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.p
 Settings and the playlist are remembered between runs; NEOAMP_CONFIG_DIR=<folder> keeps
 them somewhere other than the platform's config folder.
 
-keys: Z/X/C/V/B transport, L open files, S shuffle, R repeat, Ctrl+T time mode,
-      Ctrl+D double size, Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
-      Alt+G equalizer, Alt+E playlist, arrows volume/seek";
+keys: Z/X/C/V/B transport, L open files, Shift+L open a folder, S shuffle, R repeat,
+      Ctrl+T time mode, Ctrl+D double size, Ctrl+A always on top,
+      Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset, Alt+G equalizer, Alt+E playlist,
+      Alt+F main menu (or right-click), Alt+S skins, arrows volume/seek";
 
 /// Classic skins are `.wsz` files; any other path is audio for the playlist.
 fn is_skin(path: &str) -> bool {

@@ -16,28 +16,29 @@ and [SETTINGS.md](SETTINGS.md) for every key.
 
 ## Phase 2: Popup menus
 
-These controls show a pressed state and nothing else: the title-bar **O**
-button, right-click on any window, **O**, **A**, **I** and **V** in the strip
-left of the time display, and the EQ's **PRESETS** button. See the no-op arm
-at the end of `Ui::mouse_up` in [src/ui.rs](../src/ui.rs).
+Done except **I**: menus drawn like Windows 2000's in windows of their own
+([src/menu.rs](../src/menu.rs), [src/menus.rs](../src/menus.rs),
+[src/popup.rs](../src/popup.rs)). See "Menus" in the README.
 
-- [ ] Decide: native menus or menus drawn in the skin canvas.
-      Recommendation: draw our own, since they fit the borderless windows.
-- [ ] Build the popup-menu component.
-- [ ] Main menu, from the title-bar **O** button and right-click: Play file,
-      folder or URL; Skins; Options; Playback; Visualization; Exit.
-- [ ] **O** opens the options menu.
-- [ ] **A** toggles always on top.
+- [x] Decide: native menus or menus drawn in the skin canvas. Drawn, in the
+      classic Windows grey, each in its own borderless window: native menus
+      need GTK on Linux, and a menu drawn in the skin canvas would be cut off
+      at the window's edge.
+- [x] Build the popup-menu component.
+- [x] Main menu, from the title-bar **O** button, right-click and Alt+F: Play
+      file or folder; Skins; Options; Playback; Visualization; Exit. Play URL
+      waits for Phase 6.
+- [x] **O** opens the options menu.
+- [x] **A** toggles always on top.
 - [ ] **I** opens file info (see Phase 5).
-- [ ] **V** opens the visualizer menu.
-- [ ] EQ **PRESETS**: built-in presets (Rock, Classical, …), load and save,
+- [x] **V** opens the visualizer menu.
+- [x] EQ **PRESETS**: built-in presets (Rock, Classical, …), load and save,
       `.eqf` import, Reset / Flat.
-- [ ] EQ **AUTO**: load a preset per file. It toggles today but does nothing.
-- [ ] Visualizer options. Analyzer: fire or line style, thick or thin bars,
-      peaks on/off, falloff speeds. Oscilloscope: dots, lines or solid. The
-      style is fixed today ([src/vis.rs](../src/vis.rs)).
-- [ ] Skins menu and skin browser (Alt+S). Dropping a `.wsz` is the only way
-      to change skins today.
+- [x] EQ **AUTO**: load a preset per file.
+- [x] Visualizer options. Analyzer: fire or line style, thick or thin bars,
+      peaks on/off, falloff speeds. Oscilloscope: dots, lines or solid.
+- [x] Skins menu (Alt+S), listing NeoAmp's skins folder. There is no
+      separate skin browser window.
 
 ## Phase 3: Playlist
 
@@ -51,7 +52,10 @@ at the end of `Ui::mouse_up` in [src/ui.rs](../src/ui.rs).
 - [ ] Shift- and Ctrl-click multi-select. A click always selects just one row
       today (the `PlTrack` arm of `Ui::mouse_down`).
 - [ ] Drag rows to reorder.
-- [ ] Keys: Delete, Ctrl+A, arrows, Enter, Home/End, PgUp/PgDn.
+- [ ] Keys: Delete, Ctrl+A, arrows, Enter, Home/End, PgUp/PgDn. Ctrl+A
+      toggles always on top in every window today; in the playlist it should
+      select every entry instead, as in Winamp (`App::key_cmd` in
+      [src/app.rs](../src/app.rs) would need to know the window).
 - [ ] Mouse wheel: scroll the playlist, and set the volume over the main
       window. [src/app.rs](../src/app.rs) handles no wheel events yet.
 - [ ] Make shuffle shuffle. The button toggles, but `Ui::next` and
@@ -62,7 +66,7 @@ at the end of `Ui::mouse_up` in [src/ui.rs](../src/ui.rs).
       the saved playlist, relative paths included; PLS and `file://` URLs
       are still missing.
 - [ ] J: jump to file (a search box over the playlist).
-- [ ] Shift+L: open a folder.
+- [x] Shift+L: open a folder (Play Folder... in the main menu).
 
 ## Phase 4: Windowshade mode
 

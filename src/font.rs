@@ -1,4 +1,7 @@
-//! Text rendering: the skin's 5x6 bitmap font (text.bmp) and a TrueType font for the playlist.
+//! Text rendering: the skin's 5x6 bitmap font (text.bmp) and TrueType fonts for the playlist
+//! and the menus.
+
+use std::path::{Path, PathBuf};
 
 use crate::canvas::{Image, Rect};
 use crate::skin::Skin;
@@ -70,16 +73,20 @@ pub fn bitmap_text_width(text: &str) -> i32 {
         .saturating_mul(f::GLYPH_W)
 }
 
-/// A small TrueType font for the playlist, rendered antialiased with half-pixel letter spacing
-/// (the same metrics Webamp uses for its pixel-matched reproduction).
+/// A small TrueType font, rendered antialiased. The playlist's has half-pixel letter spacing
+/// (the same metrics Webamp uses for its pixel-matched reproduction); the menus' has none.
+#[derive(Clone)]
 pub struct TtfFont {
     font: fontdue::Font,
     px: f32,
     ascent: i32,
+    descent: i32,
     letter_spacing: f32,
 }
 
-const CANDIDATES: &[&str] = &[
+/// Arial and its look-alikes, for the playlist (and the menus when there is no Tahoma).
+/// Windows' own folder is added by [`windows_font`].
+const SANS: &[&str] = &[
     "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
     "/usr/share/fonts/truetype/msttcorefonts/arial.ttf",
     "/usr/share/fonts/TTF/arial.ttf",
@@ -91,14 +98,41 @@ const CANDIDATES: &[&str] = &[
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
-    "C:\\Windows\\Fonts\\arial.ttf",
 ];
+
+/// Tahoma, the menu font of Windows 2000 and XP, where Winamp 2.x ran. macOS ships it, and so
+/// does Wine (its own lookalike).
+const TAHOMA: &[&str] = &[
+    "/usr/share/wine/fonts/tahoma.ttf",
+    "/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf",
+    "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
+    "/usr/share/fonts/TTF/tahoma.ttf",
+    "/System/Library/Fonts/Supplemental/Tahoma.ttf",
+];
+
+/// `file` in Windows' font folder (`%WINDIR%\Fonts`). `None` elsewhere.
+fn windows_font(file: &str) -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var_os("WINDIR").map(|dir| Path::new(&dir).join("Fonts").join(file))
+    } else {
+        None
+    }
+}
+
+/// Where to look for a font: Windows' font folder first, then `paths`.
+fn candidates(windows_file: &str, paths: &[&str]) -> Vec<PathBuf> {
+    windows_font(windows_file)
+        .into_iter()
+        .chain(paths.iter().map(PathBuf::from))
+        .collect()
+}
 
 impl std::fmt::Debug for TtfFont {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TtfFont")
             .field("px", &self.px)
             .field("ascent", &self.ascent)
+            .field("descent", &self.descent)
             .field("letter_spacing", &self.letter_spacing)
             .finish_non_exhaustive()
     }
@@ -107,36 +141,89 @@ impl std::fmt::Debug for TtfFont {
 impl TtfFont {
     /// The playlist font as Winamp rendered it: a 9px Arial-like face.
     pub const DEFAULT_PX: f32 = 9.0;
+    /// The playlist's letter spacing.
+    const PLAYLIST_SPACING: f32 = 0.5;
 
+    /// The playlist font: the first Arial-like font found.
+    #[must_use]
     pub fn load_system(px: f32) -> Option<TtfFont> {
-        for path in CANDIDATES {
-            if let Ok(bytes) = std::fs::read(path)
-                && let Some(font) = Self::from_bytes(bytes, px)
-            {
-                log::info!("playlist font: {path}");
-                return Some(font);
-            }
+        let font = Self::load_first(&candidates("arial.ttf", SANS), px, Self::PLAYLIST_SPACING);
+        if font.is_none() {
+            log::warn!("no TrueType font found; playlist falls back to the bitmap font");
         }
-        log::warn!("no TrueType font found; playlist falls back to the bitmap font");
-        None
+        font
     }
 
+    /// The menu font: Tahoma if the system has it, else the playlist's face, without letter
+    /// spacing.
+    #[must_use]
+    pub fn load_menu(px: f32) -> Option<TtfFont> {
+        let mut paths = candidates("tahoma.ttf", TAHOMA);
+        paths.extend(candidates("arial.ttf", SANS));
+        let font = Self::load_first(&paths, px, 0.0);
+        if font.is_none() {
+            log::warn!("no TrueType font found; menus cannot be shown");
+        }
+        font
+    }
+
+    fn load_first(paths: &[PathBuf], px: f32, letter_spacing: f32) -> Option<TtfFont> {
+        paths.iter().find_map(|path| {
+            let font = Self::from_bytes(std::fs::read(path).ok()?, px)?;
+            log::info!("font: {}", path.display());
+            Some(TtfFont {
+                letter_spacing,
+                ..font
+            })
+        })
+    }
+
+    #[must_use]
     pub fn from_bytes(bytes: Vec<u8>, px: f32) -> Option<TtfFont> {
         let settings = fontdue::FontSettings {
             scale: px,
             ..Default::default()
         };
         let font = fontdue::Font::from_bytes(bytes, settings).ok()?;
-        let ascent = font
-            .horizontal_line_metrics(px)
-            .map(|m| m.ascent.round() as i32)
-            .unwrap_or(px.round() as i32);
-        Some(TtfFont {
+        Some(Self::sized(font, px, Self::PLAYLIST_SPACING))
+    }
+
+    fn sized(font: fontdue::Font, px: f32, letter_spacing: f32) -> TtfFont {
+        let metrics = font.horizontal_line_metrics(px);
+        let ascent = metrics.map_or(px.round() as i32, |m| m.ascent.round() as i32);
+        // fontdue reports the descent as a negative number.
+        let descent = metrics.map_or(0, |m| (-m.descent).round() as i32);
+        TtfFont {
             font,
             px,
             ascent,
-            letter_spacing: 0.5,
-        })
+            descent,
+            letter_spacing,
+        }
+    }
+
+    /// The same face at another size.
+    #[must_use]
+    pub fn resized(&self, px: f32) -> TtfFont {
+        Self::sized(self.font.clone(), px, self.letter_spacing)
+    }
+
+    /// The size in pixels (the em height).
+    #[must_use]
+    pub fn px(&self) -> f32 {
+        self.px
+    }
+
+    /// Pixels from the top of a line of text to its baseline.
+    #[must_use]
+    pub fn ascent(&self) -> i32 {
+        self.ascent
+    }
+
+    /// Pixels from the top of a line to the bottom of its lowest descender.
+    #[must_use]
+    pub fn line_height(&self) -> i32 {
+        self.ascent + self.descent
     }
 
     fn advance(&self, ch: char) -> f32 {

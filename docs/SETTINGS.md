@@ -4,7 +4,9 @@ NeoAmp remembers how it was left in two files: `settings.toml`, described key
 by key below, and `playlist.m3u8`, the playlist. This page says what each
 setting controls, what values it takes and what happens to a value NeoAmp
 cannot use. The code behind it is [src/settings.rs](../src/settings.rs) and
-[src/m3u.rs](../src/m3u.rs).
+[src/m3u.rs](../src/m3u.rs). The same folder also holds your skins and
+equalizer presets; see [Skins, presets and auto-load
+presets](#skins-presets-and-auto-load-presets).
 
 ## Where the files are
 
@@ -63,6 +65,17 @@ repeat = false
 time_remaining = false
 vis = "analyzer"
 double_size = false
+always_on_top = false
+
+[analyzer]
+style = "normal"
+bands = "thick"
+peaks = true
+falloff = "moderate"
+peak_falloff = "slow"
+
+[oscilloscope]
+style = "lines"
 
 [eq]
 on = true
@@ -98,9 +111,10 @@ size = [275, 116]
 | `shuffle` | `true` / `false` | `false` | The shuffle button (**S**). |
 | `repeat` | `true` / `false` | `false` | The repeat button (**R**). |
 | `time_remaining` | `true` / `false` | `false` | Whether the time display counts down (**Ctrl+T**, or click it). |
-| `vis` | `"analyzer"`, `"oscilloscope"`, `"off"` | `"analyzer"` | What the visualizer shows (click it to cycle). |
+| `vis` | `"analyzer"`, `"oscilloscope"`, `"off"` | `"analyzer"` | What the visualizer shows (click it to cycle, or pick it from its menu). |
 | `double_size` | `true` / `false` | `false` | Double size (**Ctrl+D**, or the `D` in the clutter bar). |
-| `zoom` | `1`, `1.5`, `2`, `2.5`, `3` | none | The zoom picked with **Ctrl+=** / **Ctrl+-** or `--scale`. |
+| `always_on_top` | `true` / `false` | `false` | Always on top (**Ctrl+A**, or the `A` in the clutter bar). |
+| `zoom` | `1`, `1.5`, `2`, `2.5`, `3` | none | The zoom picked with **Ctrl+=** / **Ctrl+-**, Options > Zoom or `--scale`. |
 | `skin` | path to a `.wsz` file | none | The classic skin shown. |
 
 - **`volume`** is the slider's position, not a gain. The sound is scaled by its
@@ -117,6 +131,10 @@ size = [275, 116]
 - **`time_remaining`** needs the track's length. Until that is known, the
   display counts up.
 - **`double_size`** doubles whatever the zoom is, as in Winamp: 1.5x becomes 3x.
+- **`always_on_top`** keeps NeoAmp's windows above other applications'. It has
+  no effect on pure Wayland, which does not let applications ask for that, or
+  where NeoAmp uses override-redirect windows (see the README), which stay on
+  top anyway.
 - **`zoom`** is how far the windows are enlarged, before double size and the
   desktop's own scale factor. Without it, NeoAmp picks a zoom from the
   screen's height each time it starts (1080 lines: 1x, 1440: 1.5x, 2160: 2x).
@@ -125,10 +143,12 @@ size = [275, 116]
   line overrides it, and the new zoom is then saved in turn, unless it is the
   one the screen would get anyway.
 - **`skin`** is the full path of the skin file; without it NeoAmp uses its
-  built-in base skin. Dropping a `.wsz` onto a window or passing one on the
-  command line sets it. Delete the line to go back to the built-in skin. If
-  the file has been moved or deleted, NeoAmp shows the built-in skin, logs a
-  warning and drops the key at the next save. Windows paths are written in
+  built-in base skin. The Skins menu sets it, and so does dropping a `.wsz`
+  onto a window or passing one on the command line. A skin from outside the
+  skins folder is copied into it first, and `skin` names the copy. Choose
+  **<Base Skin>** in the Skins menu, or delete the line, to go back to the
+  built-in skin. If the file has been moved or deleted, NeoAmp shows the
+  built-in skin, logs a warning and drops the key at the next save. Windows paths are written in
   single quotes, `skin = 'C:\Skins\Classic.wsz'`; inside double quotes every
   backslash must be doubled. A path that is not valid Unicode, which Linux
   allows, cannot be stored, so such a skin is not remembered.
@@ -144,14 +164,41 @@ size = [275, 116]
 
 - **`on = false`** bypasses the whole equalizer, the preamp included, as in
   Winamp. The sliders keep their positions.
-- **`auto`** is remembered, but loading a preset for each file is not
-  implemented yet, so it has no effect.
+- **`auto`** loads each file's auto-load preset as the file starts, when it
+  has one (see [auto-load presets](#skins-presets-and-auto-load-presets)).
+  Files without one leave the equalizer as it is.
 - **`preamp`** raises or lowers the overall level, on top of the bands.
   Values are in decibels and are kept within ±12 dB.
 - **`bands`** are, in order: 60 Hz, 170 Hz, 310 Hz, 600 Hz, 1 kHz, 3 kHz,
   6 kHz, 12 kHz, 14 kHz and 16 kHz, each in decibels within ±12 dB. `0.0` is
   flat. A list that does not have exactly ten numbers is ignored, leaving all
   ten bands flat.
+
+## `[analyzer]` and `[oscilloscope]`: the visualizer
+
+These are the choices in the visualizer's menu (the `V` in the clutter bar, or
+right-click the visualizer). Each value that NeoAmp does not know falls back
+to its own default.
+
+| Key | Values | Default | What it controls |
+| --- | --- | --- | --- |
+| `analyzer.style` | `"normal"`, `"fire"`, `"line"` | `"normal"` | How the bars are coloured. |
+| `analyzer.bands` | `"thick"`, `"thin"` | `"thick"` | 19 bars three pixels wide, or 75 one pixel wide. |
+| `analyzer.peaks` | `true` / `false` | `true` | The dots that mark recent peaks. |
+| `analyzer.falloff` | `"slowest"`, `"slow"`, `"moderate"`, `"fast"`, `"fastest"` | `"moderate"` | How fast the bars fall. |
+| `analyzer.peak_falloff` | the same five | `"slow"` | How fast the peaks fall. |
+| `oscilloscope.style` | `"dots"`, `"lines"`, `"solid"` | `"lines"` | How the waveform is drawn. |
+
+- **`style`**: the colours come from the skin's `viscolor.txt`. `"normal"`
+  gives each row its own colour, so only tall bars reach the top colours.
+  `"fire"` starts the colours at the top of every bar. `"line"` paints each bar
+  in the one colour of the row its top reaches.
+- **`falloff`**: `"moderate"` drops a bar 30 pixels a second; the others are
+  in Winamp's proportions, from a quarter of that to over twice it.
+- **`peak_falloff`**: a peak hangs for a moment and then falls ever faster;
+  faster settings speed it up sooner.
+- **`oscilloscope.style`**: `"dots"` draws one dot per column, `"lines"` joins
+  them up and `"solid"` fills each column from the centre line.
 
 ## `[playlist]`
 
@@ -251,6 +298,37 @@ The playlist is an extended M3U file, which other players can open too:
 - Tracks that no longer exist stay in the playlist and are skipped when they
   fail to play.
 
+## Skins, presets and auto-load presets
+
+Beside the two files, the folder holds:
+
+| Name | What it is |
+| --- | --- |
+| `skins/` (`Skins\` on Windows and macOS) | The skins the Skins menu lists: every `.wsz` file in it. |
+| `presets/` (`Presets\` on Windows and macOS) | The equalizer presets listed under EQ presets > Load: every `.eqf` file in it. |
+| `autoload.eqf` | Auto-load presets, one per file name. |
+
+- **Skins** opened through the menu, dropped onto a window or given on the
+  command line are copied into the skins folder, so the menu lists them from
+  then on. A different skin with the same file name is kept, and the new one is
+  numbered: `Name (2).wsz`. To remove a skin from the menu, delete its file.
+- **Presets** are Winamp `.eqf` files, which Winamp and Webamp can load too.
+  EQ presets > Save > Preset... opens the platform's Save dialog in this
+  folder; the file name becomes the preset's name. Load lists Winamp's
+  built-in presets first, then these. Load > From .eqf file... opens any
+  `.eqf` file, and uses the first preset in it.
+- **`autoload.eqf`** is also in the `.eqf` format, like Winamp's `winamp.q2`:
+  each preset is named after the file it belongs to, such as
+  `01 Intro.mp3`, without the folder. EQ presets > Save > Auto-load preset
+  keeps the current settings for the playing file, and Delete > Auto-load
+  preset forgets them. With **AUTO** on, a file's preset loads as the file
+  starts. Names match regardless of case. A file NeoAmp cannot read as
+  presets is renamed `autoload.eqf.bad`, and NeoAmp starts without any.
+
+Preset names are written in UTF-8. Winamp wrote them in the Windows code page,
+so names with accents from Winamp's files show correctly in NeoAmp, but
+NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
+
 ## What is not saved
 
 - Whether a track was playing. NeoAmp always starts stopped, as Winamp did.
@@ -266,6 +344,7 @@ remembered like any other change:
 
 - Audio files or folders replace the saved playlist, and the first one plays.
   Without any, the saved playlist comes back.
-- A `.wsz` file (or `--skin`) replaces the saved skin.
+- A `.wsz` file (or `--skin`) replaces the saved skin, and is copied into the
+  skins folder.
 - `--scale` replaces the saved zoom.
-- `--screenshot` neither reads nor writes either file.
+- `--screenshot` neither reads nor writes any of these files.

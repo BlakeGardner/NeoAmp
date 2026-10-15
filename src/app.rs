@@ -18,20 +18,27 @@ use pixels::wgpu;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::monitor::MonitorHandle;
-use winit::window::{CursorIcon, Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
 use crate::audio::{self, Player, Scanner};
 use crate::canvas::{Image, Rect};
 use crate::dock::{self, SNAP_DISTANCE};
+use crate::eqf::{self, AutoLoad};
+use crate::file_dialog::{FileDialog, Purpose};
 use crate::font::TtfFont;
-use crate::open_dialog::OpenDialog;
+use crate::library::{self, Entry};
+use crate::menu::{self, Anchor};
+use crate::menus::{self, AppCommand, Command, Library};
+use crate::popup::Popups;
 use crate::settings::{Saver, Settings, Store, WindowLayout};
 use crate::skin::Skin;
-use crate::ui::{Action, Control, KeyCmd, PlayState, Track, Transport, Ui, WindowKind};
+use crate::ui::{
+    Action, Control, KeyCmd, MenuRequest, PlayState, Track, Transport, Ui, WindowKind,
+};
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::vis;
 use crate::zoom::Zoom;
@@ -51,6 +58,9 @@ const STATS_PERIOD: Duration = Duration::from_secs(1);
 const SAVE_CHECK: Duration = Duration::from_secs(2);
 /// Skin pixels from a window's top edge to a point inside every title bar.
 const TITLE_BAR_Y: i32 = 5;
+/// With a menu open, focus may pass through "no window" on its way between two of ours; the
+/// menu closes only when none of ours has had it for this long.
+const FOCUS_GRACE: Duration = Duration::from_millis(150);
 
 /// Per-second counters for diagnosing stalls (`RUST_LOG=neoamp=debug`).
 #[derive(Debug)]
@@ -150,10 +160,13 @@ pub fn run(opts: Options) -> Result<()> {
     }
     let loaded = store.as_ref().and_then(Store::load_settings);
     let settings = loaded.clone().unwrap_or_default();
-    let (custom, skin_path) = match custom {
-        Some(skin) => (Some(skin), skin_path),
-        None => restore_skin(settings.skin.as_deref(), &base),
+    let (custom, skin_path) = match (custom, skin_path) {
+        // A skin from the command line joins the Skins menu.
+        (Some(skin), Some(path)) => (Some(skin), Some(install_skin(&path, store.as_ref()))),
+        (Some(skin), None) => (Some(skin), None),
+        (None, _) => restore_skin(settings.skin.as_deref(), &base),
     };
+    let autoload = store.as_ref().map(Store::load_autoload).unwrap_or_default();
 
     let mut ui = Ui::new();
     settings.apply(&mut ui);
@@ -191,11 +204,19 @@ pub fn run(opts: Options) -> Result<()> {
         offsets: [None; 3],
         restored_main: None,
         saver: None,
+        store: store.clone(),
+        autoload,
         next_save: Instant::now() + SAVE_CHECK,
         modifiers: ModifiersState::empty(),
         next_frame: Instant::now(),
         stats: FrameStats::new(Instant::now()),
-        open_dialog: None,
+        dialog: None,
+        popups: Popups::default(),
+        menu_skins: Vec::new(),
+        menu_presets: Vec::new(),
+        focused: false,
+        focus_lost: None,
+        swallow_release: false,
     };
     let saved_tracks = if opts.files.is_empty() {
         let tracks = store.as_ref().and_then(Store::load_playlist);
@@ -221,6 +242,21 @@ pub fn run(opts: Options) -> Result<()> {
 /// `path` made absolute against the current folder, or unchanged if that cannot be read.
 fn absolute(path: PathBuf) -> PathBuf {
     std::path::absolute(&path).unwrap_or(path)
+}
+
+/// Copy a skin into the skins folder, where the Skins menu lists it, and return the copy's
+/// path. Without a config folder, or if copying fails (logged), the skin stays where it is.
+fn install_skin(path: &Path, store: Option<&Store>) -> PathBuf {
+    let Some(store) = store else {
+        return path.to_path_buf();
+    };
+    match library::install(path, &store.skins_dir()) {
+        Ok(copy) => copy,
+        Err(e) => {
+            log::warn!("cannot add the skin to the skins folder: {e:#}");
+            path.to_path_buf()
+        }
+    }
 }
 
 /// Load the skin the settings name, if any. One that cannot be loaded any more (moved or
@@ -460,13 +496,28 @@ struct App {
     restored_main: Option<PhysicalPosition<i32>>,
     /// Writes the settings and playlist as they change; `None` without a config folder.
     saver: Option<Saver>,
+    /// The config folder, which also holds the skins and presets folders.
+    store: Option<Store>,
+    /// Equalizer presets loaded with each file while AUTO is on.
+    autoload: AutoLoad,
     /// When to next check whether anything needs saving.
     next_save: Instant,
     modifiers: ModifiersState,
     next_frame: Instant,
     stats: FrameStats,
-    /// The eject button's file dialog, while it is showing.
-    open_dialog: Option<OpenDialog>,
+    /// A file dialog, while one is showing.
+    dialog: Option<FileDialog>,
+    /// The menus on screen.
+    popups: Popups,
+    /// The skins and preset files the open menu lists; its commands number them.
+    menu_skins: Vec<Entry>,
+    menu_presets: Vec<Entry>,
+    /// One of our windows, menus included, has the keyboard focus.
+    focused: bool,
+    /// When the last of our windows lost the focus.
+    focus_lost: Option<Instant>,
+    /// A click that closed a menu went down; its release does nothing either.
+    swallow_release: bool,
 }
 
 impl App {
@@ -485,14 +536,241 @@ impl App {
             .map(|p| p.kind)
     }
 
+    /// Show the skin at `path`. One from outside the skins folder is copied there, so that the
+    /// Skins menu lists it from now on.
     fn load_skin(&mut self, path: &Path) {
         match load_skin(path, &self.base) {
             Ok(s) => {
                 log::info!("loaded skin {}", s.name);
                 self.custom = Some(s);
-                self.skin_path = Some(path.to_path_buf());
+                self.skin_path = Some(install_skin(path, self.store.as_ref()));
             }
             Err(e) => log::error!("cannot load skin {}: {e:#}", path.display()),
+        }
+    }
+
+    /// The current file's name, which auto-load presets go by.
+    fn track_file_name(&self) -> Option<String> {
+        let name = self.ui.track()?.path.file_name()?;
+        Some(name.to_string_lossy().into_owned())
+    }
+
+    /// With AUTO on, load playlist entry `i`'s auto-load preset, if it has one.
+    fn load_auto_preset(&mut self, i: usize) {
+        if !self.ui.eq_auto {
+            return;
+        }
+        let Some(name) = self.ui.tracks.get(i).and_then(|t| t.path.file_name()) else {
+            return;
+        };
+        if let Some(preset) = self.autoload.find(&name.to_string_lossy()) {
+            log::info!("auto-load preset for {}", preset.name);
+            self.ui.apply_preset(preset);
+        }
+    }
+
+    fn save_autoload(&self) {
+        if let Some(store) = &self.store
+            && let Err(e) = store.save_autoload(&self.autoload)
+        {
+            log::error!("cannot save the auto-load presets: {e:#}");
+        }
+    }
+
+    /// Set the equalizer from the first preset in the `.eqf` file at `path`.
+    fn load_preset_file(&mut self, path: &Path) {
+        let presets = std::fs::read(path)
+            .with_context(|| format!("reading {}", path.display()))
+            .and_then(|bytes| eqf::parse(&bytes));
+        match presets.as_deref() {
+            Ok([first, ..]) => self.ui.apply_preset(first),
+            Ok([]) => log::warn!("{} holds no presets", path.display()),
+            Err(e) => log::error!("cannot load the preset: {e:#}"),
+        }
+    }
+
+    /// Save the equalizer as an `.eqf` file at `path`, named after the file.
+    fn save_preset_file(&self, path: &Path) {
+        let path = if path.extension().is_some() {
+            path.to_path_buf()
+        } else {
+            path.with_extension("eqf")
+        };
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let bytes = eqf::write(&[self.ui.eq_preset(&name)]);
+        match std::fs::write(&path, bytes) {
+            Ok(()) => log::info!("saved preset {}", path.display()),
+            Err(e) => log::error!("cannot save the preset to {}: {e}", path.display()),
+        }
+    }
+
+    /// Carry out a menu command.
+    fn run_command(&mut self, command: Command, el: &ActiveEventLoop) {
+        let actions = self.ui.command(command);
+        self.handle(actions, el);
+    }
+
+    /// Carry out a menu command that needs files or dialogs.
+    fn app_command(&mut self, command: AppCommand) {
+        match command {
+            AppCommand::BaseSkin => {
+                self.custom = None;
+                self.skin_path = None;
+            }
+            AppCommand::Skin(i) => {
+                if let Some(path) = self.menu_skins.get(i).map(|e| e.path.clone()) {
+                    self.load_skin(&path);
+                }
+            }
+            AppCommand::OpenSkin => self.show_dialog(Purpose::OpenSkin),
+            AppCommand::UserPreset(i) => {
+                if let Some(path) = self.menu_presets.get(i).map(|e| e.path.clone()) {
+                    self.load_preset_file(&path);
+                }
+            }
+            AppCommand::PresetFromFile => self.show_dialog(Purpose::LoadPreset),
+            AppCommand::SavePreset => self.show_dialog(Purpose::SavePreset),
+            AppCommand::SaveAutoPreset => {
+                if let Some(name) = self.track_file_name() {
+                    let preset = self.ui.eq_preset(&name);
+                    self.autoload.set(&name, preset);
+                    self.save_autoload();
+                }
+            }
+            AppCommand::DeleteAutoPreset => {
+                if let Some(name) = self.track_file_name()
+                    && self.autoload.remove(&name)
+                {
+                    self.save_autoload();
+                }
+            }
+        }
+    }
+
+    /// Show a menu where `req` asks, listing the skins and presets as they are on disk now.
+    fn open_menu(&mut self, req: MenuRequest, el: &ActiveEventLoop) {
+        let Some(pane) = self.pane(req.window) else {
+            return;
+        };
+        // Pure Wayland cannot tell where a window is; the menu goes where the compositor
+        // puts it then.
+        let origin = pane.window.outer_position().unwrap_or_default();
+        let s = pane.scale(self.ui.scale());
+        let anchor = match req.below {
+            Some(r) => Anchor::Below(Rect::new(
+                origin.x + round_px(f64::from(r.x) * s),
+                origin.y + round_px(f64::from(r.y) * s),
+                round_px(f64::from(r.w) * s),
+                round_px(f64::from(r.h) * s),
+            )),
+            None => Anchor::Point(
+                origin.x + round_px(pane.cursor.x),
+                origin.y + round_px(pane.cursor.y),
+            ),
+        };
+        let (x, y) = match anchor {
+            Anchor::Point(x, y) => (x, y),
+            Anchor::Below(r) => (r.x, r.bottom()),
+        };
+        let screen = el
+            .available_monitors()
+            .filter_map(|m| monitor_rect(&m))
+            .find(|s| s.contains(x, y))
+            .or_else(|| pane.screen())
+            .unwrap_or(Rect::new(0, 0, 1 << 16, 1 << 16));
+        // Menus follow the zoom, as Windows' grow with the desktop's scale, but not double
+        // size, which Winamp's never did.
+        let scale = self.ui.zoom.factor() * pane.window.scale_factor();
+        if let Some(store) = &self.store {
+            self.menu_skins = library::list(&store.skins_dir(), "wsz");
+            self.menu_presets = library::list(&store.presets_dir(), "eqf");
+        }
+        let has_auto_preset = self
+            .track_file_name()
+            .is_some_and(|name| self.autoload.find(&name).is_some());
+        let lib = Library {
+            skins: &self.menu_skins,
+            skin: self.skin_path.as_deref(),
+            presets: &self.menu_presets,
+            has_auto_preset,
+        };
+        let items = menus::build(req.kind, &self.ui, &lib);
+        self.focus_lost = None;
+        self.popups
+            .open(el, items, anchor, screen, scale, req.keyboard);
+    }
+
+    /// Keep the windows above other applications' while always on top is on. Override-redirect
+    /// windows are above them anyway, and pure Wayland lets no application choose.
+    fn apply_window_level(&self) {
+        let level = self.window_level();
+        for p in &self.panes {
+            p.window.set_window_level(level);
+        }
+    }
+
+    fn window_level(&self) -> WindowLevel {
+        if self.ui.always_on_top {
+            WindowLevel::AlwaysOnTop
+        } else {
+            WindowLevel::Normal
+        }
+    }
+
+    /// Whether any of our windows, menus included, has the keyboard focus.
+    fn has_focus(&self) -> bool {
+        self.panes.iter().any(|p| p.focused) || self.popups.has_focus()
+    }
+
+    /// A window of ours gained or lost the focus.
+    fn focus_changed(&mut self, now: Instant) {
+        let had = self.focused;
+        self.focused = self.has_focus();
+        self.ui.active = self.focused;
+        if self.focused {
+            self.focus_lost = None;
+        } else if had {
+            self.focus_lost = Some(now);
+        }
+    }
+
+    /// Close the menus once the focus has gone to another application. Only a loss counts:
+    /// a menu opened while none of our windows had the focus stays.
+    fn check_menu_focus(&mut self, now: Instant) {
+        if self.popups.is_open()
+            && let Some(lost) = self.focus_lost
+            && now.saturating_duration_since(lost) >= FOCUS_GRACE
+            && !self.has_focus()
+        {
+            log::debug!("another application took the focus: closing the menu");
+            self.popups.close();
+            self.focus_lost = None;
+        }
+    }
+
+    /// A key while a menu is open: it goes to the menu.
+    fn menu_key(&mut self, event: &KeyEvent, el: &ActiveEventLoop) {
+        if event.state != ElementState::Pressed {
+            return;
+        }
+        let key = match &event.logical_key {
+            Key::Named(NamedKey::ArrowUp) => menu::Key::Up,
+            Key::Named(NamedKey::ArrowDown) => menu::Key::Down,
+            Key::Named(NamedKey::ArrowLeft) => menu::Key::Left,
+            Key::Named(NamedKey::ArrowRight) => menu::Key::Right,
+            Key::Named(NamedKey::Enter) => menu::Key::Enter,
+            Key::Named(NamedKey::Escape) => menu::Key::Escape,
+            Key::Character(s) => match s.chars().next() {
+                Some(ch) => menu::Key::Char(ch),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Some(command) = self.popups.key(el, key) {
+            self.run_command(command, el);
         }
     }
 
@@ -586,38 +864,80 @@ impl App {
         self.handle(actions, el);
     }
 
-    /// Eject: show the file dialog over the main window, unless it is already showing.
-    fn show_open_dialog(&mut self) {
-        if self.open_dialog.is_some() {
+    /// Show a file dialog over the main window, unless one is already showing. Skins and
+    /// presets dialogs start in their folders.
+    fn show_dialog(&mut self, purpose: Purpose) {
+        if self.dialog.is_some() {
             return;
         }
         let Some(main) = self.pane(WindowKind::Main) else {
             return;
         };
-        match OpenDialog::show(&main.window) {
-            Ok(dialog) => self.open_dialog = Some(dialog),
+        let folder = self.store.as_ref().and_then(|store| match purpose {
+            Purpose::PlayFiles | Purpose::PlayFolder => None,
+            Purpose::OpenSkin => Some(store.skins_dir()),
+            Purpose::LoadPreset | Purpose::SavePreset => Some(store.presets_dir()),
+        });
+        if purpose == Purpose::SavePreset
+            && let Some(dir) = &folder
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            log::warn!("cannot create {}: {e}", dir.display());
+        }
+        let folder = folder.filter(|dir| dir.is_dir());
+        match FileDialog::show(purpose, &main.window, folder.as_deref()) {
+            Ok(dialog) => self.dialog = Some(dialog),
             Err(e) => log::error!("cannot show the file dialog: {e:#}"),
         }
     }
 
-    /// Once the file dialog closes, the files chosen replace the playlist and the first one
-    /// plays, as in Winamp. Cancelling it changes nothing.
-    fn finish_open_dialog(&mut self, el: &ActiveEventLoop) {
-        let Some(files) = self.open_dialog.as_ref().and_then(OpenDialog::poll) else {
+    /// Once a file dialog closes, act on what was chosen. Files or a folder to play replace
+    /// the playlist and the first one plays, as in Winamp. Cancelling changes nothing.
+    fn finish_dialog(&mut self, el: &ActiveEventLoop) {
+        let Some(dialog) = &self.dialog else {
             return;
         };
-        self.open_dialog = None;
-        if files.is_empty() {
+        let Some(paths) = dialog.poll() else {
             return;
+        };
+        let purpose = dialog.purpose();
+        self.dialog = None;
+        let Some(first) = paths.first() else {
+            return;
+        };
+        match purpose {
+            Purpose::PlayFiles | Purpose::PlayFolder => {
+                let files = if purpose == Purpose::PlayFolder {
+                    audio::audio_files(paths)
+                } else {
+                    paths
+                };
+                if files.is_empty() {
+                    log::info!("no playable files there");
+                    return;
+                }
+                let mut actions = Vec::new();
+                self.ui.clear_playlist(&mut actions);
+                self.add_files(files, &mut actions);
+                self.handle(actions, el);
+            }
+            Purpose::OpenSkin => {
+                let path = first.clone();
+                self.load_skin(&path);
+            }
+            Purpose::LoadPreset => {
+                let path = first.clone();
+                self.load_preset_file(&path);
+            }
+            Purpose::SavePreset => self.save_preset_file(first),
         }
-        let mut actions = Vec::new();
-        self.ui.clear_playlist(&mut actions);
-        self.add_files(files, &mut actions);
-        self.handle(actions, el);
     }
 
     /// Pass a playback command from the UI to the audio engine.
     fn transport(&mut self, t: Transport) {
+        if let Transport::Open(i) = t {
+            self.load_auto_preset(i);
+        }
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -755,6 +1075,7 @@ impl App {
         if let Some(p) = at {
             attrs = attrs.with_position(p);
         }
+        attrs = attrs.with_window_level(self.window_level());
         #[cfg(any(
             target_os = "linux",
             target_os = "freebsd",
@@ -1201,18 +1522,72 @@ impl App {
                     }
                 }
                 Action::Relayout => self.sync_panes(el),
-                Action::OpenFiles => self.show_open_dialog(),
+                Action::OpenFiles => self.show_dialog(Purpose::PlayFiles),
+                Action::OpenFolder => self.show_dialog(Purpose::PlayFolder),
+                Action::AlwaysOnTop => self.apply_window_level(),
+                Action::OpenMenu(req) => self.open_menu(req, el),
+                Action::App(command) => self.app_command(command),
                 Action::Audio(t) => self.transport(t),
             }
         }
     }
 
+    /// A mouse button in one of the NeoAmp windows.
+    fn mouse_input(
+        &mut self,
+        kind: WindowKind,
+        state: ElementState,
+        button: MouseButton,
+        now: Instant,
+        el: &ActiveEventLoop,
+    ) {
+        // A click outside an open menu only closes it, as in Windows.
+        if state == ElementState::Pressed && self.popups.is_open() {
+            self.popups.close();
+            self.swallow_release = true;
+            return;
+        }
+        if state == ElementState::Released && std::mem::take(&mut self.swallow_release) {
+            return;
+        }
+        let Some(p) = self.pane(kind) else { return };
+        if self.unmanaged && state == ElementState::Pressed {
+            // Nobody manages focus for override-redirect windows: claim it ourselves.
+            p.window.focus_window();
+        }
+        let (x, y) = p.canvas_pos();
+        match (button, state) {
+            (MouseButton::Left, ElementState::Pressed) => {
+                let actions = self.ui.mouse_down(kind, x, y, now);
+                self.handle(actions, el);
+            }
+            (MouseButton::Left, ElementState::Released) => {
+                self.drag = None;
+                self.resize = None;
+                let actions = self.ui.mouse_up(kind, x, y);
+                self.handle(actions, el);
+            }
+            // Context menus open when the right button is let go, as in Windows.
+            (MouseButton::Right, ElementState::Released) => {
+                let actions = self.ui.context_menu(kind, x, y);
+                self.handle(actions, el);
+            }
+            _ => {}
+        }
+        self.update_cursor(kind, (x, y));
+    }
+
     fn key_cmd(&self, key: &Key) -> Option<KeyCmd> {
         let ctrl = self.modifiers.control_key();
         let alt = self.modifiers.alt_key();
+        let shift = self.modifiers.shift_key();
         Some(match key {
             Key::Character(s) => match (s.to_ascii_lowercase().as_str(), ctrl, alt) {
+                ("a", true, _) => KeyCmd::ToggleAlwaysOnTop,
                 ("d", true, _) => KeyCmd::ToggleDoubleSize,
+                ("f", _, true) => KeyCmd::MainMenu,
+                ("s", _, true) => KeyCmd::SkinsMenu,
+                ("l", false, false) if shift => KeyCmd::OpenFolder,
                 ("=" | "+", true, _) => KeyCmd::ZoomIn,
                 ("-" | "_", true, _) => KeyCmd::ZoomOut,
                 ("0", true, _) => KeyCmd::ZoomReset,
@@ -1325,6 +1700,21 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let now = Instant::now();
+        if self.popups.owns(id) {
+            match &event {
+                WindowEvent::KeyboardInput { event, .. } => self.menu_key(event, el),
+                WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+                _ => {
+                    if let Some(command) = self.popups.window_event(el, id, &event, now) {
+                        self.run_command(command, el);
+                    }
+                    if matches!(event, WindowEvent::Focused(_)) {
+                        self.focus_changed(now);
+                    }
+                }
+            }
+            return;
+        }
         let Some(kind) = self.kind_of(id) else { return };
         match event {
             WindowEvent::CloseRequested => {
@@ -1360,7 +1750,7 @@ impl ApplicationHandler for App {
                 if let Some(p) = self.pane_mut(kind) {
                     p.focused = f;
                 }
-                self.ui.active = self.panes.iter().any(|p| p.focused);
+                self.focus_changed(now);
             }
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::CursorMoved { position, .. } => {
@@ -1377,30 +1767,13 @@ impl ApplicationHandler for App {
                 }
                 self.update_cursor(kind, (x, y));
             }
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => {
-                let Some(p) = self.pane(kind) else { return };
-                if self.unmanaged && state == ElementState::Pressed {
-                    // Nobody manages focus for override-redirect windows: claim it ourselves.
-                    p.window.focus_window();
-                }
-                let (x, y) = p.canvas_pos();
-                let actions = match state {
-                    ElementState::Pressed => self.ui.mouse_down(kind, x, y, now),
-                    ElementState::Released => {
-                        self.drag = None;
-                        self.resize = None;
-                        self.ui.mouse_up(kind, x, y)
-                    }
-                };
-                self.handle(actions, el);
-                self.update_cursor(kind, (x, y));
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.mouse_input(kind, state, button, now, el);
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed
+                if self.popups.is_open() {
+                    self.menu_key(&event, el);
+                } else if event.state == ElementState::Pressed
                     && let Some(cmd) = self.key_cmd(&event.logical_key)
                 {
                     let actions = self.ui.key(cmd);
@@ -1421,7 +1794,9 @@ impl ApplicationHandler for App {
             self.next_frame = now + FRAME;
             self.apply_pending_docks(now);
             self.check_probe(el, now);
-            self.finish_open_dialog(el);
+            self.finish_dialog(el);
+            self.popups.tick(el, now);
+            self.check_menu_focus(now);
             self.sync_audio(el);
             self.ui.tick(now);
             for p in &self.panes {
