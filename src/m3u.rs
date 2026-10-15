@@ -2,28 +2,28 @@
 //! `#EXTINF:<seconds>,<title>` line. Winamp kept its own playlist this way, in `winamp.m3u`.
 //!
 //! Lines may end in `\r\n` or `\n`, and a UTF-8 byte order mark is skipped. Paths are written as
-//! the operating system spells them. On Unix-like systems that is raw bytes, so a file name that
-//! is not valid UTF-8 still comes back exactly; on Windows a path that is not valid Unicode (an
-//! unpaired surrogate, which almost never happens) is written with replacement characters.
+//! the operating system spells them (see [`crate::playlist_file`], which also says how entries
+//! are read).
 
-use std::borrow::Cow;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use crate::playlist_file::{decode_text, entry_path, strip_prefix_ignore_case, written_path};
 use crate::ui::Track;
 
 const HEADER: &[u8] = b"#EXTM3U\n";
 const EXTINF: &[u8] = b"EXTINF:";
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
-/// The playlist as an extended M3U file. Entries whose path contains a line break cannot be
-/// written as M3U and are left out (logged).
+/// The playlist as an extended M3U file, in UTF-8. Paths inside `base`, the playlist's folder,
+/// are written relative to it; with no `base`, every path is written as it is. Entries whose
+/// path contains a line break cannot be written as M3U and are left out (logged).
 #[must_use]
-pub fn write(tracks: &[Track]) -> Vec<u8> {
+pub fn write(tracks: &[Track], base: Option<&Path>) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER.len() + tracks.len() * 96);
     out.extend_from_slice(HEADER);
     for track in tracks {
-        let path = path_bytes(&track.path);
+        let path = written_path(&track.path, base);
         if path.contains(&b'\n') || path.contains(&b'\r') {
             log::warn!(
                 "{} has a line break in its name; it cannot be saved in the playlist",
@@ -42,8 +42,9 @@ pub fn write(tracks: &[Track]) -> Vec<u8> {
 }
 
 /// The entries of an M3U or extended M3U file. Relative paths are taken from `base`, the
-/// playlist's folder. Comments and directives other than `#EXTINF` are skipped, and an entry
-/// without a usable `#EXTINF` line is titled by its file name with its length unknown.
+/// playlist's folder. Comments and directives other than `#EXTINF` are skipped, as are URLs
+/// other than `file:` ones, and an entry without a usable `#EXTINF` line is titled by its file
+/// name with its length unknown.
 #[must_use]
 pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
     let bytes = bytes.strip_prefix(BOM).unwrap_or(bytes);
@@ -60,14 +61,12 @@ pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
             }
             continue;
         }
-        let path = path_from_bytes(line);
-        let path = if path.is_relative() {
-            base.join(path)
-        } else {
-            path
+        let info = info.take();
+        let Some(path) = entry_path(line, base) else {
+            continue;
         };
         let mut track = Track::from_path(path);
-        if let Some((seconds, title)) = info.take() {
+        if let Some((seconds, title)) = info {
             track.seconds = seconds;
             if !title.is_empty() {
                 track.title = title;
@@ -78,16 +77,10 @@ pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
     tracks
 }
 
-fn strip_prefix_ignore_case<'a>(bytes: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
-    let head = bytes.get(..prefix.len())?;
-    head.eq_ignore_ascii_case(prefix)
-        .then(|| &bytes[prefix.len()..])
-}
-
 /// `213,Artist - Title` into the length (unknown when not positive) and the title. Some
 /// players put attributes after the length (`-1 tvg-id="x",Title`); they are ignored.
 fn parse_extinf(text: &[u8]) -> (Option<u32>, String) {
-    let text = String::from_utf8_lossy(text);
+    let text = decode_text(text);
     let (length, title) = text.split_once(',').unwrap_or((&text, ""));
     let seconds = length
         .split_whitespace()
@@ -98,34 +91,10 @@ fn parse_extinf(text: &[u8]) -> (Option<u32>, String) {
     (seconds, title.trim().to_owned())
 }
 
-#[cfg(unix)]
-fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
-    use std::os::unix::ffi::OsStrExt;
-    Cow::Borrowed(path.as_os_str().as_bytes())
-}
-
-#[cfg(not(unix))]
-fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
-    match path.to_string_lossy() {
-        Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
-        Cow::Owned(s) => Cow::Owned(s.into_bytes()),
-    }
-}
-
-#[cfg(unix)]
-fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-}
-
-#[cfg(not(unix))]
-fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn track(title: &str, seconds: Option<u32>, path: &str) -> Track {
         Track {
@@ -142,7 +111,7 @@ mod tests {
             track("b", None, "/music/b.flac"),
             track("Ünïcödé", Some(1), "/music/ü/c.ogg"),
         ];
-        let bytes = write(&tracks);
+        let bytes = write(&tracks, None);
         assert!(bytes.starts_with(b"#EXTM3U\n#EXTINF:213,Band - Song, with a comma\n"));
         assert_eq!(parse(&bytes, Path::new("/elsewhere")), tracks);
     }
@@ -163,11 +132,26 @@ mod tests {
     }
 
     #[test]
+    fn file_urls_windows_1252_titles_and_streams() {
+        let text = b"#EXTM3U\n#EXTINF:5,Caf\xE9\nfile:///music/a%20b.mp3\n\
+                     #EXTINF:-1,Radio\nhttp://radio.example/stream\nlast.mp3\n";
+        let got = parse(text, Path::new("/lists"));
+        assert_eq!(
+            got,
+            vec![
+                track("Café", Some(5), "/music/a b.mp3"),
+                Track::from_path(Path::new("/lists").join("last.mp3")),
+            ],
+            "the stream is skipped, and its #EXTINF does not stick to the next entry"
+        );
+    }
+
+    #[test]
     fn relative_paths_are_taken_from_the_playlist_folder() {
         let base = Path::new("lists").join("rock");
         let got = parse(b"song.mp3\n../other.mp3\n", &base);
         assert_eq!(got[0].path, base.join("song.mp3"));
-        assert_eq!(got[1].path, base.join("../other.mp3"));
+        assert_eq!(got[1].path, Path::new("lists").join("other.mp3"));
     }
 
     #[test]
@@ -187,7 +171,7 @@ mod tests {
             track("Two\nlines", Some(5), "/music/a.mp3"),
             track("bad", None, "/music/new\nline.mp3"),
         ];
-        let got = parse(&write(&tracks), Path::new("/"));
+        let got = parse(&write(&tracks, None), Path::new("/"));
         assert_eq!(got, vec![track("Two lines", Some(5), "/music/a.mp3")]);
     }
 
@@ -197,7 +181,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/music/caf\xE9.mp3"));
         let tracks = [Track::from_path(path.clone())];
-        let got = parse(&write(&tracks), Path::new("/"));
+        let got = parse(&write(&tracks, None), Path::new("/"));
         assert_eq!(got[0].path, path);
     }
 }

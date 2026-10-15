@@ -14,25 +14,35 @@
 //! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own.
 //! - [`eqf`]: equalizer presets, built in and in Winamp's `.eqf` files.
 //! - [`zoom`]: how far the skin is enlarged for today's screens.
+//! - [`playlist`]: sorting, moving and shuffling playlist entries; [`playlist_file`] loads and
+//!   saves playlists as M3U ([`m3u`]) or PLS ([`pls`]).
+//! - [`jump`]: the Jump to file dialog, drawn like Windows 2000's dialogs ([`classic`]).
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
-//! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the menus'
-//!   windows (`popup`) and the platform's file dialogs (`file_dialog`).
+//! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
+//!   the menus (`popup`) and of the Jump to file dialog (`jump_window`), and the platform's
+//!   file dialogs (`file_dialog`).
 
 pub mod app;
 pub mod audio;
 pub mod canvas;
+pub mod classic;
 pub mod dock;
 mod eq_window;
 pub mod eqf;
 mod file_dialog;
 pub mod font;
+pub mod jump;
+mod jump_window;
 pub mod library;
 pub mod m3u;
 mod main_window;
 pub mod menu;
 pub mod menus;
+pub mod playlist;
+pub mod playlist_file;
 mod playlist_window;
+pub mod pls;
 mod popup;
 pub mod settings;
 pub mod skin;

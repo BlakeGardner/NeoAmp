@@ -42,31 +42,36 @@ Done except **I**: menus drawn like Windows 2000's in windows of their own
 
 ## Phase 3: Playlist
 
-- [ ] Make the ADD, REM, SEL, MISC and LIST OPTS menus act. They pop up, but
-      releasing on an item does nothing.
-  - [ ] ADD: file, folder, URL.
-  - [ ] REM: remove selected, crop, clear.
-  - [ ] SEL: select all, none, invert.
-  - [ ] MISC: sort (title, file name, path), reverse, randomize.
-  - [ ] LIST OPTS: new, save and load list.
-- [ ] Shift- and Ctrl-click multi-select. A click always selects just one row
-      today (the `PlTrack` arm of `Ui::mouse_down`).
-- [ ] Drag rows to reorder.
-- [ ] Keys: Delete, Ctrl+A, arrows, Enter, Home/End, PgUp/PgDn. Ctrl+A
-      toggles always on top in every window today; in the playlist it should
-      select every entry instead, as in Winamp (`App::key_cmd` in
-      [src/app.rs](../src/app.rs) would need to know the window).
-- [ ] Mouse wheel: scroll the playlist, and set the volume over the main
-      window. [src/app.rs](../src/app.rs) handles no wheel events yet.
-- [ ] Make shuffle shuffle. The button toggles, but `Ui::next` and
-      `Ui::advance` always move to the following entry.
-- [ ] Load and save M3U, M3U8 and PLS, from LIST OPTS, the command line and
-      drag-and-drop. Resolve relative paths against the playlist's folder.
-      [src/m3u.rs](../src/m3u.rs) already reads and writes extended M3U for
-      the saved playlist, relative paths included; PLS and `file://` URLs
-      are still missing.
-- [ ] J: jump to file (a search box over the playlist).
+Done except ADD > URL, which waits for Phase 6: see "Playlist" in the README.
+Editing is in [src/ui.rs](../src/ui.rs) and [src/playlist.rs](../src/playlist.rs),
+playlist files in [src/playlist_file.rs](../src/playlist_file.rs) and
+[src/pls.rs](../src/pls.rs), and the Jump to file dialog in
+[src/jump.rs](../src/jump.rs).
+
+- [x] Make the ADD, REM, SEL, MISC and LIST OPTS menus act: letting go over
+      an item chooses it, and a click chooses the bottom item, as in Winamp.
+  - [x] ADD: file, folder. URL waits for Phase 6.
+  - [x] REM: remove selected, crop, clear, and MISC REM > Remove all dead
+        files.
+  - [x] SEL: select all, none, invert.
+  - [x] MISC: sort (title, file name, path), reverse, randomize. FILE INFO
+        waits for the file info dialog (Phase 5); MISC OPTIONS does nothing.
+  - [x] LIST OPTS: new, save and load list.
+- [x] Shift- and Ctrl-click multi-select (Cmd-click on macOS).
+- [x] Drag rows to reorder, and Alt+Up / Alt+Down.
+- [x] Keys: Delete (Ctrl: crop, Alt: dead files), Ctrl+A, Ctrl+I, arrows,
+      Enter, Home/End, PgUp/PgDn, Ctrl+Shift+1/2/3, Ctrl+R, Ctrl+Shift+R,
+      Ctrl+N/O/S. They work while the playlist has the focus; Ctrl+A still
+      toggles always on top in the other windows.
+- [x] Mouse wheel: scroll the playlist, and set the volume over the main
+      window.
+- [x] Make shuffle shuffle: each entry once per round, Previous retraces.
+- [x] Load and save M3U, M3U8 and PLS, from LIST OPTS, the command line and
+      drag-and-drop, with relative paths, `file://` URLs, Windows-1252 text
+      and Windows-style backslashes.
+- [x] J: jump to file, a Windows 2000-style dialog with a search box.
 - [x] Shift+L: open a folder (Play Folder... in the main menu).
+- [x] A track whose entry is removed while it plays plays on, as in Winamp.
 
 ## Phase 4: Windowshade mode
 

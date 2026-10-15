@@ -7,7 +7,8 @@ use std::path::Path;
 use crate::eqf;
 use crate::library::Entry;
 use crate::menu::{Item, escape};
-use crate::ui::{KeyCmd, Ui};
+use crate::playlist::SortKey;
+use crate::ui::{KeyCmd, ListCmd, Ui};
 use crate::vis::{AnalyzerStyle, Bands, Falloff, ScopeStyle, VisMode};
 use crate::zoom::Zoom;
 
@@ -24,6 +25,10 @@ pub enum MenuKind {
     EqPresets,
     /// Alt+S.
     Skins,
+    /// The playlist's MISC > SORT LIST.
+    PlaylistSort,
+    /// The playlist's REM > MISC REM.
+    PlaylistRemove,
 }
 
 /// What a menu item does.
@@ -68,6 +73,16 @@ pub enum AppCommand {
     SaveAutoPreset,
     /// Forget the current file's auto-load preset.
     DeleteAutoPreset,
+    /// Pick files (or playlists) to add to the playlist.
+    AddFiles,
+    /// Pick a folder whose files join the playlist.
+    AddFolder,
+    /// Pick a playlist file to replace the playlist.
+    LoadList,
+    /// Save the playlist to a file, named in the platform's dialog.
+    SaveList,
+    /// Show the Jump to file dialog.
+    JumpToFile,
 }
 
 /// What the menus list from disk, as it was when the menu opened.
@@ -90,7 +105,44 @@ pub fn build(kind: MenuKind, ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
         MenuKind::Vis => visualization(ui),
         MenuKind::EqPresets => presets(ui, lib),
         MenuKind::Skins => skins(lib),
+        MenuKind::PlaylistSort => playlist_sort(),
+        MenuKind::PlaylistRemove => playlist_remove(),
     }
+}
+
+fn list(label: &'static str, cmd: ListCmd, shortcut: &'static str) -> Item<Command> {
+    key(label, KeyCmd::List(cmd), shortcut)
+}
+
+fn playlist_sort() -> Vec<Item<Command>> {
+    vec![
+        list(
+            "Sort list by &title",
+            ListCmd::Sort(SortKey::Title),
+            "Ctrl+Shift+1",
+        ),
+        list(
+            "Sort list by &filename",
+            ListCmd::Sort(SortKey::FileName),
+            "Ctrl+Shift+2",
+        ),
+        list(
+            "Sort list by &path and filename",
+            ListCmd::Sort(SortKey::Path),
+            "Ctrl+Shift+3",
+        ),
+        Item::separator(),
+        list("&Reverse list", ListCmd::Reverse, "Ctrl+R"),
+        list("R&andomize list", ListCmd::Randomize, "Ctrl+Shift+R"),
+    ]
+}
+
+fn playlist_remove() -> Vec<Item<Command>> {
+    vec![list(
+        "Remove all &dead files",
+        ListCmd::RemoveDead,
+        "Alt+Del",
+    )]
 }
 
 fn key(label: &'static str, key: KeyCmd, shortcut: &'static str) -> Item<Command> {
@@ -160,6 +212,8 @@ fn playback() -> Vec<Item<Command>> {
         Item::separator(),
         key("&Back 5 seconds", KeyCmd::SeekBack, "Left"),
         key("&Fwd 5 seconds", KeyCmd::SeekForward, "Right"),
+        Item::separator(),
+        key("&Jump to file...", KeyCmd::JumpToFile, "J"),
     ]
 }
 
@@ -368,6 +422,32 @@ mod tests {
         assert!(!find(save, "&Auto-load preset").is_enabled(), "no track");
         let delete = submenu(&items, "&Delete");
         assert!(!find(delete, "&Auto-load preset").is_enabled());
+    }
+
+    #[test]
+    fn the_playlist_menus_sort_and_remove() {
+        let ui = Ui::new();
+        let lib = Library::default();
+        let sort = build(MenuKind::PlaylistSort, &ui, &lib);
+        assert_eq!(
+            find(&sort, "Sort list by &filename").kind(),
+            &Kind::Command(Command::Key(KeyCmd::List(ListCmd::Sort(SortKey::FileName))))
+        );
+        assert_eq!(
+            find(&sort, "R&andomize list").kind(),
+            &Kind::Command(Command::Key(KeyCmd::List(ListCmd::Randomize)))
+        );
+        let remove = build(MenuKind::PlaylistRemove, &ui, &lib);
+        assert_eq!(
+            remove[0].kind(),
+            &Kind::Command(Command::Key(KeyCmd::List(ListCmd::RemoveDead)))
+        );
+        let main = build(MenuKind::Main, &ui, &lib);
+        let playback = submenu(&main, "Play&back");
+        assert_eq!(
+            find(playback, "&Jump to file...").kind(),
+            &Kind::Command(Command::Key(KeyCmd::JumpToFile))
+        );
     }
 
     #[test]

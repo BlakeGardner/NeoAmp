@@ -18,26 +18,32 @@ use pixels::wgpu;
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::monitor::MonitorHandle;
 use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
-use crate::audio::{self, Player, Scanner};
+use crate::audio::{Player, Scanner};
 use crate::canvas::{Image, Rect};
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::eqf::{self, AutoLoad};
 use crate::file_dialog::{FileDialog, Purpose};
 use crate::font::TtfFont;
+use crate::jump::Outcome as JumpOutcome;
+use crate::jump_window::JumpWindow;
 use crate::library::{self, Entry};
 use crate::menu::{self, Anchor};
 use crate::menus::{self, AppCommand, Command, Library};
+use crate::playlist::SortKey;
+use crate::playlist_file;
 use crate::popup::Popups;
 use crate::settings::{Saver, Settings, Store, WindowLayout};
 use crate::skin::Skin;
+use crate::sprites::pl::TRACK_H;
 use crate::ui::{
-    Action, Control, KeyCmd, MenuRequest, PlayState, Track, Transport, Ui, WindowKind,
+    Action, Control, CursorMove, KeyCmd, ListCmd, MenuRequest, Mods, PlayState, Track, Transport,
+    Ui, WindowKind,
 };
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::vis;
@@ -212,11 +218,13 @@ pub fn run(opts: Options) -> Result<()> {
         stats: FrameStats::new(Instant::now()),
         dialog: None,
         popups: Popups::default(),
+        jump: None,
         menu_skins: Vec::new(),
         menu_presets: Vec::new(),
         focused: false,
         focus_lost: None,
         swallow_release: false,
+        wheel_rest: (WindowKind::Main, 0.0),
     };
     let saved_tracks = if opts.files.is_empty() {
         let tracks = store.as_ref().and_then(Store::load_playlist);
@@ -227,7 +235,7 @@ pub fn run(opts: Options) -> Result<()> {
     } else {
         let files = opts.files.into_iter().map(absolute);
         let mut actions = Vec::new();
-        app.add_files(audio::audio_files(files), &mut actions);
+        app.add_tracks(playlist_file::expand(files), true, &mut actions);
         app.perform_audio(actions);
         // Replaces the saved playlist at the first save.
         None
@@ -509,6 +517,8 @@ struct App {
     dialog: Option<FileDialog>,
     /// The menus on screen.
     popups: Popups,
+    /// The Jump to file dialog, while it is open.
+    jump: Option<JumpWindow>,
     /// The skins and preset files the open menu lists; its commands number them.
     menu_skins: Vec<Entry>,
     menu_presets: Vec<Entry>,
@@ -518,6 +528,8 @@ struct App {
     focus_lost: Option<Instant>,
     /// A click that closed a menu went down; its release does nothing either.
     swallow_release: bool,
+    /// Mouse wheel travel over a window not yet turned into whole steps.
+    wheel_rest: (WindowKind, f64),
 }
 
 impl App {
@@ -614,7 +626,7 @@ impl App {
     }
 
     /// Carry out a menu command that needs files or dialogs.
-    fn app_command(&mut self, command: AppCommand) {
+    fn app_command(&mut self, command: AppCommand, el: &ActiveEventLoop) {
         match command {
             AppCommand::BaseSkin => {
                 self.custom = None;
@@ -647,6 +659,56 @@ impl App {
                     self.save_autoload();
                 }
             }
+            AppCommand::AddFiles => self.show_dialog(Purpose::AddFiles),
+            AppCommand::AddFolder => self.show_dialog(Purpose::AddFolder),
+            AppCommand::LoadList => self.show_dialog(Purpose::LoadList),
+            AppCommand::SaveList => self.show_dialog(Purpose::SaveList),
+            AppCommand::JumpToFile => self.open_jump(el),
+        }
+    }
+
+    /// Show the Jump to file dialog, or bring it to the front if it is open.
+    fn open_jump(&mut self, el: &ActiveEventLoop) {
+        if let Some(jump) = &self.jump {
+            jump.raise();
+            return;
+        }
+        let scale_factor = self
+            .pane(WindowKind::Main)
+            .map_or(1.0, |p| p.window.scale_factor());
+        // Like the menus, the dialog follows the zoom but not double size.
+        let opened = JumpWindow::open(
+            el,
+            self.ui.zoom.factor(),
+            scale_factor,
+            self.ui.always_on_top,
+            self.ui.current_row(),
+            Instant::now(),
+        );
+        match opened {
+            Ok(jump) => self.jump = Some(jump),
+            Err(e) => log::error!("cannot show the Jump to file dialog: {e:#}"),
+        }
+    }
+
+    /// An event for the Jump to file dialog's window.
+    fn jump_event(&mut self, event: WindowEvent, now: Instant, el: &ActiveEventLoop) {
+        let Some(jump) = self.jump.as_mut() else {
+            return;
+        };
+        let focus_event = matches!(event, WindowEvent::Focused(_));
+        let outcome = jump.window_event(event, &self.ui.tracks, now);
+        if matches!(outcome, JumpOutcome::Jump(_) | JumpOutcome::Close) {
+            // A closed window reports no more focus changes, so the focus it had is lost now.
+            self.jump = None;
+        }
+        if let JumpOutcome::Jump(i) = outcome {
+            let mut actions = Vec::new();
+            self.ui.play_entry(i, &mut actions);
+            self.handle(actions, el);
+        }
+        if self.jump.is_none() || focus_event {
+            self.focus_changed(now);
         }
     }
 
@@ -720,9 +782,11 @@ impl App {
         }
     }
 
-    /// Whether any of our windows, menus included, has the keyboard focus.
+    /// Whether any of our windows, menus and dialogs included, has the keyboard focus.
     fn has_focus(&self) -> bool {
-        self.panes.iter().any(|p| p.focused) || self.popups.has_focus()
+        self.panes.iter().any(|p| p.focused)
+            || self.popups.has_focus()
+            || self.jump.as_ref().is_some_and(JumpWindow::has_focus)
     }
 
     /// A window of ours gained or lost the focus.
@@ -774,27 +838,31 @@ impl App {
         }
     }
 
-    /// Append files to the playlist, have their tags read, and start the first one if nothing
-    /// is playing.
-    fn add_files(&mut self, paths: Vec<PathBuf>, actions: &mut Vec<Action>) {
-        let added = self.ui.add_files(paths);
-        for (i, track) in self.ui.tracks.iter().enumerate().skip(added.start) {
-            self.scanner.scan(i, track.path.clone());
-        }
-        if self.ui.state == PlayState::Stopped && !added.is_empty() {
-            self.ui.play_track(added.start, actions);
-        }
-    }
-
-    /// Put the saved playlist back, stopped on entry `current`. Only entries whose length was
-    /// not known when it was saved have their tags read again.
-    fn restore_playlist(&mut self, tracks: &[Track], current: usize) {
-        let added = self.ui.add_tracks(tracks.iter().cloned());
+    /// Append entries to the playlist and have the tags read of those whose length is unknown
+    /// (entries from a playlist file may know theirs). With `play`, the first one starts if
+    /// nothing is playing. Returns the indices of the new entries.
+    fn add_tracks(
+        &mut self,
+        tracks: Vec<Track>,
+        play: bool,
+        actions: &mut Vec<Action>,
+    ) -> std::ops::Range<usize> {
+        let added = self.ui.add_tracks(tracks);
         for (i, track) in self.ui.tracks.iter().enumerate().skip(added.start) {
             if track.seconds.is_none() {
                 self.scanner.scan(i, track.path.clone());
             }
         }
+        if play && self.ui.state == PlayState::Stopped && !added.is_empty() {
+            self.ui.play_track(added.start, actions);
+        }
+        added
+    }
+
+    /// Put the saved playlist back, stopped on entry `current`. Only entries whose length was
+    /// not known when it was saved have their tags read again.
+    fn restore_playlist(&mut self, tracks: &[Track], current: usize) {
+        let _ = self.add_tracks(tracks.to_vec(), false, &mut Vec::new());
         if let Some(last) = self.ui.tracks.len().checked_sub(1) {
             self.ui.select(current.min(last));
         }
@@ -850,7 +918,8 @@ impl App {
         }
     }
 
-    /// A file dropped on any window: a skin is applied, anything else joins the playlist.
+    /// A file dropped on any window: a skin is applied; audio files, folders and playlists
+    /// join the playlist, starting to play if nothing was.
     fn drop_file(&mut self, path: PathBuf, el: &ActiveEventLoop) {
         if path
             .extension()
@@ -860,7 +929,7 @@ impl App {
             return;
         }
         let mut actions = Vec::new();
-        self.add_files(audio::audio_files([path]), &mut actions);
+        let _ = self.add_tracks(playlist_file::expand([path]), true, &mut actions);
         self.handle(actions, el);
     }
 
@@ -874,7 +943,12 @@ impl App {
             return;
         };
         let folder = self.store.as_ref().and_then(|store| match purpose {
-            Purpose::PlayFiles | Purpose::PlayFolder => None,
+            Purpose::PlayFiles
+            | Purpose::PlayFolder
+            | Purpose::AddFiles
+            | Purpose::AddFolder
+            | Purpose::LoadList
+            | Purpose::SaveList => None,
             Purpose::OpenSkin => Some(store.skins_dir()),
             Purpose::LoadPreset | Purpose::SavePreset => Some(store.presets_dir()),
         });
@@ -891,8 +965,9 @@ impl App {
         }
     }
 
-    /// Once a file dialog closes, act on what was chosen. Files or a folder to play replace
-    /// the playlist and the first one plays, as in Winamp. Cancelling changes nothing.
+    /// Once a file dialog closes, act on what was chosen. Files, a folder or a playlist file to
+    /// play replace the playlist and the first entry plays, as in Winamp; those to add join the
+    /// end of it. Cancelling changes nothing.
     fn finish_dialog(&mut self, el: &ActiveEventLoop) {
         let Some(dialog) = &self.dialog else {
             return;
@@ -906,21 +981,31 @@ impl App {
             return;
         };
         match purpose {
-            Purpose::PlayFiles | Purpose::PlayFolder => {
-                let files = if purpose == Purpose::PlayFolder {
-                    audio::audio_files(paths)
-                } else {
-                    paths
-                };
-                if files.is_empty() {
-                    log::info!("no playable files there");
+            Purpose::PlayFiles
+            | Purpose::PlayFolder
+            | Purpose::LoadList
+            | Purpose::AddFiles
+            | Purpose::AddFolder => {
+                let tracks = playlist_file::expand(paths);
+                if tracks.is_empty() {
+                    log::info!("nothing playable there");
                     return;
                 }
                 let mut actions = Vec::new();
-                self.ui.clear_playlist(&mut actions);
-                self.add_files(files, &mut actions);
+                let replace = matches!(
+                    purpose,
+                    Purpose::PlayFiles | Purpose::PlayFolder | Purpose::LoadList
+                );
+                if replace {
+                    self.ui.clear_playlist(&mut actions);
+                }
+                let _ = self.add_tracks(tracks, replace, &mut actions);
                 self.handle(actions, el);
             }
+            Purpose::SaveList => match playlist_file::save(first, &self.ui.tracks) {
+                Ok(path) => log::info!("saved the playlist to {}", path.display()),
+                Err(e) => log::error!("cannot save the playlist: {e:#}"),
+            },
             Purpose::OpenSkin => {
                 let path = first.clone();
                 self.load_skin(&path);
@@ -1526,7 +1611,7 @@ impl App {
                 Action::OpenFolder => self.show_dialog(Purpose::PlayFolder),
                 Action::AlwaysOnTop => self.apply_window_level(),
                 Action::OpenMenu(req) => self.open_menu(req, el),
-                Action::App(command) => self.app_command(command),
+                Action::App(command) => self.app_command(command, el),
                 Action::Audio(t) => self.transport(t),
             }
         }
@@ -1577,11 +1662,19 @@ impl App {
         self.update_cursor(kind, (x, y));
     }
 
-    fn key_cmd(&self, key: &Key) -> Option<KeyCmd> {
+    /// What a key pressed in window `kind` does. The playlist has keys of its own, as in
+    /// Winamp: there the arrows move through the entries rather than change the volume, and
+    /// Ctrl+A selects every entry rather than keeping the windows on top.
+    fn key_cmd(&self, kind: WindowKind, event: &KeyEvent) -> Option<KeyCmd> {
+        if kind == WindowKind::Playlist
+            && let Some(cmd) = self.playlist_key(event)
+        {
+            return Some(cmd);
+        }
         let ctrl = self.modifiers.control_key();
         let alt = self.modifiers.alt_key();
         let shift = self.modifiers.shift_key();
-        Some(match key {
+        Some(match &event.logical_key {
             Key::Character(s) => match (s.to_ascii_lowercase().as_str(), ctrl, alt) {
                 ("a", true, _) => KeyCmd::ToggleAlwaysOnTop,
                 ("d", true, _) => KeyCmd::ToggleDoubleSize,
@@ -1602,6 +1695,7 @@ impl App {
                 ("l", false, false) => KeyCmd::OpenFiles,
                 ("r", false, false) => KeyCmd::ToggleRepeat,
                 ("s", false, false) => KeyCmd::ToggleShuffle,
+                ("j", false, false) => KeyCmd::JumpToFile,
                 _ => return None,
             },
             Key::Named(NamedKey::ArrowUp) => KeyCmd::VolumeUp,
@@ -1610,6 +1704,82 @@ impl App {
             Key::Named(NamedKey::ArrowRight) => KeyCmd::SeekForward,
             _ => return None,
         })
+    }
+
+    /// The playlist window's own keys (Winamp's playlist editor shortcuts).
+    fn playlist_key(&self, event: &KeyEvent) -> Option<KeyCmd> {
+        let ctrl = self.modifiers.control_key();
+        let alt = self.modifiers.alt_key();
+        let shift = self.modifiers.shift_key();
+        let list = |cmd| Some(KeyCmd::List(cmd));
+        let cursor = |to| list(ListCmd::Cursor { to, extend: shift });
+        // Ctrl+Shift+1 sorts by title: with Shift held the key may report "!", so the sort
+        // keys go by position on the keyboard.
+        if ctrl && shift {
+            let key = match event.physical_key {
+                PhysicalKey::Code(KeyCode::Digit1) => Some(SortKey::Title),
+                PhysicalKey::Code(KeyCode::Digit2) => Some(SortKey::FileName),
+                PhysicalKey::Code(KeyCode::Digit3) => Some(SortKey::Path),
+                _ => None,
+            };
+            if let Some(key) = key {
+                return list(ListCmd::Sort(key));
+            }
+        }
+        match &event.logical_key {
+            Key::Character(s) if ctrl && !alt => match s.to_ascii_lowercase().as_str() {
+                "a" => list(ListCmd::SelectAll),
+                "i" => list(ListCmd::InvertSelection),
+                "r" if shift => list(ListCmd::Randomize),
+                "r" => list(ListCmd::Reverse),
+                "n" => list(ListCmd::Clear),
+                "o" => Some(KeyCmd::LoadList),
+                "s" => Some(KeyCmd::SaveList),
+                _ => None,
+            },
+            Key::Named(NamedKey::Delete) if ctrl => list(ListCmd::Crop),
+            Key::Named(NamedKey::Delete) if alt => list(ListCmd::RemoveDead),
+            Key::Named(NamedKey::Delete) => list(ListCmd::RemoveSelected),
+            Key::Named(NamedKey::ArrowUp) if alt => list(ListCmd::MoveUp),
+            Key::Named(NamedKey::ArrowDown) if alt => list(ListCmd::MoveDown),
+            Key::Named(NamedKey::ArrowUp) => cursor(CursorMove::Up),
+            Key::Named(NamedKey::ArrowDown) => cursor(CursorMove::Down),
+            Key::Named(NamedKey::PageUp) => cursor(CursorMove::PageUp),
+            Key::Named(NamedKey::PageDown) => cursor(CursorMove::PageDown),
+            Key::Named(NamedKey::Home) => cursor(CursorMove::Home),
+            Key::Named(NamedKey::End) => cursor(CursorMove::End),
+            Key::Named(NamedKey::Enter) => list(ListCmd::PlayCursor),
+            _ => None,
+        }
+    }
+
+    /// The mouse wheel over window `kind`: the playlist scrolls a row per step, three steps a
+    /// notch; over the main window the volume moves a step a notch.
+    fn wheel(&mut self, kind: WindowKind, delta: MouseScrollDelta) {
+        let Some(pane) = self.pane(kind) else { return };
+        let per_notch = if kind == WindowKind::Playlist {
+            3.0
+        } else {
+            1.0
+        };
+        let steps = match delta {
+            MouseScrollDelta::LineDelta(_, y) => f64::from(y) * per_notch,
+            // Touchpads report pixels: a playlist row's height makes a step.
+            MouseScrollDelta::PixelDelta(d) => {
+                d.y / (f64::from(TRACK_H) * pane.scale(self.ui.scale()))
+            }
+        };
+        if self.wheel_rest.0 != kind {
+            self.wheel_rest = (kind, 0.0);
+        }
+        let total = self.wheel_rest.1 + steps;
+        let whole = total.trunc();
+        self.wheel_rest.1 = total - whole;
+        // A few steps per event, far inside `i32`.
+        let whole = whole as i32;
+        if whole != 0 {
+            self.ui.wheel(kind, whole);
+        }
     }
 
     fn render(&mut self, kind: WindowKind, now: Instant) {
@@ -1700,6 +1870,10 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let now = Instant::now();
+        if self.jump.as_ref().is_some_and(|j| j.id() == id) {
+            self.jump_event(event, now, el);
+            return;
+        }
         if self.popups.owns(id) {
             match &event {
                 WindowEvent::KeyboardInput { event, .. } => self.menu_key(event, el),
@@ -1752,7 +1926,18 @@ impl ApplicationHandler for App {
                 }
                 self.focus_changed(now);
             }
-            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::ModifiersChanged(m) => {
+                let state = m.state();
+                self.modifiers = state;
+                self.ui.mods = Mods {
+                    shift: state.shift_key(),
+                    // macOS turns Ctrl-click into a right-click; Cmd-click selects there.
+                    ctrl: state.control_key() || (cfg!(target_os = "macos") && state.super_key()),
+                };
+            }
+            WindowEvent::MouseWheel { delta, .. } if !self.popups.is_open() => {
+                self.wheel(kind, delta);
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let Some(p) = self.pane_mut(kind) else { return };
                 p.cursor = position;
@@ -1774,7 +1959,7 @@ impl ApplicationHandler for App {
                 if self.popups.is_open() {
                     self.menu_key(&event, el);
                 } else if event.state == ElementState::Pressed
-                    && let Some(cmd) = self.key_cmd(&event.logical_key)
+                    && let Some(cmd) = self.key_cmd(kind, &event)
                 {
                     let actions = self.ui.key(cmd);
                     self.handle(actions, el);
@@ -1799,6 +1984,9 @@ impl ApplicationHandler for App {
             self.check_menu_focus(now);
             self.sync_audio(el);
             self.ui.tick(now);
+            if let Some(jump) = self.jump.as_mut() {
+                jump.tick(&self.ui.tracks, self.ui.playlist_version(), now);
+            }
             for p in &self.panes {
                 p.window.request_redraw();
             }

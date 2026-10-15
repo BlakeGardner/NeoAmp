@@ -1,5 +1,6 @@
-//! The platform's own file dialogs: files or a folder to play, a skin to show, an equalizer
-//! preset to load, and where to save one.
+//! The platform's own file dialogs: files or a folder to play or add to the playlist, a
+//! playlist to load and where to save one, a skin to show, an equalizer preset to load, and
+//! where to save one.
 //!
 //! A dialog runs beside the event loop, so the windows keep drawing while it is open. It is
 //! started on the main thread, as macOS requires, and a helper thread waits for it to close and
@@ -16,14 +17,24 @@ use rfd::{AsyncFileDialog, FileHandle};
 use winit::window::Window;
 
 use crate::audio::{self, FORMATS};
+use crate::playlist_file;
 
 /// What a dialog asks for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Purpose {
-    /// Eject: files to play, which replace the playlist ("Open file(s)" in Winamp).
+    /// Eject: files (or playlists) to play, which replace the playlist ("Open file(s)" in
+    /// Winamp).
     PlayFiles,
     /// A folder whose files replace the playlist.
     PlayFolder,
+    /// Files (or playlists) to add to the end of the playlist.
+    AddFiles,
+    /// A folder whose files are added to the end of the playlist.
+    AddFolder,
+    /// A playlist file whose entries replace the playlist.
+    LoadList,
+    /// Where to save the playlist.
+    SaveList,
     /// A `.wsz` skin.
     OpenSkin,
     /// An `.eqf` preset to load.
@@ -57,20 +68,42 @@ impl FileDialog {
         if let Some(folder) = folder {
             dialog = dialog.set_directory(folder);
         }
+        let with_types = |dialog: AsyncFileDialog, types: Vec<FileType>| {
+            types.into_iter().fold(dialog, |dialog, t| {
+                dialog.add_filter(t.label, &t.extensions)
+            })
+        };
         let pick: Picking = match purpose {
-            Purpose::PlayFiles => {
-                let pick = file_types()
-                    .into_iter()
-                    .fold(dialog.set_title("Open file(s)"), |dialog, t| {
-                        dialog.add_filter(t.label, &t.extensions)
-                    })
-                    .pick_files();
+            Purpose::PlayFiles | Purpose::AddFiles => {
+                let title = if purpose == Purpose::PlayFiles {
+                    "Open file(s)"
+                } else {
+                    "Add file(s) to playlist"
+                };
+                let pick = with_types(dialog.set_title(title), file_types()).pick_files();
                 Box::pin(async move {
                     let files = pick.await.unwrap_or_default();
                     files.into_iter().map(PathBuf::from).collect()
                 })
             }
             Purpose::PlayFolder => one(dialog.set_title("Open folder").pick_folder()),
+            Purpose::AddFolder => one(dialog.set_title("Add folder to playlist").pick_folder()),
+            Purpose::LoadList => one(with_types(
+                dialog.set_title("Load playlist"),
+                vec![playlist_type()],
+            )
+            .pick_file()),
+            Purpose::SaveList => one(with_types(
+                dialog
+                    .set_title("Save playlist")
+                    .set_file_name("Playlist.m3u8"),
+                vec![
+                    file_type("M3U8 playlist", &["m3u8"]),
+                    file_type("M3U playlist", &["m3u"]),
+                    file_type("PLS playlist", &["pls"]),
+                ],
+            )
+            .save_file()),
             Purpose::OpenSkin => one(dialog
                 .set_title("Open skin")
                 .add_filter("Winamp skins (*.wsz)", &["wsz", "WSZ"])
@@ -123,13 +156,21 @@ struct FileType {
     extensions: Vec<String>,
 }
 
-/// Every playable file first (the dialog starts on that), then each format on its own.
+/// Every playable file and playlist first (the dialog starts on that), then each audio format
+/// on its own, then playlists.
 fn file_types() -> Vec<FileType> {
-    let all: Vec<&str> = audio::extensions().collect();
-    let mut types = Vec::with_capacity(FORMATS.len() + 1);
+    let all: Vec<&str> = audio::extensions()
+        .chain(playlist_file::EXTENSIONS)
+        .collect();
+    let mut types = Vec::with_capacity(FORMATS.len() + 2);
     types.push(file_type("All supported types", &all));
     types.extend(FORMATS.iter().map(|f| file_type(f.name, f.extensions)));
+    types.push(playlist_type());
     types
+}
+
+fn playlist_type() -> FileType {
+    file_type("Playlists", &playlist_file::EXTENSIONS)
 }
 
 fn file_type(name: &str, extensions: &[&str]) -> FileType {
@@ -146,20 +187,25 @@ fn file_type(name: &str, extensions: &[&str]) -> FileType {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_first_file_type_shows_every_playable_file() {
         let types = file_types();
-        assert_eq!(types.len(), FORMATS.len() + 1);
+        assert_eq!(types.len(), FORMATS.len() + 2);
         assert_eq!(
             types[0].label,
-            "All supported types (*.mp3;*.wav;*.wave;*.flac;*.ogg;*.oga)"
+            "All supported types (*.mp3;*.wav;*.wave;*.flac;*.ogg;*.oga;*.m3u;*.m3u8;*.pls)"
         );
         for ext in audio::extensions() {
             assert!(types[0].extensions.iter().any(|e| e == ext));
         }
+        assert_eq!(
+            types.last().unwrap().label,
+            "Playlists (*.m3u;*.m3u8;*.pls)"
+        );
     }
 
     #[test]

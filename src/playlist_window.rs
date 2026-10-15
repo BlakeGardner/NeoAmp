@@ -77,6 +77,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
     let list = ui.pl_list_rect(w, h).offset(ox, oy);
     let rows = usize::try_from((list.h + p::TRACK_H - 1) / p::TRACK_H).unwrap_or(0);
     let mut time = String::with_capacity(8);
+    let current = ui.current_row();
     for (row, track) in ui.tracks.iter().enumerate().skip(ui.pl_scroll).take(rows) {
         let ry = list.y + i32::try_from(row - ui.pl_scroll).unwrap_or(0) * p::TRACK_H;
         if ui.selected.get(row).copied().unwrap_or(false) {
@@ -86,7 +87,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
                 list,
             );
         }
-        let color = if row == ui.current {
+        let color = if current == Some(row) {
             colors.current
         } else {
             colors.normal
@@ -169,34 +170,22 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
         draw_bitmap_text(c, skin, &text, br.0 + p::MINI_TIME_SEC_X, y, bounds);
     }
 
-    // --- pop-up menus while a menu button is held ---------------------------------------
-    let menu = match ui.pressed {
-        Some(Control::PlAdd) => Some((p::ADD.offset(ox, by), p::ADD_MENU_X, p::ADD_BAR_X, 3)),
-        Some(Control::PlRem) => Some((p::REM.offset(ox, by), p::REM_MENU_X, p::REM_BAR_X, 4)),
-        Some(Control::PlSel) => Some((p::SEL.offset(ox, by), p::SEL_MENU_X, p::SEL_BAR_X, 3)),
-        Some(Control::PlMisc) => Some((p::MISC.offset(ox, by), p::MISC_MENU_X, p::MISC_BAR_X, 3)),
-        Some(Control::PlListOpts) => Some((
-            p::LIST_OPTS.offset(br.0, br.1),
-            p::LIST_MENU_X,
-            p::LIST_BAR_X,
-            3,
-        )),
-        _ => None,
-    };
-    if let Some((btn, menu_x, bar_x, items)) = menu {
-        let mh = items * p::MENU_ITEM_H;
-        let mx = btn.x;
-        let my = btn.bottom() - mh;
-        skin.blit(c, p::menu_bar(bar_x, items), mx, my);
-        for i in 0..items {
+    // --- the menu of the bottom button held ---------------------------------------------
+    if let Some(menu) = ui.pl_menu() {
+        let (button, items) = menu.rects(w, h);
+        let (items_x, bar_x) = menu.sprite_columns();
+        let n = i32::try_from(menu.items().len()).unwrap_or(0);
+        skin.blit(c, p::menu_bar(bar_x, n), ox + button.x, oy + items.y);
+        for (i, it) in (0..).zip(menu.items()) {
             let item = Rect::new(
-                mx + 3,
-                my + i * p::MENU_ITEM_H,
+                items.x,
+                items.y + i * p::MENU_ITEM_H,
                 p::MENU_ITEM_W,
                 p::MENU_ITEM_H,
             );
             let hot = item.contains(ui.cursor.0, ui.cursor.1);
-            skin.blit(c, p::menu_item(menu_x, i, hot), item.x, item.y);
+            let sprite = p::menu_item(items_x, it.sprite_row(), hot);
+            skin.blit(c, sprite, ox + item.x, oy + item.y);
         }
     }
 }

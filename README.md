@@ -37,6 +37,12 @@ program does the same:
   equalizer presets, and `src/library.rs` lists the skins and presets folders.
 - `src/file_dialog.rs` shows the platform's file dialogs (see
   [Opening files](#opening-files)).
+- `src/playlist.rs` sorts, moves and shuffles playlist entries;
+  `src/playlist_file.rs` loads and saves playlist files through `src/m3u.rs`
+  and `src/pls.rs` (see [Playlist](#playlist)).
+- `src/jump.rs` is the Jump to file dialog and `src/jump_window.rs` its
+  window; `src/classic.rs` holds the Windows 2000 colours and bevels it
+  shares with the menus.
 - `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
   the samples being played into the spectrum analyzer and oscilloscope.
 - `src/settings.rs` remembers the settings and the playlist between runs (see
@@ -44,9 +50,10 @@ program does the same:
   playlist file.
 - `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
   parses the command line. `cargo test` covers layout, hit testing, input,
-  the skin parsers, the blitter, the saved settings and playlist, and the
-  audio pipeline (decoding, resampling, the equalizer, and the decoder and
-  mixer threads working together).
+  playlist editing and playlist files, the skin parsers, the blitter, the
+  dialogs and menus, the saved settings and playlist, and the audio pipeline
+  (decoding, resampling, the equalizer, and the decoder and mixer threads
+  working together).
 
 Each NeoAmp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
@@ -145,6 +152,10 @@ Windows 2000 did, grey and bevelled, whatever skin is loaded:
   [Saved settings](#saved-settings)).
 - **Skins**: **Alt+S** (also in the main menu). The skins in NeoAmp's skins
   folder, the built-in base skin, and Open Skin... for any other.
+- **Sort** and **Remove misc**: the playlist's MISC > SORT LIST and
+  REM > MISC REM (see [Playlist](#playlist)).
+
+The Playback submenu also holds Jump to file... (**J**).
 
 The `A` in the clutter bar toggles always on top, and stays down while it is
 on, as `D` does for double size. The `I` (file info) does nothing yet.
@@ -184,16 +195,20 @@ libraries to build. Where the platforms differ:
 
 Eject (in the main window, or the small one in the playlist's bottom bar),
 **L** or Play File... in the main menu opens the platform's own file dialog,
-through [rfd](https://crates.io/crates/rfd). Pick one file or several: as with
-Winamp's "Open file(s)", they replace the playlist and the first one plays.
-**Shift+L** or Play Folder... picks a folder instead, whose playable files
-(sorted by name, subfolders included) replace the playlist in the same way.
+through [rfd](https://crates.io/crates/rfd). Pick one file or several (or a
+playlist file): as with Winamp's "Open file(s)", they replace the playlist and
+the first one plays. **Shift+L** or Play Folder... picks a folder instead,
+whose playable files (sorted by name, subfolders included) replace the
+playlist in the same way. The playlist's ADD menu adds files or a folder to
+the end of the playlist instead, without interrupting what is playing, and
+its LIST OPTS menu loads and saves playlist files (see [Playlist](#playlist)).
 Cancelling changes nothing. The windows keep drawing while the dialog is open.
 The same dialogs open skins and equalizer presets from the menus, starting in
 NeoAmp's skins and presets folders.
 
-The dialog starts on "All supported types" and also offers MP3, WAV, FLAC and
-Ogg Vorbis one at a time. The platforms differ a little:
+The dialog starts on "All supported types" and also offers MP3, WAV, FLAC,
+Ogg Vorbis and playlists one at a time. Saving a playlist offers M3U8, M3U and
+PLS, and starts on `Playlist.m3u8`. The platforms differ a little:
 
 - **Windows:** the standard Open dialog, with the file types in its drop-down.
 - **macOS:** an open panel that slides down from the main window as a sheet.
@@ -207,6 +222,85 @@ Ogg Vorbis one at a time. The platforms differ a little:
   such as `song.Mp3` may be hidden there. Without a portal, rfd runs `zenity`
   instead if it is installed. With neither, eject does nothing and rfd logs
   why.
+
+Saving goes by the extension of the name given: `.pls` writes PLS, anything
+else extended M3U. A name without an extension gets `.m3u8`, since not every
+platform's save dialog adds the chosen type's extension.
+
+## Playlist
+
+The playlist editor works as Winamp 2.x's did.
+
+**Selecting.** A click selects one entry, Shift-click selects everything from
+the last entry clicked, and Ctrl-click (Cmd-click on macOS, where Ctrl-click
+means right-click) adds or removes one entry. A double-click or Enter plays
+an entry. The keyboard moves a cursor through the list: Up, Down, Page Up,
+Page Down, Home and End, with Shift to select as it goes. These keys work
+while the playlist window has the focus; in the other windows Up and Down
+still set the volume.
+
+**Moving.** Drag selected entries to move them together; dragging past the
+top or bottom of the list scrolls it. Alt+Up and Alt+Down move the selection
+one place. The mouse wheel scrolls the list (over the main window it sets the
+volume).
+
+**The bottom buttons.** ADD, REM, SEL, MISC and LIST OPTS each show a menu
+drawn from the skin while held; let go over an item to choose it. Each menu's
+bottom item sits over its button, so a plain click chooses that one, as in
+Winamp: ADD adds files, REM removes the selection, SEL selects everything,
+MISC does nothing (it is Winamp's misc options) and LIST OPTS loads a list.
+
+| Menu | Items |
+| --- | --- |
+| ADD | URL (not yet: see Phase 6 of the roadmap), folder, files |
+| REM | misc (opens a menu with Remove all dead files), all, crop, selected |
+| SEL | invert, none, all |
+| MISC | sort (opens a menu: by title, file name, or path; reverse; randomize), file info and misc options (neither does anything yet) |
+| LIST OPTS | new (empties the list), save, load |
+
+**Removing the track that plays.** As in Winamp, it plays on; when it ends,
+the entry that followed it plays next (or playback stops if it was the last
+and repeat is off).
+
+**Shuffle.** With shuffle on, every entry plays once, in random order, before
+any plays again. At the end of that round playback stops unless repeat is on,
+in which case a new round starts. Next always moves on; Previous goes back
+through the entries in the order they played.
+
+**Playlist files.** NeoAmp reads and writes extended M3U (`.m3u`, `.m3u8`) and
+Winamp's PLS (`.pls`), from LIST OPTS, the file dialogs, the command line and
+drag and drop. Loading one from LIST OPTS or the eject dialog replaces the
+playlist and plays it; dropping one adds its entries. Entries whose length the
+file gives keep its title and length; the others have their tags read. Since
+playlists often come from Windows:
+
+- Lines may end in `\r\n` or `\n`.
+- Text that is not UTF-8 is read as Windows-1252, the codepage Winamp wrote
+  on Western systems. On Linux, a non-UTF-8 name is first tried as the file
+  system's own bytes, then as Windows-1252.
+- Relative paths are taken from the playlist's folder. Off Windows, a
+  relative path with backslashes and no forward slashes (`Rock\01.mp3`) has
+  them turned into separators. `.` and `..` are resolved by name, as Winamp
+  did, without following symbolic links. Absolute Windows paths (`C:\...`)
+  only work on Windows.
+- `file://` URLs are read. A `file://server/share/...` URL names a network
+  share, which only Windows can open; elsewhere it is skipped. Other URLs
+  (internet radio) are skipped and logged until streams are supported.
+
+Saved lists are UTF-8 whatever their extension, with `\r\n` line ends for PLS
+and `\n` for M3U. Files inside the playlist's folder (or below it) are written
+relative to it, so the folder can move as a whole; other files are written
+with their full paths.
+
+**Jump to file.** **J** (in any window, or Playback > Jump to file...) opens a
+dialog drawn like Windows 2000's, as Winamp's was: type, and the list narrows
+to the entries whose title or file name holds every word typed, ignoring case.
+Up, Down, Page Up and Page Down move the highlight, Enter, the Jump button or a
+double-click plays it, and Escape or Close closes the dialog. Left, Right,
+Home and End move the caret in the search box. Clipboard paste is not
+supported. The dialog is an ordinary window with the system's own title bar,
+so the window manager places and moves it; it is drawn with softbuffer like
+the menus, at the same size, in Tahoma where the system has it.
 
 ## Saved settings
 
@@ -287,10 +381,11 @@ sudo apt install libasound2-dev
 cargo run --release
 ```
 
-Play files or whole folders (folders add their MP3, WAV, FLAC and Ogg Vorbis
-files, sorted by name); they replace the saved playlist and the first one
-starts playing. Without any, the playlist from last time comes back. Dropping
-files or folders onto any window adds them to the playlist too, and starts
+Play files, whole folders or playlist files (folders add their MP3, WAV, FLAC
+and Ogg Vorbis files, sorted by name; `.m3u`, `.m3u8` and `.pls` files add
+their entries); they replace the saved playlist and the first one starts
+playing. Without any, the playlist from last time comes back. Dropping files,
+folders or playlists onto any window adds them to the playlist too, and starts
 them if nothing is playing. Eject picks files in a dialog (see
 [Opening files](#opening-files)):
 
@@ -327,16 +422,24 @@ cargo run --release -- --screenshot shot.png
 | Previous / Play / Pause / Stop / Next | transport buttons | Z X C V B |
 | Open files (they replace the playlist) | either eject button | L |
 | Open a folder (it replaces the playlist) | Play Folder... in the main menu | Shift+L |
-| Play a playlist entry | double-click it | |
+| Play a playlist entry | double-click it | Enter (playlist) |
+| Jump to file (search the playlist) | Playback > Jump to file... | J |
+| Select playlist entries | click, Shift-click, Ctrl-click (Cmd on macOS); SEL menu | Up / Down / PgUp / PgDn / Home / End, with Shift to extend; Ctrl+A all, Ctrl+I invert (playlist) |
+| Move the selected entries | drag them | Alt+Up / Alt+Down (playlist) |
+| Remove entries | REM menu | Delete: selected, Ctrl+Delete: crop, Alt+Delete: dead files (playlist) |
+| Sort, reverse, randomize | MISC > SORT LIST | Ctrl+Shift+1 / 2 / 3: by title / file name / path, Ctrl+R, Ctrl+Shift+R (playlist) |
+| Add files or a folder to the playlist | ADD menu | |
+| New, load and save playlist files | LIST OPTS menu | Ctrl+N / Ctrl+O / Ctrl+S (playlist) |
+| Scroll the playlist | the scroll bar, its arrows, or the mouse wheel | |
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
 | Equalizer / Playlist windows | EQ / PL buttons, window close buttons | Alt+G / Alt+E |
 | Main menu | the options button at the left of the title bar, or right-click | Alt+F |
 | Options menu | the `O` in the clutter bar | |
-| Always on top | the `A` in the clutter bar | Ctrl+A |
+| Always on top | the `A` in the clutter bar | Ctrl+A (but in the playlist, select all) |
 | Double size (doubles the zoom) | the `D` in the clutter bar | Ctrl+D |
 | Zoom in / out / back to default | Options > Zoom | Ctrl+= / Ctrl+- / Ctrl+0 |
-| Volume, balance, EQ bands and preamp | drag the sliders (the marquee shows the value) | Up / Down: volume |
+| Volume, balance, EQ bands and preamp | drag the sliders (the marquee shows the value); the wheel over the main window sets the volume | Up / Down: volume (outside the playlist) |
 | Seek | drag the position bar; it seeks when you let go | Left / Right: 5 seconds |
 | Equalizer on / off | the ON button | |
 | EQ presets, and auto-load presets with AUTO on | the PRESETS button | |
@@ -345,20 +448,24 @@ cargo run --release -- --screenshot shot.png
 | Skins | Skins in the main menu | Alt+S |
 | Move a window (docked ones follow the main window) | drag its title bar | |
 | Resize the playlist | drag the grip in its bottom-right corner | |
-| Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS | |
+| Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS, let go over an item | |
+
+Keys marked "(playlist)" work while the playlist window has the focus.
 
 ## Scope and limitations
 
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
 - Windowshade mode, the file info dialog, cursors (`.cur`) and the minibrowser
   window are not implemented. The menus leave out what NeoAmp cannot do yet
-  (Play Location, Preferences, Jump to file and the like) rather than grey it.
-- The playlist can be replaced (eject, Play Folder) or added to (command line,
-  drag and drop) but not edited: its ADD, REM, SEL, MISC and LIST OPTS menus
-  show but do nothing. Shuffle does not change the order yet, and Winamp's
-  Ctrl+L (open a URL) is not implemented.
-- Ctrl+A toggles always on top in every window; in Winamp's playlist it
-  selected every entry, which waits for playlist editing.
+  (Play Location, Preferences and the like) rather than grey it.
+- Internet radio is not supported yet: ADD > URL does nothing, Winamp's
+  Ctrl+L (open a URL) is not implemented, and stream URLs in playlist files
+  are skipped. The playlist's FILE INFO and MISC OPTIONS items do nothing,
+  and there is no right-click menu for the playlist's entries (a right-click
+  there opens the main menu).
+- The Jump to file dialog's search box has no clipboard (paste) or text
+  selection, and the dialog keeps its highlight by position, not by entry, if
+  the playlist changes while it is open.
 - Tracks play back to back with a short gap, not gaplessly.
 - The output device is opened once, at startup, and never reopened. On Linux
   that device is PipeWire's or PulseAudio's, which move the stream to another

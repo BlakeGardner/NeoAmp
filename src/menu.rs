@@ -15,6 +15,9 @@ use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use crate::canvas::{Image, Rect};
+use crate::classic::{
+    FACE, GRAY_TEXT, HILIGHT, SELECTION, SELECTION_TEXT, SHADOW, TEXT, draw_glyph, line, px, raised,
+};
 use crate::font::TtfFont;
 
 /// A submenu opens, or gives way to another, once the pointer has rested this long on its
@@ -41,16 +44,6 @@ mod metric {
     pub const FONT_PX: f32 = 11.0;
 }
 
-// Windows 2000's "Windows Classic" colours.
-const FACE: [u8; 4] = [0xD4, 0xD0, 0xC8, 0xFF];
-const HILIGHT: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-const SHADOW: [u8; 4] = [0x80, 0x80, 0x80, 0xFF];
-const DARK_SHADOW: [u8; 4] = [0x40, 0x40, 0x40, 0xFF];
-const TEXT: [u8; 4] = [0x00, 0x00, 0x00, 0xFF];
-const GRAY_TEXT: [u8; 4] = [0x80, 0x80, 0x80, 0xFF];
-const SELECTION: [u8; 4] = [0x0A, 0x24, 0x6A, 0xFF];
-const SELECTION_TEXT: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-
 /// Marlett's check mark, 7x7, one string per row.
 const CHECK: [&str; 7] = [
     "......#", ".....##", "#...###", "##.###.", "#####..", ".###...", "..#....",
@@ -59,18 +52,6 @@ const CHECK: [&str; 7] = [
 const BULLET: [&str; 5] = [".###.", "#####", "#####", "#####", ".###."];
 /// The submenu arrow.
 const ARROW: [&str; 7] = ["#...", "##..", "###.", "####", "###.", "##..", "#..."];
-
-/// `v` pixels at 96 DPI, at `scale`.
-fn px(v: i32, scale: f64) -> i32 {
-    // Menu metrics are tiny and scales at most a few times 1, so the cast cannot truncate.
-    (f64::from(v) * scale).round() as i32
-}
-
-/// The width of a one-pixel line at `scale`: Windows keeps hairlines thin when it scales.
-fn line(scale: f64) -> i32 {
-    // At least 1 and small, so the cast cannot truncate.
-    scale.floor().max(1.0) as i32
-}
 
 /// What an item shows in its left column when it is on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -691,16 +672,7 @@ impl<C: Copy> Menus<C> {
         let t = line(s);
         let (w, h) = (c.w, c.h);
         c.clear(FACE);
-        // Windows' raised edge: light outer and white inner lines at the top and left, dark
-        // outer and grey inner lines at the bottom and right.
-        c.fill_rect(Rect::new(0, 0, w, t), FACE);
-        c.fill_rect(Rect::new(0, 0, t, h), FACE);
-        c.fill_rect(Rect::new(t, t, w - 2 * t, t), HILIGHT);
-        c.fill_rect(Rect::new(t, t, t, h - 2 * t), HILIGHT);
-        c.fill_rect(Rect::new(0, h - t, w, t), DARK_SHADOW);
-        c.fill_rect(Rect::new(w - t, 0, t, h), DARK_SHADOW);
-        c.fill_rect(Rect::new(t, h - 2 * t, w - 2 * t, t), SHADOW);
-        c.fill_rect(Rect::new(w - 2 * t, t, t, h - 2 * t), SHADOW);
+        raised(c, Rect::new(0, 0, w, h), t);
 
         let glyph_px = s.round().max(1.0) as i32;
         for (i, (it, row)) in l.items.iter().zip(&l.rows).enumerate() {
@@ -779,21 +751,11 @@ impl<C: Copy> Menus<C> {
     }
 }
 
-/// Draw a `#`-and-`.` pattern with each `#` a `k`-pixel square.
-fn draw_glyph(c: &mut Image, pattern: &[&str], x: i32, y: i32, k: i32, color: [u8; 4]) {
-    for (row, line) in (0..).zip(pattern) {
-        for (col, b) in (0..).zip(line.bytes()) {
-            if b == b'#' {
-                c.fill_rect(Rect::new(x + col * k, y + row * k, k, k), color);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::classic::DARK_SHADOW;
 
     /// Every character 6 pixels wide.
     struct Fixed;

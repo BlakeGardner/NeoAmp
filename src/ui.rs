@@ -11,6 +11,7 @@ use crate::canvas::{Image, Rect};
 use crate::eqf::{self, Preset};
 use crate::font::TtfFont;
 use crate::menus::{AppCommand, Command, MenuKind};
+use crate::playlist::{self, Rng, Shuffle, SortKey};
 use crate::skin::{Mask, Skin};
 use crate::sprites::{eq as e, main as m, pl as p};
 use crate::vis::Vis;
@@ -27,6 +28,8 @@ const DOUBLE_CLICK_MS: u128 = 400;
 const BLINK_MS: u128 = 1000;
 /// The volume of a first start, before any settings are saved.
 pub const DEFAULT_VOLUME: f32 = 0.78;
+/// How far Up, Down and a notch of the mouse wheel move the volume.
+const VOLUME_STEP: f32 = 0.02;
 
 /// The three classic windows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -171,6 +174,138 @@ impl Control {
     }
 }
 
+/// Modifier keys held during a click.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Mods {
+    pub shift: bool,
+    /// Ctrl, or Cmd on macOS, where Ctrl-click means right-click.
+    pub ctrl: bool,
+}
+
+/// The menus that rise from the buttons at the bottom of the playlist while one is held,
+/// drawn from the skin. Letting go over an item chooses it. Each menu's bottom item lies over
+/// its button, so a plain click chooses that one (ADD FILE, REM SEL, ...), as in Winamp.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlMenu {
+    Add,
+    Remove,
+    Select,
+    Misc,
+    List,
+}
+
+/// An item of a playlist menu.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlItem {
+    AddUrl,
+    AddDir,
+    AddFile,
+    /// Opens a menu of Winamp's other ways to remove entries.
+    RemoveMisc,
+    RemoveAll,
+    Crop,
+    RemoveSelected,
+    InvertSelection,
+    SelectNone,
+    SelectAll,
+    /// Opens the sort menu.
+    SortList,
+    FileInfo,
+    MiscOptions,
+    NewList,
+    SaveList,
+    LoadList,
+}
+
+impl PlItem {
+    /// The item's row in its menu's column of `pledit.bmp`. The rows are in the order the
+    /// menus show them, except REM's: REM MISC is drawn last in the bitmap but shows first.
+    #[must_use]
+    pub fn sprite_row(self) -> i32 {
+        use PlItem::*;
+        match self {
+            AddUrl | RemoveAll | InvertSelection | SortList | NewList => 0,
+            AddDir | Crop | SelectNone | FileInfo | SaveList => 1,
+            AddFile | RemoveSelected | SelectAll | MiscOptions | LoadList => 2,
+            RemoveMisc => 3,
+        }
+    }
+}
+
+impl PlMenu {
+    /// The menu a button opens.
+    #[must_use]
+    pub fn of(button: Control) -> Option<PlMenu> {
+        match button {
+            Control::PlAdd => Some(PlMenu::Add),
+            Control::PlRem => Some(PlMenu::Remove),
+            Control::PlSel => Some(PlMenu::Select),
+            Control::PlMisc => Some(PlMenu::Misc),
+            Control::PlListOpts => Some(PlMenu::List),
+            _ => None,
+        }
+    }
+
+    /// The items, top to bottom, as the skin draws them.
+    #[must_use]
+    pub fn items(self) -> &'static [PlItem] {
+        use PlItem::*;
+        match self {
+            PlMenu::Add => &[AddUrl, AddDir, AddFile],
+            PlMenu::Remove => &[RemoveMisc, RemoveAll, Crop, RemoveSelected],
+            PlMenu::Select => &[InvertSelection, SelectNone, SelectAll],
+            PlMenu::Misc => &[SortList, FileInfo, MiscOptions],
+            PlMenu::List => &[NewList, SaveList, LoadList],
+        }
+    }
+
+    /// The columns of `pledit.bmp` holding the items and the bar beside them.
+    #[must_use]
+    pub fn sprite_columns(self) -> (i32, i32) {
+        match self {
+            PlMenu::Add => (p::ADD_MENU_X, p::ADD_BAR_X),
+            PlMenu::Remove => (p::REM_MENU_X, p::REM_BAR_X),
+            PlMenu::Select => (p::SEL_MENU_X, p::SEL_BAR_X),
+            PlMenu::Misc => (p::MISC_MENU_X, p::MISC_BAR_X),
+            PlMenu::List => (p::LIST_MENU_X, p::LIST_BAR_X),
+        }
+    }
+
+    /// Where the menu is in a playlist window `w` x `h`: the button it rises from, and the
+    /// column of items, whose bottom one covers the button but for the bar at its left.
+    #[must_use]
+    pub fn rects(self, w: i32, h: i32) -> (Rect, Rect) {
+        let by = h - p::BOTTOM_H;
+        let button = match self {
+            PlMenu::Add => p::ADD.offset(0, by),
+            PlMenu::Remove => p::REM.offset(0, by),
+            PlMenu::Select => p::SEL.offset(0, by),
+            PlMenu::Misc => p::MISC.offset(0, by),
+            PlMenu::List => p::LIST_OPTS.offset(w - 150, by),
+        };
+        let n = i32::try_from(self.items().len()).unwrap_or(0);
+        let items_h = n * p::MENU_ITEM_H;
+        let items = Rect::new(
+            button.x + 3,
+            button.bottom() - items_h,
+            p::MENU_ITEM_W,
+            items_h,
+        );
+        (button, items)
+    }
+
+    /// The item at (`x`, `y`) in a playlist window `w` x `h`.
+    #[must_use]
+    pub fn item_at(self, w: i32, h: i32, x: i32, y: i32) -> Option<PlItem> {
+        let (_, items) = self.rects(w, h);
+        if !items.contains(x, y) {
+            return None;
+        }
+        let i = usize::try_from((y - items.y) / p::MENU_ITEM_H).ok()?;
+        self.items().get(i).copied()
+    }
+}
+
 /// Side effects the window layer must perform after input.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Action {
@@ -254,6 +389,55 @@ pub enum KeyCmd {
     VolumeDown,
     SeekBack,
     SeekForward,
+    /// Open the Jump to file dialog.
+    JumpToFile,
+    /// Replace the playlist with a playlist file's entries.
+    LoadList,
+    /// Save the playlist to a file.
+    SaveList,
+    /// Edit the playlist.
+    List(ListCmd),
+}
+
+/// Playlist editing, from the playlist's menus and keys.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ListCmd {
+    SelectAll,
+    SelectNone,
+    InvertSelection,
+    RemoveSelected,
+    /// Remove every entry that is not selected.
+    Crop,
+    /// Remove every entry.
+    Clear,
+    /// Remove the entries whose files are gone.
+    RemoveDead,
+    Sort(SortKey),
+    Reverse,
+    Randomize,
+    /// Move the selected entries one place up.
+    MoveUp,
+    /// Move the selected entries one place down.
+    MoveDown,
+    /// Move the keyboard cursor, selecting the entry it lands on, or with `extend` everything
+    /// from where the selection started.
+    Cursor {
+        to: CursorMove,
+        extend: bool,
+    },
+    /// Play the entry under the keyboard cursor.
+    PlayCursor,
+}
+
+/// Where the playlist's keyboard cursor goes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CursorMove {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
 }
 
 /// One playlist entry.
@@ -290,6 +474,17 @@ pub struct Layout {
     pub size: (i32, i32),
 }
 
+/// Selected playlist entries being dragged to a new place.
+#[derive(Clone, Copy, Debug)]
+struct RowDrag {
+    /// The row under the pointer when the entries last moved. It may lie beyond either end of
+    /// the list.
+    row: isize,
+    /// Pressing on an entry that was already selected keeps the selection, so that it can be
+    /// dragged as a whole; unless it is, letting go selects only this entry.
+    select_on_release: Option<usize>,
+}
+
 #[derive(Debug)]
 pub struct Ui {
     pub state: PlayState,
@@ -313,9 +508,25 @@ pub struct Ui {
     pub pressed: Option<Control>,
     pub pl_size: (i32, i32),
     pub tracks: Vec<Track>,
+    /// The current entry. While the playing track's entry has been removed (see `orphan`), the
+    /// entry that followed it, which may be one past the end.
     pub current: usize,
     pub selected: Vec<bool>,
     pub pl_scroll: usize,
+    /// The playlist's keyboard cursor: where Up and Down move from and Enter plays.
+    pl_cursor: usize,
+    /// Where Shift-selection extends from.
+    pl_anchor: usize,
+    row_drag: Option<RowDrag>,
+    /// The track that was playing when its entry was removed from the playlist. It plays on,
+    /// as in Winamp, and the entry that followed it plays next.
+    orphan: Option<Track>,
+    shuffler: Shuffle,
+    /// Counts changes to which entries the playlist holds and their order, so that views of it
+    /// know when to look again.
+    pl_version: u64,
+    /// Modifier keys, as the window layer last reported them. Clicks in the playlist use them.
+    pub mods: Mods,
     pub kbps: u32,
     pub khz: u32,
     pub stereo: bool,
@@ -395,6 +606,13 @@ impl Ui {
             current: 0,
             selected: Vec::new(),
             pl_scroll: 0,
+            pl_cursor: 0,
+            pl_anchor: 0,
+            row_drag: None,
+            orphan: None,
+            shuffler: Shuffle::new(Rng::new()),
+            pl_version: 0,
+            mods: Mods::default(),
             kbps: 0,
             khz: 0,
             stereo: false,
@@ -524,10 +742,20 @@ impl Ui {
 
     // ----- playback model -----------------------------------------------------------------
 
-    /// The current track, if the playlist has any.
+    /// The current track, if the playlist has any: the one playing, even if its entry has been
+    /// removed from the playlist since.
     #[must_use]
     pub fn track(&self) -> Option<&Track> {
-        self.tracks.get(self.current)
+        self.orphan
+            .as_ref()
+            .or_else(|| self.tracks.get(self.current))
+    }
+
+    /// The entry the playlist shows as current. `None` while the track playing is no longer in
+    /// the playlist, or the playlist is empty.
+    #[must_use]
+    pub fn current_row(&self) -> Option<usize> {
+        (self.orphan.is_none() && self.current < self.tracks.len()).then_some(self.current)
     }
 
     /// Length of the current track in seconds; 0 while unknown.
@@ -580,6 +808,7 @@ impl Ui {
         self.state = PlayState::Playing;
         self.elapsed = 0.0;
         self.seek_to = None;
+        self.shuffler.mark(self.current);
         actions.push(Action::Audio(Transport::Open(self.current)));
     }
 
@@ -615,10 +844,16 @@ impl Ui {
         self.elapsed = 0.0;
         self.seek_to = None;
         self.vis.reset();
+        if self.orphan.take().is_some() {
+            // Back to an entry of the playlist: the one that followed, or the last.
+            self.current = self.current.min(self.tracks.len().saturating_sub(1));
+            self.refresh_title();
+        }
     }
 
     /// Make playlist entry `idx` current without starting it, scrolling the playlist to it.
     pub fn select(&mut self, idx: usize) {
+        self.orphan = None;
         if self.tracks.is_empty() {
             self.current = 0;
         } else {
@@ -644,25 +879,88 @@ impl Ui {
         self.start(actions);
     }
 
-    pub fn next(&mut self, actions: &mut Vec<Action>) {
-        self.jump(self.current.wrapping_add(1), actions);
+    /// Select, scroll to and play entry `idx`, as a double-click or Enter does.
+    pub fn play_entry(&mut self, idx: usize, actions: &mut Vec<Action>) {
+        if idx >= self.tracks.len() {
+            return;
+        }
+        self.select_only(idx);
+        self.pl_cursor = idx;
+        self.pl_anchor = idx;
+        self.play_track(idx, actions);
     }
 
+    /// The next entry, or with shuffle on, one not played yet. Past the end of the playlist
+    /// this wraps around, even without repeat, as Winamp's Next button did.
+    pub fn next(&mut self, actions: &mut Vec<Action>) {
+        if let Some(i) = self.following(true) {
+            self.jump(i, actions);
+        }
+    }
+
+    /// The previous entry, or with shuffle on, the one that played before.
     pub fn prev(&mut self, actions: &mut Vec<Action>) {
         let len = self.tracks.len();
         if len == 0 {
             return;
         }
-        self.jump((self.current + len - 1) % len, actions);
+        if self.shuffle
+            && let Some(i) = self.shuffler.back().filter(|&i| i < len)
+        {
+            self.jump(i, actions);
+            return;
+        }
+        // With the playing entry removed, `current` is the entry after it.
+        self.jump((self.current.min(len) + len - 1) % len, actions);
     }
 
-    /// After a track: the next one, or stop at the end of the playlist unless repeating.
+    /// After a track: the next one, or stop at the end of the playlist (or of a shuffled
+    /// round) unless repeating.
     fn advance(&mut self, actions: &mut Vec<Action>) {
-        if self.repeat || self.current + 1 < self.tracks.len() {
-            self.next(actions);
-        } else {
-            self.stop(actions);
+        match self.following(self.repeat) {
+            Some(i) => self.jump(i, actions),
+            None => self.stop(actions),
         }
+    }
+
+    /// The entry after the current one: the following entry, or with shuffle on, one that has
+    /// not played in this round. At the end it starts over if `wrap` is set.
+    fn following(&mut self, wrap: bool) -> Option<usize> {
+        let len = self.tracks.len();
+        if len == 0 {
+            return None;
+        }
+        if self.shuffle {
+            let current = self.current_row();
+            return self.shuffler.next(len, current, wrap);
+        }
+        // While the playing track's entry is removed, the entry after it is `current`.
+        let next = if self.orphan.is_some() {
+            self.current
+        } else {
+            self.current + 1
+        };
+        if next < len {
+            Some(next)
+        } else {
+            wrap.then_some(0)
+        }
+    }
+
+    /// Turn shuffle on or off. Turning it on starts a new round with the current entry.
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        if self.shuffle {
+            self.shuffler.reset();
+            if let Some(c) = self.current_row() {
+                self.shuffler.mark(c);
+            }
+        }
+    }
+
+    fn change_volume(&mut self, steps: i32) {
+        // A handful of steps at a time, so the cast is exact.
+        self.volume = (self.volume + VOLUME_STEP * steps as f32).clamp(0.0, 1.0);
     }
 
     /// Jump to `secs` into the current track, within its length when that is known.
@@ -729,6 +1027,7 @@ impl Ui {
         if start == 0 && !self.tracks.is_empty() {
             self.refresh_title();
         }
+        self.pl_version += 1;
         start..self.tracks.len()
     }
 
@@ -740,14 +1039,223 @@ impl Ui {
         self.selected.clear();
         self.current = 0;
         self.pl_scroll = 0;
+        self.pl_cursor = 0;
+        self.pl_anchor = 0;
+        self.row_drag = None;
         self.failures = 0;
+        self.shuffler.reset();
+        self.pl_version += 1;
         self.refresh_title();
     }
 
-    /// Fill in a playlist entry's title and length once its file has been read. Ignored if the
-    /// entry no longer plays `path`.
+    /// A number that changes whenever entries are added, removed or moved: while it stays the
+    /// same, an index still names the same entry.
+    #[must_use]
+    pub fn playlist_version(&self) -> u64 {
+        self.pl_version
+    }
+
+    /// Rearrange the playlist: entry `i` becomes the one that was at `order[i]`, which must
+    /// hold every index once. The selection, the current entry, the keyboard cursor and
+    /// shuffle's memory go with their entries.
+    fn reorder(&mut self, order: &[usize]) {
+        let len = self.tracks.len();
+        if order.len() != len {
+            debug_assert!(false, "BUG: an order of {} for {len} entries", order.len());
+            return;
+        }
+        let new_index = playlist::new_indices(order);
+        let mut moved: Vec<(usize, Track)> = new_index
+            .iter()
+            .copied()
+            .zip(std::mem::take(&mut self.tracks))
+            .collect();
+        moved.sort_unstable_by_key(|(at, _)| *at);
+        self.tracks = moved.into_iter().map(|(_, t)| t).collect();
+        let selected: Vec<bool> = order
+            .iter()
+            .map(|&old| self.selected.get(old).copied().unwrap_or(false))
+            .collect();
+        self.selected = selected;
+        // An index past the end (the entry after a removed one that was last) stays there.
+        let to = |i: usize| new_index.get(i).copied().unwrap_or(i);
+        self.current = to(self.current);
+        self.pl_cursor = to(self.pl_cursor);
+        self.pl_anchor = to(self.pl_anchor);
+        self.shuffler.reorder(&new_index);
+        self.pl_version += 1;
+        // The marquee numbers the current entry.
+        self.refresh_title();
+    }
+
+    /// Take the entries marked in `remove` out of the playlist. The track playing plays on
+    /// even if its entry goes, and then the entry that followed it plays next.
+    fn remove_rows(&mut self, remove: &[bool]) {
+        let len = self.tracks.len();
+        if remove.len() != len || !remove.contains(&true) {
+            return;
+        }
+        // Where each kept entry goes.
+        let mut kept = 0;
+        let kept_at: Vec<Option<usize>> = remove
+            .iter()
+            .map(|&gone| {
+                if gone {
+                    None
+                } else {
+                    kept += 1;
+                    Some(kept - 1)
+                }
+            })
+            .collect();
+        // Where an index lands: on its own entry, or the next one kept after it.
+        let after = |i: usize| {
+            kept_at
+                .get(i..)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .next()
+                .copied()
+                .unwrap_or(kept)
+        };
+        if self.orphan.is_none()
+            && self.state != PlayState::Stopped
+            && remove.get(self.current) == Some(&true)
+        {
+            self.orphan = self.tracks.get(self.current).cloned();
+        }
+        self.current = after(self.current);
+        let last = kept.saturating_sub(1);
+        if self.orphan.is_none() {
+            self.current = self.current.min(last);
+        }
+        self.pl_cursor = after(self.pl_cursor).min(last);
+        self.pl_anchor = after(self.pl_anchor).min(last);
+        self.shuffler.retain(&kept_at);
+        let mut gone = remove.iter();
+        self.tracks
+            .retain(|_| !gone.next().copied().unwrap_or(false));
+        let mut gone = remove.iter();
+        self.selected
+            .retain(|_| !gone.next().copied().unwrap_or(false));
+        self.row_drag = None;
+        self.pl_scroll = self.pl_scroll.min(self.max_scroll());
+        self.pl_version += 1;
+        self.refresh_title();
+    }
+
+    /// Remove the entries whose file `exists` says is gone (Winamp's "Remove all dead files").
+    pub fn remove_missing(&mut self, exists: impl Fn(&Path) -> bool) {
+        let remove: Vec<bool> = self.tracks.iter().map(|t| !exists(&t.path)).collect();
+        self.remove_rows(&remove);
+    }
+
+    /// Move the selected entries `delta` places down (up if negative), as far as they can go.
+    /// Returns how far they moved.
+    fn move_selection(&mut self, delta: isize) -> isize {
+        match playlist::move_order(&self.selected, delta) {
+            Some((order, moved)) => {
+                self.reorder(&order);
+                moved
+            }
+            None => 0,
+        }
+    }
+
+    fn select_only(&mut self, idx: usize) {
+        self.selected.fill(false);
+        if let Some(s) = self.selected.get_mut(idx) {
+            *s = true;
+        }
+    }
+
+    /// Select entries `a` to `b`, in either order, besides those already selected.
+    fn select_range(&mut self, a: usize, b: usize) {
+        let (from, to) = (a.min(b), a.max(b));
+        for s in self.selected.iter_mut().take(to + 1).skip(from) {
+            *s = true;
+        }
+    }
+
+    fn move_cursor(&mut self, to: CursorMove, extend: bool) {
+        let Some(last) = self.tracks.len().checked_sub(1) else {
+            return;
+        };
+        let page = self.pl_visible_rows().max(1);
+        let from = self.pl_cursor.min(last);
+        let at = match to {
+            CursorMove::Up => from.saturating_sub(1),
+            CursorMove::Down => (from + 1).min(last),
+            CursorMove::PageUp => from.saturating_sub(page),
+            CursorMove::PageDown => (from + page).min(last),
+            CursorMove::Home => 0,
+            CursorMove::End => last,
+        };
+        self.pl_cursor = at;
+        if extend {
+            self.selected.fill(false);
+            self.select_range(self.pl_anchor.min(last), at);
+        } else {
+            self.pl_anchor = at;
+            self.select_only(at);
+        }
+        self.ensure_visible(at);
+    }
+
+    /// Carry out a playlist editing command.
+    fn list_command(&mut self, cmd: ListCmd, actions: &mut Vec<Action>) {
+        let len = self.tracks.len();
+        match cmd {
+            ListCmd::SelectAll => self.selected.fill(true),
+            ListCmd::SelectNone => self.selected.fill(false),
+            ListCmd::InvertSelection => self.selected.iter_mut().for_each(|s| *s = !*s),
+            ListCmd::RemoveSelected => {
+                let remove = self.selected.clone();
+                self.remove_rows(&remove);
+            }
+            ListCmd::Crop => {
+                // With nothing selected there is nothing to keep, and that is more likely a
+                // slip than a wish to empty the playlist.
+                if self.selected.contains(&true) {
+                    let remove: Vec<bool> = self.selected.iter().map(|s| !s).collect();
+                    self.remove_rows(&remove);
+                }
+            }
+            ListCmd::Clear => self.remove_rows(&vec![true; len]),
+            ListCmd::RemoveDead => self.remove_missing(Path::exists),
+            ListCmd::Sort(key) => {
+                let order = playlist::sort_order(&self.tracks, key);
+                self.reorder(&order);
+            }
+            ListCmd::Reverse => self.reorder(&playlist::reverse_order(len)),
+            ListCmd::Randomize => {
+                let order = playlist::random_order(len, self.shuffler.rng());
+                self.reorder(&order);
+            }
+            ListCmd::MoveUp | ListCmd::MoveDown => {
+                let delta = if cmd == ListCmd::MoveUp { -1 } else { 1 };
+                if self.move_selection(delta) != 0 {
+                    self.ensure_visible(self.pl_cursor);
+                }
+            }
+            ListCmd::Cursor { to, extend } => self.move_cursor(to, extend),
+            ListCmd::PlayCursor => self.play_entry(self.pl_cursor, actions),
+        }
+    }
+
+    /// Fill in a playlist entry's title and length once its file has been read. The entry is
+    /// `idx` if that still plays `path`; if entries have moved since, it is found by its file.
     pub fn set_track_info(&mut self, idx: usize, path: &Path, info: &TrackInfo) {
-        let Some(track) = self.tracks.get_mut(idx).filter(|t| t.path == path) else {
+        let idx = if self.tracks.get(idx).is_some_and(|t| t.path == path) {
+            idx
+        } else {
+            match self.tracks.iter().position(|t| t.path == path) {
+                Some(i) => i,
+                None => return,
+            }
+        };
+        let Some(track) = self.tracks.get_mut(idx) else {
             return;
         };
         if let Some(title) = &info.title {
@@ -797,6 +1305,10 @@ impl Ui {
 
     /// Rebuild the cached marquee text (`"N. Title (m:ss)"`, padded when it scrolls).
     fn refresh_title(&mut self) {
+        if self.orphan.is_some() {
+            // The track playing has left the playlist; its title stays as it was.
+            return;
+        }
         self.title_chars.clear();
         self.title_scrolls = false;
         let Some(t) = self.track() else { return };
@@ -1067,6 +1579,21 @@ impl Ui {
         self.pl_scroll = self.pl_scroll.min(self.max_scroll());
     }
 
+    /// The playlist row at window-local height `y`, counting from the first entry; beyond the
+    /// list's ends it carries on past them.
+    fn pl_row_at(&self, y: i32) -> isize {
+        let list = self.pl_list_rect(self.pl_size.0, self.pl_size.1);
+        let row = (y - list.y).div_euclid(p::TRACK_H);
+        let scroll = isize::try_from(self.pl_scroll).unwrap_or(isize::MAX);
+        scroll.saturating_add(isize::try_from(row).unwrap_or(0))
+    }
+
+    /// The playlist menu showing: the one whose button is held.
+    #[must_use]
+    pub fn pl_menu(&self) -> Option<PlMenu> {
+        self.pressed.and_then(PlMenu::of)
+    }
+
     // ----- slider helpers -----------------------------------------------------------------
 
     /// Fraction `0..=1` of a horizontal slider for a pointer at `lx`, centring the thumb on it.
@@ -1203,20 +1730,68 @@ impl Ui {
                 PlTrack(i) => {
                     let double = matches!(self.last_click,
                         Some((PlTrack(j), t)) if j == i && now.saturating_duration_since(t).as_millis() < DOUBLE_CLICK_MS);
-                    self.selected.iter_mut().for_each(|s| *s = false);
-                    if let Some(s) = self.selected.get_mut(i) {
-                        *s = true;
-                    }
-                    if double {
-                        self.play_track(i, &mut actions);
-                    }
+                    self.click_row(i, y, double, &mut actions);
                 }
-                // Every other control is a button: show it pressed until release.
+                // Every other control is a button, the playlist's menu buttons included: show
+                // it pressed (or its menu) until release.
                 _ => self.pressed = Some(ctl),
             }
         }
         self.last_click = Some((ctl, now));
         actions
+    }
+
+    /// A click on playlist entry `i`, at window height `y`. Shift selects from the last entry
+    /// clicked, Ctrl adds or removes one entry, and a plain click selects one and may start
+    /// dragging the selection. A double-click plays the entry.
+    fn click_row(&mut self, i: usize, y: i32, double: bool, actions: &mut Vec<Action>) {
+        let Mods { shift, ctrl } = self.mods;
+        if double {
+            self.play_entry(i, actions);
+        } else if shift {
+            if !ctrl {
+                self.selected.fill(false);
+            }
+            self.select_range(self.pl_anchor, i);
+            self.pl_cursor = i;
+        } else if ctrl {
+            if let Some(s) = self.selected.get_mut(i) {
+                *s = !*s;
+            }
+            self.pl_cursor = i;
+            self.pl_anchor = i;
+        } else {
+            let was_selected = self.selected.get(i).copied().unwrap_or(false);
+            if !was_selected {
+                self.select_only(i);
+            }
+            self.pl_cursor = i;
+            self.pl_anchor = i;
+            self.pressed = Some(Control::PlTrack(i));
+            self.row_drag = Some(RowDrag {
+                row: self.pl_row_at(y),
+                select_on_release: was_selected.then_some(i),
+            });
+        }
+    }
+
+    /// Move the dragged entries to follow the pointer at window height `y`, scrolling when it
+    /// goes past the top or bottom of the list.
+    fn drag_rows(&mut self, y: i32) {
+        let Some(drag) = self.row_drag else {
+            return;
+        };
+        let row = self.pl_row_at(y);
+        let moved = self.move_selection(row.saturating_sub(drag.row));
+        if moved == 0 {
+            return;
+        }
+        self.row_drag = Some(RowDrag {
+            row: drag.row + moved,
+            select_on_release: None,
+        });
+        let last = self.tracks.len().saturating_sub(1);
+        self.ensure_visible(usize::try_from(row).map_or(0, |r| r.min(last)));
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
@@ -1230,8 +1805,28 @@ impl Ui {
             self.drag_slider(slider, x, y);
         } else if ctl == Control::PlScroll {
             self.drag_scroll(y);
+        } else if let Control::PlTrack(_) = ctl {
+            self.drag_rows(y);
         }
         Vec::new()
+    }
+
+    /// The mouse wheel turned `steps` notches over window `kind`, positive away from the user:
+    /// the playlist scrolls a row per step (up for positive), and over the main window the
+    /// volume moves a step, as Up and Down do.
+    pub fn wheel(&mut self, kind: WindowKind, steps: i32) {
+        match kind {
+            WindowKind::Playlist => {
+                let rows = usize::try_from(steps.unsigned_abs()).unwrap_or(usize::MAX);
+                self.pl_scroll = if steps > 0 {
+                    self.pl_scroll.saturating_sub(rows)
+                } else {
+                    self.pl_scroll.saturating_add(rows).min(self.max_scroll())
+                };
+            }
+            WindowKind::Main => self.change_volume(steps),
+            WindowKind::Eq => {}
+        }
     }
 
     #[must_use = "the returned actions must be performed by the window layer"]
@@ -1243,12 +1838,28 @@ impl Ui {
             return actions;
         };
         self.marquee_override = None;
+        if let Some(menu) = PlMenu::of(ctl) {
+            // Letting go over an item chooses it; anywhere else, nothing.
+            let (w, h) = self.pl_size;
+            if kind == WindowKind::Playlist
+                && let Some(item) = menu.item_at(w, h, x, y)
+            {
+                self.pl_item(item, &mut actions);
+            }
+            return actions;
+        }
         let still_over = ctl.window() == kind && self.hit(kind, x, y) == Some(ctl);
         match ctl {
             // Letting go of the position bar seeks to where the thumb was left.
             PosBar => {
                 if let Some(secs) = self.seek_to.take() {
                     self.seek(secs, &mut actions);
+                }
+            }
+            // A click on an entry that was already selected, which did not become a drag.
+            PlTrack(_) => {
+                if let Some(i) = self.row_drag.take().and_then(|d| d.select_on_release) {
+                    self.select_only(i);
                 }
             }
             // Other drags finish silently.
@@ -1269,7 +1880,7 @@ impl Ui {
             Stop | PlMiniStop => self.stop(&mut actions),
             Next | PlMiniNext => self.next(&mut actions),
             Eject | PlMiniEject => actions.push(Action::OpenFiles),
-            Shuffle => self.shuffle = !self.shuffle,
+            Shuffle => self.toggle_shuffle(),
             Repeat => self.repeat = !self.repeat,
             EqToggle => {
                 self.eq_open = !self.eq_open;
@@ -1296,12 +1907,35 @@ impl Ui {
             ClutterV => actions.push(Self::menu(MenuKind::Vis, kind, None)),
             EqPresets => actions.push(Self::menu(MenuKind::EqPresets, kind, Some(e::PRESETS))),
             ClutterA => self.toggle_always_on_top(&mut actions),
-            // Press-only visuals: the file info dialog, window shading and the playlist's
-            // menus are not implemented.
+            // Press-only visuals: the file info dialog and window shading are not implemented.
+            // The playlist's menu buttons were handled above.
             MainTitle | EqTitle | PlTitle | MainShade | ClutterI | EqShade | PlShade | PlAdd
-            | PlRem | PlSel | PlMisc | PlListOpts | PlTrack(_) => {}
+            | PlRem | PlSel | PlMisc | PlListOpts => {}
         }
         actions
+    }
+
+    /// Carry out an item of a playlist menu.
+    fn pl_item(&mut self, item: PlItem, actions: &mut Vec<Action>) {
+        use PlItem::*;
+        let popup = |kind| Self::menu(kind, WindowKind::Playlist, None);
+        match item {
+            AddDir => actions.push(Action::App(AppCommand::AddFolder)),
+            AddFile => actions.push(Action::App(AppCommand::AddFiles)),
+            RemoveMisc => actions.push(popup(MenuKind::PlaylistRemove)),
+            RemoveAll | NewList => self.list_command(ListCmd::Clear, actions),
+            Crop => self.list_command(ListCmd::Crop, actions),
+            RemoveSelected => self.list_command(ListCmd::RemoveSelected, actions),
+            InvertSelection => self.list_command(ListCmd::InvertSelection, actions),
+            SelectNone => self.list_command(ListCmd::SelectNone, actions),
+            SelectAll => self.list_command(ListCmd::SelectAll, actions),
+            SortList => actions.push(popup(MenuKind::PlaylistSort)),
+            SaveList => actions.push(Action::App(AppCommand::SaveList)),
+            LoadList => actions.push(Action::App(AppCommand::LoadList)),
+            // Streams (URLs), the file info dialog and Winamp's miscellaneous options are not
+            // implemented.
+            AddUrl | FileInfo | MiscOptions => {}
+        }
     }
 
     fn menu(kind: MenuKind, window: WindowKind, below: Option<Rect>) -> Action {
@@ -1402,13 +2036,17 @@ impl Ui {
                     keyboard: true,
                 }));
             }
-            KeyCmd::ToggleShuffle => self.shuffle = !self.shuffle,
+            KeyCmd::ToggleShuffle => self.toggle_shuffle(),
             KeyCmd::ToggleRepeat => self.repeat = !self.repeat,
             KeyCmd::ToggleTimeMode => self.remaining_mode = !self.remaining_mode,
-            KeyCmd::VolumeUp => self.volume = (self.volume + 0.02).min(1.0),
-            KeyCmd::VolumeDown => self.volume = (self.volume - 0.02).max(0.0),
+            KeyCmd::VolumeUp => self.change_volume(1),
+            KeyCmd::VolumeDown => self.change_volume(-1),
             KeyCmd::SeekBack => self.seek(self.elapsed - 5.0, &mut actions),
             KeyCmd::SeekForward => self.seek(self.elapsed + 5.0, &mut actions),
+            KeyCmd::JumpToFile => actions.push(Action::App(AppCommand::JumpToFile)),
+            KeyCmd::LoadList => actions.push(Action::App(AppCommand::LoadList)),
+            KeyCmd::SaveList => actions.push(Action::App(AppCommand::SaveList)),
+            KeyCmd::List(cmd) => self.list_command(cmd, &mut actions),
         }
         actions
     }
@@ -2038,5 +2676,324 @@ mod tests {
     fn time_formatting() {
         assert_eq!(Ui::time_str(5), "0:05");
         assert_eq!(Ui::time_str(3661), "61:01");
+    }
+
+    /// Window height of the middle of playlist row `row` (with the list scrolled to the top).
+    fn row_y(row: i32) -> i32 {
+        p::TOP_H + p::LIST_PAD + row * p::TRACK_H + p::TRACK_H / 2
+    }
+
+    fn click_row(ui: &mut Ui, row: i32, mods: Mods) {
+        ui.mods = mods;
+        let _ = ui.mouse_down(Playlist, 100, row_y(row), Instant::now());
+        let _ = ui.mouse_up(Playlist, 100, row_y(row));
+        // Far apart, so that two clicks never make a double-click.
+        ui.last_click = None;
+    }
+
+    fn selected_rows(ui: &Ui) -> Vec<usize> {
+        (0..ui.tracks.len()).filter(|&i| ui.selected[i]).collect()
+    }
+
+    fn titles(ui: &Ui) -> Vec<&str> {
+        ui.tracks.iter().map(|t| &t.title[..4]).collect()
+    }
+
+    const SHIFT: Mods = Mods {
+        shift: true,
+        ctrl: false,
+    };
+    const CTRL: Mods = Mods {
+        shift: false,
+        ctrl: true,
+    };
+
+    #[test]
+    fn shift_and_ctrl_clicks_select_several_entries() {
+        let mut ui = Ui::demo();
+        click_row(&mut ui, 1, Mods::default());
+        assert_eq!(selected_rows(&ui), [1]);
+        click_row(&mut ui, 3, SHIFT);
+        assert_eq!(selected_rows(&ui), [1, 2, 3]);
+        click_row(&mut ui, 0, SHIFT);
+        assert_eq!(selected_rows(&ui), [0, 1], "a range from the same anchor");
+        click_row(&mut ui, 3, CTRL);
+        assert_eq!(selected_rows(&ui), [0, 1, 3]);
+        click_row(&mut ui, 1, CTRL);
+        assert_eq!(selected_rows(&ui), [0, 3]);
+        click_row(&mut ui, 2, Mods::default());
+        assert_eq!(selected_rows(&ui), [2]);
+    }
+
+    #[test]
+    fn dragging_moves_the_selected_entries_together() {
+        let mut ui = Ui::demo(); // the first entry is selected and current
+        click_row(&mut ui, 2, CTRL);
+        assert_eq!(selected_rows(&ui), [0, 2]);
+        ui.mods = Mods::default();
+        let now = Instant::now();
+        let _ = ui.mouse_down(Playlist, 100, row_y(0), now);
+        let _ = ui.mouse_move(Playlist, 100, row_y(1));
+        assert_eq!(&titles(&ui)[..4], ["Null", "DJ M", "The ", "Just"]);
+        let _ = ui.mouse_move(Playlist, 100, row_y(2));
+        assert_eq!(&titles(&ui)[..5], ["Null", "The ", "DJ M", "Milk", "Just"]);
+        let _ = ui.mouse_up(Playlist, 100, row_y(2));
+        assert_eq!(selected_rows(&ui), [2, 4], "the selection moved with them");
+        assert_eq!(ui.current_row(), Some(2), "so did the current entry");
+        assert!(ui.marquee_text(ui.start).starts_with("3. DJ Mike"));
+    }
+
+    #[test]
+    fn a_click_on_a_selected_entry_keeps_the_selection_until_let_go() {
+        let mut ui = Ui::demo();
+        click_row(&mut ui, 2, SHIFT);
+        assert_eq!(selected_rows(&ui), [0, 1, 2]);
+        ui.mods = Mods::default();
+        let _ = ui.mouse_down(Playlist, 100, row_y(1), Instant::now());
+        assert_eq!(
+            selected_rows(&ui),
+            [0, 1, 2],
+            "it may be about to be dragged"
+        );
+        let _ = ui.mouse_up(Playlist, 100, row_y(1));
+        assert_eq!(selected_rows(&ui), [1]);
+    }
+
+    #[test]
+    fn the_playlist_menus_act_when_let_go_over_an_item() {
+        let mut ui = Ui::demo();
+        let (w, h) = ui.pl_size;
+        let (button, items) = PlMenu::Select.rects(w, h);
+        let now = Instant::now();
+        let _ = ui.mouse_down(Playlist, button.x + 5, button.y + 5, now);
+        assert_eq!(ui.pl_menu(), Some(PlMenu::Select));
+        // SELECT ALL is the bottom item, over the button: a plain click chooses it.
+        let _ = ui.mouse_up(Playlist, button.x + 5, button.y + 5);
+        assert_eq!(selected_rows(&ui), (0..7).collect::<Vec<_>>());
+        assert_eq!(ui.pl_menu(), None);
+        // INVERT is the top item.
+        let _ = ui.mouse_down(Playlist, button.x + 5, button.y + 5, now);
+        let _ = ui.mouse_move(Playlist, items.x + 5, items.y + 5);
+        let _ = ui.mouse_up(Playlist, items.x + 5, items.y + 5);
+        assert!(selected_rows(&ui).is_empty());
+        // Letting go anywhere else does nothing.
+        let _ = ui.mouse_down(Playlist, button.x + 5, button.y + 5, now);
+        assert!(ui.mouse_up(Playlist, 200, 30).is_empty());
+        assert_eq!(ui.pl_menu(), None);
+
+        let (add, _) = PlMenu::Add.rects(w, h);
+        let _ = ui.mouse_down(Playlist, add.x + 5, add.y + 5, now);
+        assert_eq!(
+            ui.mouse_up(Playlist, add.x + 5, add.y + 5),
+            vec![Action::App(AppCommand::AddFiles)]
+        );
+        let (list, list_items) = PlMenu::List.rects(w, h);
+        let _ = ui.mouse_down(Playlist, list.x + 5, list.y + 5, now);
+        let middle = list_items.y + p::MENU_ITEM_H + 5;
+        assert_eq!(
+            ui.mouse_up(Playlist, list_items.x + 5, middle),
+            vec![Action::App(AppCommand::SaveList)]
+        );
+        let (misc, misc_items) = PlMenu::Misc.rects(w, h);
+        let _ = ui.mouse_down(Playlist, misc.x + 5, misc.y + 5, now);
+        assert_eq!(
+            ui.mouse_up(Playlist, misc_items.x + 5, misc_items.y + 5),
+            menu(MenuKind::PlaylistSort, Playlist, None)
+        );
+    }
+
+    #[test]
+    fn removing_entries_keeps_the_current_one_and_the_selection_in_step() {
+        let mut ui = Ui::demo();
+        let _ = ui.key(KeyCmd::Stop);
+        ui.select(4);
+        ui.selected = vec![false, true, false, true, false, false, false];
+        let _ = ui.key(KeyCmd::List(ListCmd::RemoveSelected));
+        assert_eq!(ui.tracks.len(), 5);
+        assert_eq!(ui.current, 2, "entry 4 is now entry 2");
+        assert!(selected_rows(&ui).is_empty());
+        assert!(ui.marquee_text(ui.start).starts_with("3. MilkDrop Crew"));
+        // Crop keeps only the selection, but never empties the list by accident.
+        let _ = ui.key(KeyCmd::List(ListCmd::Crop));
+        assert_eq!(ui.tracks.len(), 5);
+        ui.selected[0] = true;
+        ui.selected[1] = true;
+        let _ = ui.key(KeyCmd::List(ListCmd::Crop));
+        assert_eq!(ui.tracks.len(), 2);
+        assert_eq!(ui.current, 1, "the current entry went: the last one left");
+        let _ = ui.key(KeyCmd::List(ListCmd::Clear));
+        assert!(ui.tracks.is_empty() && ui.current_row().is_none());
+        assert_eq!(ui.marquee_text(Instant::now()), "");
+    }
+
+    #[test]
+    fn a_playing_track_plays_on_when_its_entry_is_removed() {
+        let mut ui = Ui::demo();
+        let mut actions = Vec::new();
+        ui.play_track(2, &mut actions);
+        let title = ui.marquee_text(ui.start);
+        ui.selected = vec![false, false, true, false, false, false, false];
+        assert!(ui.key(KeyCmd::List(ListCmd::RemoveSelected)).is_empty());
+        assert_eq!(ui.state, PlayState::Playing);
+        assert_eq!(
+            ui.track().unwrap().title,
+            "Justin F. - Rolling Llama (Radio Edit)"
+        );
+        assert_eq!(ui.current_row(), None);
+        assert_eq!(ui.marquee_text(ui.start), title, "the marquee is unchanged");
+        // When it ends, the entry that followed it plays.
+        actions.clear();
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Open(2))]);
+        assert_eq!(ui.tracks[2].title, "The Shoutcasters - Buffering...");
+        assert_eq!(ui.current_row(), Some(2));
+    }
+
+    #[test]
+    fn removing_the_last_playing_entry_stops_after_it_unless_repeating() {
+        let mut ui = Ui::demo();
+        let mut actions = Vec::new();
+        ui.play_track(6, &mut actions);
+        let _ = ui.key(KeyCmd::List(ListCmd::Cursor {
+            to: CursorMove::End,
+            extend: false,
+        }));
+        let _ = ui.key(KeyCmd::List(ListCmd::RemoveSelected));
+        assert_eq!((ui.tracks.len(), ui.current), (6, 6), "one past the end");
+        actions.clear();
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Stop)]);
+        assert_eq!(ui.current_row(), Some(5));
+        // Previous from a removed entry goes to the one before it.
+        ui.play_track(5, &mut actions);
+        ui.selected[5] = true;
+        let _ = ui.key(KeyCmd::List(ListCmd::RemoveSelected));
+        actions.clear();
+        ui.prev(&mut actions);
+        assert_eq!(actions, vec![audio(Transport::Open(4))]);
+    }
+
+    #[test]
+    fn sorting_reversing_and_randomizing_follow_the_current_entry() {
+        let mut ui = Ui::demo();
+        let _ = ui.key(KeyCmd::List(ListCmd::Sort(SortKey::Title)));
+        assert_eq!(
+            titles(&ui),
+            ["DJ M", "Just", "Milk", "Null", "The ", "Tom ", "Unkn"]
+        );
+        let _ = ui.key(KeyCmd::List(ListCmd::Reverse));
+        assert_eq!(ui.tracks[6].title, "DJ Mike Llama - Llama Whippin' Intro");
+        assert_eq!(ui.current_row(), Some(6));
+        assert_eq!(selected_rows(&ui), [6]);
+        let before = ui.playlist_version();
+        let _ = ui.key(KeyCmd::List(ListCmd::Randomize));
+        assert_ne!(ui.playlist_version(), before);
+        let current = ui.current_row().unwrap();
+        assert_eq!(
+            ui.tracks[current].title,
+            "DJ Mike Llama - Llama Whippin' Intro"
+        );
+        let mut sorted: Vec<&str> = titles(&ui);
+        sorted.sort_unstable();
+        assert_eq!(sorted.len(), 7);
+    }
+
+    #[test]
+    fn the_keyboard_cursor_moves_selects_and_plays() {
+        let mut ui = Ui::demo();
+        let cursor = |to, extend| KeyCmd::List(ListCmd::Cursor { to, extend });
+        let _ = ui.key(cursor(CursorMove::Down, false));
+        let _ = ui.key(cursor(CursorMove::Down, false));
+        assert_eq!(selected_rows(&ui), [2]);
+        let _ = ui.key(cursor(CursorMove::Down, true));
+        let _ = ui.key(cursor(CursorMove::Down, true));
+        assert_eq!(selected_rows(&ui), [2, 3, 4]);
+        assert_eq!(ui.pl_scroll, 1, "scrolled to keep the cursor in sight");
+        let _ = ui.key(cursor(CursorMove::Home, true));
+        assert_eq!(selected_rows(&ui), [0, 1, 2]);
+        let _ = ui.key(cursor(CursorMove::PageDown, false));
+        assert_eq!(selected_rows(&ui), [4], "four rows show");
+        let _ = ui.key(cursor(CursorMove::End, false));
+        assert_eq!(
+            ui.key(KeyCmd::List(ListCmd::PlayCursor)),
+            vec![audio(Transport::Open(6))]
+        );
+        let _ = ui.key(KeyCmd::List(ListCmd::MoveUp));
+        assert_eq!(
+            ui.current_row(),
+            Some(5),
+            "Alt+Up moved the playing entry up"
+        );
+        let _ = ui.key(KeyCmd::List(ListCmd::SelectAll));
+        assert_eq!(selected_rows(&ui).len(), 7);
+        let _ = ui.key(KeyCmd::List(ListCmd::InvertSelection));
+        assert!(selected_rows(&ui).is_empty());
+    }
+
+    #[test]
+    fn shuffle_plays_every_entry_before_repeating_and_previous_goes_back() {
+        let mut ui = Ui::demo();
+        ui.shuffler = Shuffle::new(Rng::with_seed(11));
+        let _ = ui.key(KeyCmd::ToggleShuffle);
+        let mut played = vec![ui.current];
+        let mut actions = Vec::new();
+        for _ in 1..7 {
+            ui.audio_event(Event::Finished, &mut actions);
+            played.push(ui.current);
+        }
+        assert_ne!(played, (0..7).collect::<Vec<_>>(), "not in order");
+        let mut sorted = played.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..7).collect::<Vec<_>>(), "each entry once");
+        actions.clear();
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(actions, vec![audio(Transport::Stop)], "the round is over");
+        let _ = ui.key(KeyCmd::Play);
+        ui.prev(&mut actions);
+        assert_eq!(ui.current, played[5]);
+        // Next always moves on, starting a new round.
+        actions.clear();
+        ui.next(&mut actions);
+        assert_eq!(actions.len(), 1);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_playlist_and_sets_the_volume() {
+        let mut ui = Ui::demo();
+        ui.wheel(Playlist, -2);
+        assert_eq!(ui.pl_scroll, 2);
+        ui.wheel(Playlist, -9);
+        assert_eq!(ui.pl_scroll, ui.max_scroll());
+        ui.wheel(Playlist, 10);
+        assert_eq!(ui.pl_scroll, 0);
+        ui.volume = 0.5;
+        ui.wheel(Main, 2);
+        assert!((ui.volume - 0.54).abs() < 1e-6);
+        ui.wheel(Main, -100);
+        assert_eq!(ui.volume, 0.0);
+        ui.wheel(Eq, 3);
+        assert_eq!(ui.volume, 0.0);
+    }
+
+    #[test]
+    fn tags_read_late_find_their_entry_after_it_moved() {
+        let mut ui = Ui::new();
+        let _ = ui.add_files(["/m/a.mp3", "/m/b.mp3"].map(PathBuf::from));
+        let _ = ui.key(KeyCmd::List(ListCmd::Reverse));
+        let info = TrackInfo {
+            title: Some("Band - A".into()),
+            ..TrackInfo::default()
+        };
+        ui.set_track_info(0, Path::new("/m/a.mp3"), &info);
+        assert_eq!(ui.tracks[1].title, "Band - A");
+        assert_eq!(ui.tracks[0].title, "b");
+    }
+
+    #[test]
+    fn dead_files_are_removed() {
+        let mut ui = Ui::demo();
+        ui.remove_missing(|p| p.ends_with("03.mp3"));
+        assert_eq!(ui.tracks.len(), 1);
+        assert_eq!(ui.tracks[0].title, "Justin F. - Rolling Llama (Radio Edit)");
     }
 }

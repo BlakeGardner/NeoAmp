@@ -491,7 +491,8 @@ impl Store {
     /// # Errors
     /// Fails if the file cannot be written.
     pub fn save_playlist(&self, tracks: &[Track]) -> Result<()> {
-        self.replace(PLAYLIST_FILE, &m3u::write(tracks))
+        // Absolute paths: the config folder is not where the music is.
+        self.replace(PLAYLIST_FILE, &m3u::write(tracks, None))
     }
 
     /// Replace file `name` with `bytes`: written beside it under a temporary name, flushed to
