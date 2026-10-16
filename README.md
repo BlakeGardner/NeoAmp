@@ -289,13 +289,13 @@ with the zoom, as Windows' grow with the desktop's scale, but not with double
 size, which Winamp's never did; their text is drawn at that size, so it stays
 sharp.
 
-The text is Tahoma, Windows 2000's menu font, where the system has it (Windows
-and macOS do, and so does Wine); elsewhere it is the playlist's font.
+The text is Liberation Sans, built into NeoAmp (see
+[Skin fonts and pointers](#skin-fonts-and-pointers)), on every system, in place
+of Windows 2000's menu font, Tahoma, which most Linux systems lack.
 
 The menus list each item's keyboard shortcut the way the platform writes them:
-"Ctrl+Shift+1" on Windows and Linux, "⇧⌘1" on macOS. Tahoma has no ⌘, ⌥ or ⇧,
-so on macOS those come from Lucida Grande, Apple Symbols or Menlo, whichever is
-found first with all of them; with none, they show as boxes.
+"Ctrl+Shift+1" on Windows and Linux, "⇧⌘1" on macOS. Liberation Sans has no ⌘,
+⌥ or ⇧, so those come from DejaVu Sans, also built in.
 
 Each open menu is a small window of its own, since a menu reaches past the
 NeoAmp window it opens from. These windows are drawn in software with
@@ -522,7 +522,7 @@ Home and End move the caret in the search box; Ctrl+V (Cmd+V on macOS) pastes,
 and Ctrl+A selects all of it, so that typing replaces it. The dialog is an
 ordinary window with the system's own title bar,
 so the window manager places and moves it; it is drawn with softbuffer like
-the menus, at the same size, in Tahoma where the system has it.
+the menus, at the same size, in the same font.
 
 ## File info
 
@@ -546,31 +546,37 @@ channels. It follows the stream as the songs change. Tags come from
 whatever the file holds (ID3v1 and ID3v2, APE, Vorbis comments, FLAC, MP4 and
 RIFF INFO tags); a Vorbis DESCRIPTION counts as the comment. Like the Jump
 to file dialog, it is an ordinary window with the system's title bar, drawn
-with softbuffer in Tahoma where the system has it, and it has no clipboard:
+with softbuffer in the menus' font, and it has no clipboard:
 its text cannot be selected or copied.
 
 ## Skin fonts and pointers
 
 **The playlist's font** is the one the skin's `pledit.txt` names (`Font=`),
-as in Winamp, at the size Winamp used. Nearly every skin names Arial, which
-is found as before: Arial, else Liberation Sans or DejaVu Sans. Any other
-font is looked up by family name, ignoring case, among the system's fonts
-with [fontdb](https://crates.io/crates/fontdb) (pure Rust; it indexes the
-fonts once, the first time a skin names a font other than Arial, in a few
-milliseconds here):
+as in Winamp, at the size Winamp used, or rather a free font that stands in
+for it. NeoAmp has its fonts built in and reads none from the system, so the
+playlist, the menus and the dialogs look the same on Linux, Windows and macOS
+whatever fonts each has installed. It draws all its text itself, with
+[fontdue](https://crates.io/crates/fontdue), not through the system, so the
+same font gives the same pixels everywhere. Microsoft's own fonts cannot be
+built in: their licence does not allow it.
 
-- Windows: `%WINDIR%\Fonts` and the user's own fonts folder.
-- macOS: `/Library/Fonts`, `/System/Library/Fonts` and `~/Library/Fonts`.
-- Linux: the folders fontconfig's configuration lists (read without
-  fontconfig itself), or `/usr/share/fonts` and `~/.local/share/fonts` if it
-  has none.
+| The skin names | NeoAmp uses |
+| --- | --- |
+| Arial (nearly every skin), Helvetica | Liberation Sans, made to their measurements |
+| Courier New, Courier, Andale Mono | Liberation Mono, made to their measurements |
+| Lucida Console, Lucida Sans Typewriter, Fixed | Liberation Mono, within a pixel in 50 characters of Lucida Console |
+| Times New Roman, Times | Liberation Serif, made to their measurements |
+| Tahoma, MS Sans Serif, Microsoft Sans Serif | Wine's Tahoma |
+| Verdana, Lucida Sans, Lucida Sans Unicode | DejaVu Sans, close in look and width |
+| Any other font | Liberation Sans |
 
-Where the font is missing, Courier New, Times New Roman and Arial Narrow are
-replaced by fonts made to their measurements (Liberation Mono, Serif and Sans
-Narrow, or Cousine and Tinos), and Tahoma by Wine's, if installed. Any other
-missing font, and Windows' bitmap fonts (`.fon`, such as MS Sans Serif),
-which fontdb cannot read, give way to the default, as Webamp's fallback to
-Arial does.
+Family names are matched ignoring case, as Windows matched them. A font made
+to another's measurements takes the same room, letter for letter, and differs
+only in the shapes of a few letters. Windows' bitmap fonts (`.fon`, such as
+MS Sans Serif) get Liberation Sans too, as with Webamp's fallback to Arial.
+
+The fonts are in `fonts/`, which lists where each comes from and its licence
+(`fonts/README.md`); they add 2 MB to the program.
 
 **Mouse pointers.** Winamp skins can carry their own pointers as `.cur` files,
 one for each part of the windows: `TITLEBAR.CUR` over the main title bar,
@@ -841,6 +847,7 @@ Stop key.
 - Output devices, media controls and handing files to the running NeoAmp
   have been tried on Linux only. On Windows and macOS they follow what cpal
   and souvlaki document.
-- The playlist's font must be a TrueType or OpenType font the system has
-  (see [Skin fonts and pointers](#skin-fonts-and-pointers)); Windows' bitmap
-  fonts give way to the default. Skins' animated pointers stand still.
+- The playlist shows a skin's font only where NeoAmp has a stand-in for it
+  built in; any other font gives way to Liberation Sans (see
+  [Skin fonts and pointers](#skin-fonts-and-pointers)). Skins' animated
+  pointers stand still.

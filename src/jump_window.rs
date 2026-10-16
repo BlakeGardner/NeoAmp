@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -59,8 +59,7 @@ impl JumpWindow {
         now: Instant,
     ) -> Result<JumpWindow> {
         let scale = zoom * scale_factor;
-        let font = TtfFont::load_menu(menu::font_px(scale))
-            .context("no font for the Jump to file dialog")?;
+        let font = TtfFont::load_menu(menu::font_px(scale));
         let jump = Jump::new(scale, &font, current, now);
         let (w, h) = jump.size();
         let window = DialogWindow::open(el, jump::TITLE, (w, h), on_top)?;

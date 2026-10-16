@@ -876,9 +876,7 @@ mod tests {
 
     #[test]
     fn it_draws_its_controls() {
-        let Some(font) = TtfFont::load_menu(crate::menu::font_px(1.0)) else {
-            return; // no font on this system
-        };
+        let font = TtfFont::load_menu(crate::menu::font_px(1.0));
         let (mut jump, list, now) = open(Some(1));
         jump.rescale(1.0, &font);
         let (w, h) = jump.size();
