@@ -1,12 +1,14 @@
 # Builds NeoAmp for each platform when a GitHub release is published, and attaches the
-# archives to that release.
+# archives, and the Linux Flatpak bundle (flatpak.yml), to that release.
 #
 # To make a release:
-#   1. Set `version` in Cargo.toml (say 0.2.0), commit it and push it.
+#   1. Set `version` in Cargo.toml (say 0.2.0), add a <release> line for it at the top of
+#      <releases> in resources/io.github.BlakeGardner.NeoAmp.metainfo.xml, with the date, and
+#      commit and push both.
 #   2. Publish a release on GitHub whose tag is that version with a leading "v" (v0.2.0),
 #      from the web page or with `gh release create v0.2.0 --generate-notes`.
 #
-# The binaries are attached only once every platform has built, so a release never ends up
+# The builds are attached only once every platform has built, so a release never ends up
 # with some of them missing. A failed run can be re-run from the Actions tab; the archives
 # replace any already attached.
 
@@ -42,6 +44,13 @@ jobs:
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           if [ "$TAG" != "v$version" ]; then
             echo "::error::The tag is $TAG, but Cargo.toml's version is $version: tag the release v$version, or change the version first."
+            exit 1
+          fi
+      - name: The Flatpak's metainfo must list the version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if ! grep -q "<release version=\"$version\"" resources/io.github.BlakeGardner.NeoAmp.metainfo.xml; then
+            echo "::error::resources/io.github.BlakeGardner.NeoAmp.metainfo.xml has no <release> for $version: add one at the top of <releases>."
             exit 1
           fi
 
@@ -111,9 +120,16 @@ jobs:
           # Already compressed.
           compression-level: 0
 
+  flatpak:
+    name: Flatpak
+    needs: version
+    uses: ./.github/workflows/flatpak.yml
+    with:
+      bundle: neoamp-${{ github.event.release.tag_name }}-linux-x86_64.flatpak
+
   attach:
     name: Attach to the release
-    needs: build
+    needs: [build, flatpak]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only this job can change the release; the builds above, which run every crate's build
@@ -125,8 +141,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # Named one by one: the run's other artifacts (the Flatpak's crate list) stay behind.
       - name: Upload the archives
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" dist/* --clobber
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.flatpak --clobber

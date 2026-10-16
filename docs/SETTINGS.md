@@ -13,12 +13,16 @@ presets](#skins-presets-and-auto-load-presets).
 | Platform | Folder |
 | --- | --- |
 | Linux | `~/.config/neoamp/` (or `$XDG_CONFIG_HOME/neoamp/`) |
+| Linux, the Flatpak | `~/.var/app/io.github.BlakeGardner.NeoAmp/config/neoamp/` |
 | Windows | `%APPDATA%\NeoAmp\` |
 | macOS | `~/Library/Application Support/NeoAmp/` |
 
 Set `NEOAMP_CONFIG_DIR=<folder>` to keep both files somewhere else, for
 example a portable copy on a USB stick or a test run that should not touch
-your real settings. NeoAmp creates the folder the first time it saves.
+your real settings. NeoAmp creates the folder the first time it saves. The
+Flatpak can write only below its own folder, so there the folder must be
+inside `~/.var/app/io.github.BlakeGardner.NeoAmp/`, given with
+`flatpak run --env=NEOAMP_CONFIG_DIR=<folder> io.github.BlakeGardner.NeoAmp`.
 
 ## Editing the file
 

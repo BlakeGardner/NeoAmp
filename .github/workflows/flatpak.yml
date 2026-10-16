@@ -1,0 +1,84 @@
+# Builds NeoAmp's Flatpak bundle from flatpak/io.github.BlakeGardner.NeoAmp.yml.
+#
+# release.yml runs it for every GitHub release and attaches the bundle to the release with the
+# other builds. It also runs on pull requests that change the packaging, and by hand from the
+# Actions tab once it is on master; those runs leave the bundle as a download on the run's
+# page.
+
+name: Flatpak
+
+on:
+  workflow_call:
+    inputs:
+      bundle:
+        description: The bundle's file name
+        type: string
+        required: true
+  pull_request:
+    branches: [master]
+    paths:
+      - flatpak/**
+      - resources/**
+      - .github/workflows/flatpak.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run still going for the old one. The group is
+# named here because github.workflow, called from release.yml, would be the release's.
+concurrency:
+  group: flatpak-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  sources:
+    name: List the crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # flatpak-builder-tools' generator, pinned to a commit.
+      GENERATOR: https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/41c20aa10819cdb2a4f3ca171758a96d1955c018/cargo/flatpak-cargo-generator.py
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # flatpak-builder builds offline: cargo-sources.json lists every crate in Cargo.lock for
+      # it to download first.
+      - name: Generate cargo-sources.json
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet 'aiohttp>=3.9.5,<4' 'PyYAML>=6.0.2,<7' 'tomlkit>=0.13.3,<1'
+          curl -sSfL -o "$RUNNER_TEMP/flatpak-cargo-generator.py" "$GENERATOR"
+          "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/flatpak-cargo-generator.py" Cargo.lock -o cargo-sources.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cargo-sources
+          path: cargo-sources.json
+          if-no-files-found: error
+
+  build:
+    name: Build (flatpak-x86_64)
+    needs: sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Flathub's image with the runtime already installed; flatpak-builder needs the privileges
+    # to set up its sandbox.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: cargo-sources
+          path: flatpak
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: flatpak/io.github.BlakeGardner.NeoAmp.yml
+          bundle: ${{ inputs.bundle || 'neoamp-x86_64.flatpak' }}
+          # Installing a newer bundle on the same branch replaces the older one.
+          branch: stable
+          artifact-name: flatpak-x86_64
