@@ -1,7 +1,7 @@
 //! Windows 2000's "Windows Classic" look, which Winamp 2.x's menus and dialogs had whatever skin
 //! was loaded: its colours, its bevelled edges and the small glyphs drawn in them.
 //!
-//! Sizes are Windows' at 96 DPI; [`px`] scales them, and [`line`] gives the width of a
+//! Sizes are Windows' at 96 DPI; [`px`] scales them, and [`line()`] gives the width of a
 //! one-pixel line, which Windows keeps thin when it scales.
 
 use crate::canvas::{Image, Rect};

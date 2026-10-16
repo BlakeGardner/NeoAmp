@@ -291,7 +291,7 @@ impl TtfFont {
         font.map(|font| font.with_symbols(Style::CURRENT.symbols()))
     }
 
-    /// This font, drawing those of `symbols` it lacks with the first font in [`SYMBOLS`] that
+    /// This font, drawing those of `symbols` it lacks with the first font in `SYMBOLS` that
     /// has them all.
     #[must_use]
     pub fn with_symbols(self, symbols: &[char]) -> TtfFont {

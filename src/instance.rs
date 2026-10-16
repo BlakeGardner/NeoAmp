@@ -10,7 +10,7 @@
 //! A request is `MAGIC`, a flags byte, the number of items (`u32`, little-endian), and each
 //! item as a kind byte, its length in bytes (`u32`) and its bytes. Paths keep every byte of
 //! the platform's file names, which need not be Unicode: raw bytes on Unix, UTF-16 code units
-//! (little-endian) on Windows. The answer is one byte, [`ACK`].
+//! (little-endian) on Windows. The answer is one byte, `ACK`.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Write};
@@ -463,22 +463,27 @@ mod tests {
     #[test]
     fn a_second_copy_hands_its_request_to_the_first() {
         let dir = std::env::temp_dir().join(format!("neoamp-instance-{}", std::process::id()));
+        let other = dir.join("other");
+        // Without $XDG_RUNTIME_DIR the socket goes in the config folder, so it must exist.
+        std::fs::create_dir_all(&other).unwrap();
         let Claim::First(server) = claim(&dir, &Request::default()) else {
             panic!("nothing else runs with this folder");
         };
         assert!(matches!(claim(&dir, &request()), Claim::Forwarded));
         assert_eq!(server.poll(), Some(request()));
         assert_eq!(server.poll(), None);
-        let other = dir.join("other");
-        let Claim::First(_other) = claim(&other, &Request::default()) else {
+        let Claim::First(other_server) = claim(&other, &Request::default()) else {
             panic!("another folder is another NeoAmp");
         };
+        drop((server, other_server));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
     fn a_socket_left_by_a_crash_is_taken_over() {
         let dir = std::env::temp_dir().join(format!("neoamp-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
         let address = Address::for_config(&dir);
         // A socket file with nobody listening, as a crash leaves it.
         drop(std::os::unix::net::UnixListener::bind(&address.path).unwrap());
@@ -490,5 +495,6 @@ mod tests {
         assert_eq!(server.poll(), Some(request()));
         drop(server);
         assert!(!address.path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

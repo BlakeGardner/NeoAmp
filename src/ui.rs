@@ -1760,8 +1760,8 @@ impl Ui {
     }
 
     /// Write the main window's title into `buf`, as Winamp's read in the taskbar: the current
-    /// entry's number and title, then the app's name, and "[Paused]" or "[Stopped]" unless it
-    /// plays ("3. Artist - Title - NeoAmp [Paused]"). With an empty playlist, just the name.
+    /// entry's number and title, then the app's name, and "\[Paused\]" or "\[Stopped\]" unless it
+    /// plays ("3. Artist - Title - NeoAmp \[Paused\]"). With an empty playlist, just the name.
     pub fn write_window_title(&self, buf: &mut String) {
         if self.title_text.is_empty() {
             buf.push_str(APP_NAME);
