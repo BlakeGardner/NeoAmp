@@ -758,7 +758,7 @@ flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub --f
 ```
 
 The `Flatpak` workflow (`.github/workflows/flatpak.yml`) does the same on
-GitHub for each release, and for pull requests that change the packaging.
+GitHub for each release, and only then.
 
 ## Building and running
 

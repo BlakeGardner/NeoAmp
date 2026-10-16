@@ -1,9 +1,7 @@
 # Builds NeoAmp's Flatpak bundle from flatpak/io.github.BlakeGardner.NeoAmp.yml.
 #
-# release.yml runs it for every GitHub release and attaches the bundle to the release with the
-# other builds. It also runs on pull requests that change the packaging, and by hand from the
-# Actions tab once it is on master; those runs leave the bundle as a download on the run's
-# page.
+# It runs only for releases: release.yml calls it for every GitHub release and attaches the
+# bundle to the release with the other builds.
 
 name: Flatpak
 
@@ -14,22 +12,9 @@ on:
         description: The bundle's file name
         type: string
         required: true
-  pull_request:
-    branches: [master]
-    paths:
-      - flatpak/**
-      - resources/**
-      - .github/workflows/flatpak.yml
-  workflow_dispatch:
 
 permissions:
   contents: read
-
-# A new push to a pull request cancels the run still going for the old one. The group is
-# named here because github.workflow, called from release.yml, would be the release's.
-concurrency:
-  group: flatpak-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sources:
@@ -78,7 +63,7 @@ jobs:
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: flatpak/io.github.BlakeGardner.NeoAmp.yml
-          bundle: ${{ inputs.bundle || 'neoamp-x86_64.flatpak' }}
+          bundle: ${{ inputs.bundle }}
           # Installing a newer bundle on the same branch replaces the older one.
           branch: stable
           artifact-name: flatpak-x86_64
