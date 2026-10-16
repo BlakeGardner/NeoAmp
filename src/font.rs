@@ -340,7 +340,8 @@ mod tests {
 
     #[test]
     fn the_built_in_symbol_font_draws_the_mac_key_symbols_the_menu_font_lacks() {
-        let font = TtfFont::load_menu(12.0).with_symbols(Style::Mac.symbols());
+        let plain = || TtfFont::built_in(SANS, 12.0, 0.0);
+        let font = plain().with_symbols(Style::Mac.symbols());
         assert!(font.fallback.is_some(), "the menu font lacks them");
         for &ch in Style::Mac.symbols() {
             assert!(font.face(ch).has_glyph(ch), "{ch}");
@@ -351,8 +352,14 @@ mod tests {
         );
         let resized = font.resized(18.0);
         assert!(resized.fallback.is_some());
-        let plain = TtfFont::load_menu(12.0).with_symbols(Style::Windows.symbols());
-        assert!(plain.fallback.is_none(), "no symbols, no fallback");
+        let font = plain().with_symbols(Style::Windows.symbols());
+        assert!(font.fallback.is_none(), "no symbols, no fallback");
+        // The menus get the fallback where shortcuts are written with symbols (macOS).
+        let menu = TtfFont::load_menu(12.0);
+        assert_eq!(
+            menu.fallback.is_some(),
+            !Style::CURRENT.symbols().is_empty()
+        );
     }
 
     #[test]
