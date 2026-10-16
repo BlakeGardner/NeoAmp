@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="barclip"><path d="M480,470 L1305,152 C1370,128 1410,190 1410,250 C1410,320 1380,395 1310,412 L470,738 C420,752 382,700 382,640 C380,560 420,492 480,470 Z"/></clipPath>
+    <g id="bar">
+      <path fill="#FCB316" d="M480,470 L1305,152 C1370,128 1410,190 1410,250 C1410,320 1380,395 1310,412 L470,738 C420,752 382,700 382,640 C380,560 420,492 480,470 Z"/>
+      <polygon fill="#F26B1D" clip-path="url(#barclip)" points="300,708 1450,348 1450,800 300,800"/>
+    </g>
+  </defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#2A3550"/><stop offset="1" stop-color="#151B2B"/></linearGradient>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+  <g transform="translate(512 512) scale(0.45) translate(-805 -805)"><use href="#bar"/>
+    <use href="#bar" transform="translate(-95 352)"/>
+    <use href="#bar" transform="translate(-185 710)"/></g>
+</svg>

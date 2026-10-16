@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.BlakeGardner.NeoAmp</id>
+
+  <name>NeoAmp</name>
+  <summary>Play music and internet radio with classic Winamp skins</summary>
+  <developer id="io.github.blakegardner">
+    <name>Blake Gardner</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+
+  <description>
+    <p>
+      NeoAmp is a music player with a pixel-exact reproduction of the classic Winamp 2.x
+      interface: the main window, the equalizer and the playlist editor, drawn with classic
+      Winamp skins (.wsz files).
+    </p>
+    <ul>
+      <li>Plays MP3, MP2, AAC, M4A (AAC and Apple Lossless), WAV, AIFF, FLAC and Ogg Vorbis files without gaps between tracks</li>
+      <li>Plays SHOUTcast and Icecast internet radio</li>
+      <li>Ten-band equalizer with Winamp's presets, spectrum analyzer and oscilloscope</li>
+      <li>M3U and PLS playlists, Jump to file and File info</li>
+      <li>Windows that dock and snap together, and fold down to windowshade bars</li>
+      <li>Media keys and the desktop's "now playing" controls</li>
+    </ul>
+    <p>
+      NeoAmp is an independent project, not affiliated with or endorsed by the makers of
+      Winamp.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.BlakeGardner.NeoAmp.desktop</launchable>
+  <provides>
+    <binary>neoamp</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/BlakeGardner/NeoAmp</url>
+  <url type="bugtracker">https://github.com/BlakeGardner/NeoAmp/issues</url>
+  <url type="vcs-browser">https://github.com/BlakeGardner/NeoAmp</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/BlakeGardner/NeoAmp/master/docs/screenshot@2x.png</image>
+      <caption>The main window, equalizer and playlist with the built-in skin</caption>
+    </screenshot>
+  </screenshots>
+
+  <content_rating type="oars-1.1"/>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <!-- Each release adds its version here, newest first; the release workflow checks it. -->
+  <releases>
+    <release version="0.1.0" date="2026-10-16"/>
+  </releases>
+</component>

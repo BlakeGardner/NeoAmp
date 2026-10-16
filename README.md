@@ -676,7 +676,8 @@ Where the platforms differ:
 Each [GitHub release](https://github.com/BlakeGardner/NeoAmp/releases) has
 NeoAmp built for Linux (x86-64), Windows (x86-64) and macOS (Apple silicon and
 Intel): an archive holding the program and this README. The base skin is built
-into the program, so nothing else needs installing alongside it.
+into the program, so nothing else needs installing alongside it. Linux also
+gets a Flatpak bundle (see [Flatpak](#flatpak)).
 
 - **Linux** needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and anything
   later) and ALSA's library, `libasound2`, which desktop systems already have.
@@ -691,6 +692,73 @@ xattr -d com.apple.quarantine neoamp
 
 Publishing a release on GitHub builds these and attaches them to it; the steps
 are at the top of `.github/workflows/release.yml`.
+
+## Flatpak
+
+Each release also has NeoAmp as a Flatpak bundle for Linux (x86-64),
+`neoamp-v<version>-linux-x86_64.flatpak`. Install it with:
+
+```bash
+flatpak install --user neoamp-v0.1.0-linux-x86_64.flatpak
+```
+
+It runs on the Freedesktop 26.08 runtime, which Flatpak fetches from
+Flathub. Add Flathub first if the system does not have it:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
+
+NeoAmp then shows in the desktop's applications, with its icon, and the file
+manager offers it for audio files and playlists. A later release's bundle
+installs over it. From a terminal:
+
+```bash
+flatpak run io.github.BlakeGardner.NeoAmp
+```
+
+Inside Flatpak's sandbox NeoAmp works as it does otherwise (media keys, the
+output device list, handing files to the running NeoAmp, the built-in fonts),
+with these differences:
+
+- **X11 only.** Docking needs X11, so the Flatpak runs on X11, or XWayland on
+  a Wayland desktop. `NEOAMP_BACKEND=wayland` does nothing there, and a
+  desktop without XWayland cannot run it.
+- **Files.** NeoAmp can read files anywhere on the computer, outside system
+  folders, but writes only into its own folder (below). It writes a playlist
+  elsewhere through the file chooser, which hands it that one file, so a
+  playlist saved from the Flatpak names its entries by their full paths
+  rather than relative to the playlist.
+- **Settings** are kept in `~/.var/app/io.github.BlakeGardner.NeoAmp/config/neoamp/`
+  instead of `~/.config/neoamp/` (see `docs/SETTINGS.md`). A Flatpak NeoAmp and
+  one installed otherwise keep separate settings, skins and presets, and each
+  runs a copy of its own.
+
+The bundle is built from `flatpak/io.github.BlakeGardner.NeoAmp.yml`, with
+the desktop file, metainfo and icon in `resources/`. To build and install it
+yourself, from the top of this repository, install flatpak-builder:
+
+```bash
+flatpak install --user flathub org.flatpak.Builder
+```
+
+List the crates for it to download, with
+[flatpak-cargo-generator.py](https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo)
+from flatpak-builder-tools (it needs Python's `aiohttp`, `tomlkit` and
+`PyYAML`):
+
+```bash
+python3 flatpak-cargo-generator.py Cargo.lock -o flatpak/cargo-sources.json
+```
+
+Then build and install it:
+
+```bash
+flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub --force-clean flatpak_app flatpak/io.github.BlakeGardner.NeoAmp.yml
+```
+
+The `Flatpak` workflow (`.github/workflows/flatpak.yml`) does the same on
+GitHub for each release, and for pull requests that change the packaging.
 
 ## Building and running
 

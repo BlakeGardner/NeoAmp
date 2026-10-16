@@ -1,0 +1,61 @@
+# NeoAmp's Flatpak. The release workflow builds it for every GitHub release
+# (.github/workflows/flatpak.yml); to build it yourself, see "Flatpak" in README.md.
+#
+# flatpak-builder builds offline, so cargo-sources.json lists every crate in Cargo.lock for it
+# to download first. It is not kept in the repository: it is generated from Cargo.lock before
+# each build, so it can never fall behind.
+
+id: io.github.BlakeGardner.NeoAmp
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: neoamp
+
+finish-args:
+  # Docking and snapping place windows, which Wayland forbids, so NeoAmp uses X11 (XWayland
+  # on a Wayland desktop). Not fallback-x11, which hides X11 wherever Wayland runs and so
+  # would turn docking off.
+  - --socket=x11
+  - --share=ipc
+  # The windows are drawn on the GPU.
+  - --device=dri
+  # Playback, and the output devices listed in Options > Output Device.
+  - --socket=pulseaudio
+  # Internet radio.
+  - --share=network
+  # Media keys and the desktop's "now playing" display (MPRIS). Each NeoAmp takes a name of
+  # its own under this one.
+  - --own-name=org.mpris.MediaPlayer2.neoamp.*
+  # Music anywhere on the computer, read-only: playlist files name other files, and files
+  # dropped onto a window arrive as plain paths. NeoAmp never writes to music files; playlists
+  # and presets are saved through the file chooser or into NeoAmp's own folder.
+  - --filesystem=host:ro
+
+modules:
+  - name: neoamp
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        # The crates cargo-sources.json downloads, set up as cargo's vendored sources.
+        CARGO_HOME: /run/build/neoamp/cargo
+    build-commands:
+      - cargo --offline build --release --locked
+      - install -Dm755 target/release/neoamp -t /app/bin
+      - install -Dm644 resources/icons/neoamp.svg /app/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 resources/${FLATPAK_ID}.desktop -t /app/share/applications
+      - install -Dm644 resources/${FLATPAK_ID}.metainfo.xml -t /app/share/metainfo
+    sources:
+      # This checkout, without its history or what builds leave in it (the build folders are
+      # the ones the Flatpak GitHub action and README.md's commands use).
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - target
+          - .flatpak-builder
+          - flatpak_app
+          - repo
+      - cargo-sources.json
