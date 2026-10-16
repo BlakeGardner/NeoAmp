@@ -4,7 +4,8 @@
 //! Classic skins are fixed-size sprite sheets; this crate blits rectangles out of them
 //! into a software framebuffer exactly as Winamp did.
 //!
-//! - [`audio`]: decoding (symphonia), resampling, the equalizer and the output device (cpal).
+//! - [`audio`]: decoding (symphonia), resampling, the equalizer and the output device (cpal),
+//!   and internet radio streams, fetched by [`http`].
 //! - [`vis`]: the spectrum analyser and oscilloscope.
 //! - [`canvas`]: the RGBA framebuffer and clipped blits.
 //! - [`sprites`]: sprite coordinates and window layout shared by every classic skin.
@@ -18,18 +19,21 @@
 //! - [`zoom`]: how far the skin is enlarged for today's screens.
 //! - [`playlist`]: sorting, moving and shuffling playlist entries; [`playlist_file`] loads and
 //!   saves playlists as M3U ([`m3u`]) or PLS ([`pls`]).
-//! - [`jump`]: the Jump to file dialog, and [`info`] the File info dialog, drawn like Windows
-//!   2000's dialogs ([`classic`]).
+//! - [`jump`]: the Jump to file dialog, [`info`] the File info dialog and [`url_dialog`] the
+//!   Open URL dialog, drawn like Windows 2000's dialogs ([`classic`]), with edit boxes from
+//!   [`text_box`].
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
-//!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window` and
-//!   `info_window`), and the platform's file dialogs (`file_dialog`).
+//!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
+//!   `info_window` and `url_window`), the platform's file dialogs (`file_dialog`) and the
+//!   clipboard (`clipboard`).
 
 pub mod app;
 pub mod audio;
 pub mod canvas;
 pub mod classic;
+mod clipboard;
 pub mod cursor;
 mod dialog_window;
 pub mod dock;
@@ -37,6 +41,7 @@ mod eq_window;
 pub mod eqf;
 mod file_dialog;
 pub mod font;
+pub mod http;
 pub mod info;
 mod info_window;
 pub mod jump;
@@ -55,7 +60,10 @@ pub mod settings;
 pub mod shortcut;
 pub mod skin;
 pub mod sprites;
+pub mod text_box;
 pub mod ui;
 mod upscale;
+pub mod url_dialog;
+mod url_window;
 pub mod vis;
 pub mod zoom;

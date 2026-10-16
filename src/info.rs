@@ -1,13 +1,12 @@
 //! The File info dialog (the clutter bar's I, Alt+3, the playlist's MISC > FILE INFO): a
 //! file's tags and what it holds, drawn like the Windows 2000 dialogs Winamp 2.x showed.
-//! Winamp's could edit the tags; NeoAmp's only shows them, in read-only boxes.
+//! Winamp's could edit the tags; NeoAmp's only shows them, in read-only boxes. For an internet
+//! stream it shows what the station says about itself, and the song playing.
 //!
 //! This is the dialog's state, layout, input and drawing; `info_window` gives it an OS window
 //! and reads the file. Geometry is in physical pixels, as in [`crate::jump`].
 
-use std::path::{Path, PathBuf};
-
-use crate::audio::FileDetails;
+use crate::audio::{FileDetails, Location, Station, TrackInfo};
 use crate::canvas::{Image, Rect};
 use crate::classic::{self, FACE, TEXT, line, px};
 use crate::font::TtfFont;
@@ -92,8 +91,22 @@ pub enum Contents {
     /// It is still being read.
     Reading,
     Read(Box<FileDetails>),
+    /// An internet stream.
+    Stream(Box<StreamDetails>),
     /// It could not be read, for this reason.
     Failed(String),
+}
+
+/// What is known about an internet stream: only what it said while it played, if it is the
+/// one playing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StreamDetails {
+    /// `None` unless the stream is playing and has been recognised.
+    pub station: Option<Station>,
+    /// The song playing now, if the station names it.
+    pub song: Option<String>,
+    /// The audio's sample rate, channels and bitrate, once it plays.
+    pub info: Option<TrackInfo>,
 }
 
 /// Where everything is, in the dialog's pixels.
@@ -202,7 +215,7 @@ impl Layout {
 pub struct Info {
     scale: f64,
     layout: Layout,
-    path: PathBuf,
+    location: Location,
     contents: Contents,
     /// Close is held down.
     pressed: bool,
@@ -211,14 +224,14 @@ pub struct Info {
 }
 
 impl Info {
-    /// A dialog about the file at `path`, still being read, at `scale` times Windows' 96 DPI
+    /// A dialog about a file or stream, still being read, at `scale` times Windows' 96 DPI
     /// sizes, measuring text with `m`.
     #[must_use]
-    pub fn new(scale: f64, m: &dyn Measure, path: PathBuf) -> Info {
+    pub fn new(scale: f64, m: &dyn Measure, location: Location) -> Info {
         Info {
             scale,
             layout: Layout::new(scale, m),
-            path,
+            location,
             contents: Contents::Reading,
             pressed: false,
             pointer: (-1, -1),
@@ -238,8 +251,8 @@ impl Info {
     }
 
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn location(&self) -> &Location {
+        &self.location
     }
 
     #[must_use]
@@ -247,9 +260,9 @@ impl Info {
         &self.contents
     }
 
-    /// Show another file, still to be read.
-    pub fn show(&mut self, path: PathBuf) {
-        self.path = path;
+    /// Show another file or stream, still to be read.
+    pub fn show(&mut self, location: Location) {
+        self.location = location;
         self.contents = Contents::Reading;
     }
 
@@ -305,8 +318,10 @@ impl Info {
     }
 
     fn tag(&self, tag: Tag) -> Option<&str> {
-        let Contents::Read(d) = &self.contents else {
-            return None;
+        let d = match &self.contents {
+            Contents::Read(d) => d,
+            Contents::Stream(s) => return stream_tag(s, tag),
+            Contents::Reading | Contents::Failed(_) => return None,
         };
         let t = &d.tags;
         match tag {
@@ -338,7 +353,7 @@ impl Info {
 
         font.draw(c, FILE, l.file_label_x, centred(l.file), TEXT, all);
         let room = l.file.w - 2 * px(metric::TEXT_PAD, self.scale);
-        let path = self.path.display().to_string();
+        let path = self.location.to_string();
         self.read_only_box(c, font, l.file, &fit_end(&path, room, font));
 
         classic::group_box(c, font, l.tags, t, self.scale, TAGS);
@@ -373,6 +388,17 @@ impl Info {
         let x = r.x + px(metric::TEXT_PAD, self.scale);
         let y = r.y + (r.h - font.line_height()) / 2;
         font.draw(c, text, x, y, TEXT, inner);
+    }
+}
+
+/// A stream's "tags": the song playing as the title, and what the station says of itself.
+fn stream_tag(s: &StreamDetails, tag: Tag) -> Option<&str> {
+    let station = s.station.as_ref();
+    match tag {
+        Tag::Title => s.song.as_deref(),
+        Tag::Genre => station?.genre.as_deref(),
+        Tag::Comment => station?.description.as_deref(),
+        Tag::Artist | Tag::Album | Tag::Year => None,
     }
 }
 
@@ -452,6 +478,7 @@ fn detail_lines(contents: &Contents) -> Vec<String> {
     let d = match contents {
         Contents::Reading => return vec!["Reading the file…".to_owned()],
         Contents::Failed(why) => return vec!["Cannot read this file:".to_owned(), why.clone()],
+        Contents::Stream(s) => return stream_lines(s),
         Contents::Read(d) => d,
     };
     let mut lines = Vec::with_capacity(8);
@@ -500,11 +527,52 @@ fn detail_lines(contents: &Contents) -> Vec<String> {
     lines
 }
 
+/// The Details group's lines for a stream.
+fn stream_lines(s: &StreamDetails) -> Vec<String> {
+    let mut lines = vec!["Internet radio stream".to_owned()];
+    let Some(station) = &s.station else {
+        lines.push("More shows here while it plays.".to_owned());
+        return lines;
+    };
+    let mut add = |args: std::fmt::Arguments<'_>| {
+        let mut s = String::new();
+        push_fmt(&mut s, args);
+        lines.push(s);
+    };
+    if let Some(name) = &station.name {
+        add(format_args!("Station: {name}"));
+    }
+    if let Some(homepage) = &station.homepage {
+        add(format_args!("Web site: {homepage}"));
+    }
+    if !station.format.is_empty() {
+        add(format_args!("Format: {}", station.format));
+    }
+    if !station.codec.is_empty() {
+        add(format_args!("Codec: {}", station.codec));
+    }
+    if let Some(kbps) = station.kbps.or_else(|| s.info.as_ref()?.kbps) {
+        add(format_args!("Bitrate: {kbps} kbit/s"));
+    }
+    if let Some(info) = &s.info {
+        add(format_args!(
+            "Sample rate: {} Hz",
+            grouped(info.sample_rate.into())
+        ));
+        match info.channels {
+            1 => add(format_args!("Channels: 1 (mono)")),
+            2 => add(format_args!("Channels: 2 (stereo)")),
+            n => add(format_args!("Channels: {n}")),
+        }
+    }
+    lines
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::audio::{Tags, TrackInfo};
+    use crate::audio::Tags;
 
     /// Every character 6 pixels wide.
     struct Fixed;
@@ -568,6 +636,56 @@ mod tests {
     }
 
     #[test]
+    fn streams_show_their_station_and_song() {
+        let not_playing = StreamDetails::default();
+        assert_eq!(
+            detail_lines(&Contents::Stream(Box::new(not_playing))),
+            ["Internet radio stream", "More shows here while it plays."]
+        );
+        let playing = StreamDetails {
+            station: Some(Station {
+                name: Some("Radio Llama".into()),
+                genre: Some("Ambient".into()),
+                homepage: Some("https://radio.example".into()),
+                description: Some("Whipping llamas since 1997".into()),
+                kbps: Some(128),
+                format: "MPEG Audio".into(),
+                codec: "MPEG Audio Layer 3".into(),
+            }),
+            song: Some("Justin F. - Rolling Llama".into()),
+            info: Some(TrackInfo {
+                sample_rate: 44_100,
+                channels: 2,
+                ..TrackInfo::default()
+            }),
+        };
+        let mut info = Info::new(
+            1.0,
+            &Fixed,
+            Location::Url("http://radio.example/live".into()),
+        );
+        info.set_contents(Contents::Stream(Box::new(playing)));
+        assert_eq!(
+            detail_lines(info.contents()),
+            [
+                "Internet radio stream",
+                "Station: Radio Llama",
+                "Web site: https://radio.example",
+                "Format: MPEG Audio",
+                "Codec: MPEG Audio Layer 3",
+                "Bitrate: 128 kbit/s",
+                "Sample rate: 44,100 Hz",
+                "Channels: 2 (stereo)",
+            ]
+        );
+        assert_eq!(info.tag(Tag::Title), Some("Justin F. - Rolling Llama"));
+        assert_eq!(info.tag(Tag::Genre), Some("Ambient"));
+        assert_eq!(info.tag(Tag::Comment), Some("Whipping llamas since 1997"));
+        assert_eq!(info.tag(Tag::Artist), None);
+        assert_eq!(info.track(), None);
+    }
+
+    #[test]
     fn thousands_are_grouped() {
         assert_eq!(grouped(0), "0");
         assert_eq!(grouped(999), "999");
@@ -596,7 +714,7 @@ mod tests {
 
     #[test]
     fn close_closes_from_the_button_and_the_keys() {
-        let mut info = Info::new(1.0, &Fixed, PathBuf::from("/m/a.mp3"));
+        let mut info = Info::new(1.0, &Fixed, Location::File("/m/a.mp3".into()));
         let r = info.layout.close;
         let (x, y) = (r.x + r.w / 2, r.y + r.h / 2);
         assert_eq!(info.pointer_down(x, y), Outcome::Redraw);
@@ -613,7 +731,7 @@ mod tests {
 
     #[test]
     fn the_layout_fits_in_the_window() {
-        let info = Info::new(1.5, &Fixed, PathBuf::from("/m/a.mp3"));
+        let info = Info::new(1.5, &Fixed, Location::File("/m/a.mp3".into()));
         let l = info.layout;
         let window = Rect::new(0, 0, l.size.0, l.size.1);
         for r in [l.file, l.tags, l.details, l.track, l.close]
@@ -635,7 +753,7 @@ mod tests {
         let Some(font) = TtfFont::load_menu(crate::menu::font_px(1.0)) else {
             return; // no font on this system
         };
-        let mut info = Info::new(1.0, &font, PathBuf::from("/m/a.mp3"));
+        let mut info = Info::new(1.0, &font, Location::File("/m/a.mp3".into()));
         info.set_contents(Contents::Read(Box::new(details())));
         let (w, h) = info.size();
         let mut c = Image::new(w, h);

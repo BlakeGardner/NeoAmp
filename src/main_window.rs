@@ -69,9 +69,15 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
     };
     skin.blit(c, status, ox + m::STATUS_POS.0, oy + m::STATUS_POS.1);
     if ui.state == PlayState::Playing {
+        // Lit while a stream connects or buffers.
+        let light = if ui.is_working() {
+            m::WORKING
+        } else {
+            m::NOT_WORKING
+        };
         skin.blit(
             c,
-            m::NOT_WORKING,
+            light,
             ox + m::WORK_INDICATOR_POS.0,
             oy + m::WORK_INDICATOR_POS.1,
         );
@@ -197,9 +203,9 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
     };
     skin.blit(c, bthumb, ox + m::BALANCE.x + bx, oy + m::BALANCE.y + 1);
 
-    // Seek bar; the thumb is hidden while stopped.
+    // Seek bar; the thumb is hidden while stopped, and for streams, which have no length.
     skin.blit(c, m::POSBAR_BG, ox + m::POSBAR.x, oy + m::POSBAR.y);
-    if ui.state != PlayState::Stopped {
+    if ui.shows_position() {
         let px = (ui.position() * (m::POSBAR.w - m::POSBAR_THUMB_W) as f32).round() as i32;
         let thumb = if pressed(Control::PosBar) {
             m::POSBAR_THUMB_PRESSED
@@ -321,9 +327,9 @@ pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
         draw_bitmap_chars(c, skin, [ch], ox + x, oy + ms::TEXT_Y, bounds);
     }
 
-    // Seek bar; the thumb is hidden while stopped.
+    // Seek bar; the thumb is hidden while stopped, and for streams.
     skin.blit(c, ms::POSBAR_BG, ox + ms::POSBAR.x, oy + ms::POSBAR.y);
-    if ui.state != PlayState::Stopped {
+    if ui.shows_position() {
         let pos = ui.position();
         // `pos` is clamped to 0..=1, so the cast stays in range.
         let px = (pos * (ms::POSBAR.w - ms::POSBAR_THUMB_W) as f32).round() as i32;

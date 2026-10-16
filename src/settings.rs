@@ -865,11 +865,18 @@ mod tests {
         assert_eq!(store.load_settings(), None);
         assert_eq!(store.load_playlist(), None);
         store.save_settings(&changed()).unwrap();
-        let tracks = vec![Track {
-            title: "Band - Song".into(),
-            seconds: Some(200),
-            path: tmp.0.join("song.mp3"),
-        }];
+        let tracks = vec![
+            Track {
+                title: "Band - Song".into(),
+                seconds: Some(200),
+                location: crate::audio::Location::File(tmp.0.join("song.mp3")),
+            },
+            Track {
+                title: "Radio Llama".into(),
+                seconds: None,
+                location: crate::audio::Location::Url("https://radio.example/llama".into()),
+            },
+        ];
         store.save_playlist(&tracks).unwrap();
         assert_eq!(store.load_settings(), Some(changed()));
         assert_eq!(store.load_playlist(), Some(tracks));

@@ -15,6 +15,9 @@
 //! playing stale samples, and lets the position and "finished" reports name the generation they
 //! belong to.
 //!
+//! An internet stream's bytes come from a network thread of its own (`stream`), which feeds
+//! the decoder thread through a buffer it reads like a file.
+//!
 //! [`Scanner`] reads titles and lengths for the playlist on its own thread.
 
 mod decode;
@@ -23,7 +26,9 @@ mod output;
 mod resample;
 mod scan;
 mod source;
+mod stream;
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -88,6 +93,90 @@ pub fn extensions() -> impl Iterator<Item = &'static str> {
     FORMATS.iter().flat_map(|f| f.extensions.iter().copied())
 }
 
+/// Where a playlist entry's audio comes from.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Location {
+    /// A file on this computer.
+    File(PathBuf),
+    /// An internet radio stream, or a file on the web: an `http://` or `https://` URL, as it
+    /// was written.
+    Url(String),
+}
+
+impl Location {
+    /// What the user typed or passed on the command line: a URL if it starts with `http://` or
+    /// `https://` (in any case), else a file.
+    #[must_use]
+    pub fn from_arg(text: &str) -> Location {
+        if is_web_url(text) {
+            Location::Url(text.trim().to_owned())
+        } else {
+            Location::File(PathBuf::from(text))
+        }
+    }
+
+    /// The file, for a file.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Location::File(path) => Some(path),
+            Location::Url(_) => None,
+        }
+    }
+
+    /// The URL, for a stream.
+    #[must_use]
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Location::File(_) => None,
+            Location::Url(url) => Some(url),
+        }
+    }
+
+    #[must_use]
+    pub fn is_url(&self) -> bool {
+        matches!(self, Location::Url(_))
+    }
+
+    /// A file's name without its folder; for a URL, the last part of its path, or its host
+    /// when the path is empty (`http://radio.example:8000/live.mp3?x=1` gives `live.mp3`).
+    #[must_use]
+    pub fn name(&self) -> Cow<'_, str> {
+        match self {
+            Location::File(path) => path
+                .file_name()
+                .map_or(Cow::Borrowed(""), |n| n.to_string_lossy()),
+            Location::Url(url) => {
+                let rest = url.split_once("://").map_or(url.as_str(), |(_, r)| r);
+                let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+                let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+                let last = path.rsplit('/').find(|s| !s.is_empty());
+                Cow::Borrowed(last.unwrap_or(host))
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Location {
+    /// A file's path (with any part that is not Unicode replaced), or the URL.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Location::File(path) => path.display().fmt(f),
+            Location::Url(url) => f.write_str(url),
+        }
+    }
+}
+
+/// Whether `text` is an `http://` or `https://` URL (in any case), the kinds NeoAmp streams.
+#[must_use]
+pub fn is_web_url(text: &str) -> bool {
+    let text = text.trim_start().as_bytes();
+    [&b"http://"[..], b"https://"].iter().any(|scheme| {
+        text.get(..scheme.len())
+            .is_some_and(|h| h.eq_ignore_ascii_case(scheme))
+    })
+}
+
 /// What a file turned out to contain, read when it is opened or scanned.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TrackInfo {
@@ -146,6 +235,37 @@ pub struct FileDetails {
     pub size: Option<u64>,
 }
 
+/// What an internet radio station says about itself in its server's `icy-` headers (or in the
+/// playlist that named the stream), and how its audio is coded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Station {
+    /// The station's name: `icy-name`, else the title the playlist gave the stream.
+    pub name: Option<String>,
+    pub genre: Option<String>,
+    /// The station's web site (`icy-url`).
+    pub homepage: Option<String>,
+    pub description: Option<String>,
+    /// The bitrate the server announces (`icy-br`), in kbit/s.
+    pub kbps: Option<u32>,
+    /// The kind of stream, as symphonia names its reader ("MPEG Audio", ...).
+    pub format: String,
+    /// The codec, as symphonia names its decoder.
+    pub codec: String,
+}
+
+/// How an internet stream is getting on, for the scrolling title and the "working" light.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StreamStatus {
+    /// Connecting to the server.
+    Connecting,
+    /// Filling the buffer before playing, or before playing again after it ran dry; this many
+    /// percent full.
+    Buffering(u8),
+    /// The connection dropped and is being made again.
+    Reconnecting,
+    Playing,
+}
+
 /// Something the audio engine reports back to the UI.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -153,14 +273,22 @@ pub enum Event {
     Started(TrackInfo),
     /// The last sample of the track has been played.
     Finished,
-    /// The track could not be opened; the message says why.
+    /// The track could not be opened, or a stream could not be kept going; the message says
+    /// why.
     Failed(String),
+    /// A stream's station, once its audio has been recognised.
+    Station(Box<Station>),
+    /// The song a stream plays now, from its metadata, as the audio that announced it reaches
+    /// the speakers. Empty when the station names none.
+    StreamTitle(String),
+    /// A stream started connecting, buffering or reconnecting, or plays again.
+    Status(StreamStatus),
 }
 
 /// Instructions for the decoder thread. Each carries the generation it starts.
 #[derive(Debug)]
 enum Command {
-    Open { path: PathBuf, generation: u64 },
+    Open { location: Location, generation: u64 },
     Seek { seconds: f64, generation: u64 },
     Stop { generation: u64 },
 }
@@ -216,6 +344,10 @@ struct Shared {
     finished_generation: AtomicU64,
     /// Bitrate of the audio being decoded, in kbit/s.
     kbps: AtomicU32,
+    /// The generation of the last command the UI sent (Release), stored before the command is.
+    /// A stream's reader waiting for the network gives up when it moves on, so that the
+    /// decoder thread gets to the command.
+    requested: AtomicU64,
 }
 
 /// The UI thread's handle on audio playback: one output device, one decoder thread.
@@ -269,6 +401,7 @@ impl Player {
             out.rate,
             command_rx,
             event_tx,
+            stream::Settings::default(),
         )?;
         log::info!("audio output at {} Hz", out.rate);
         Ok(Player {
@@ -295,16 +428,25 @@ impl Player {
     fn send(&mut self, make: impl FnOnce(u64) -> Command, target: f64) {
         self.generation += 1;
         self.target = target;
+        self.shared
+            .requested
+            .store(self.generation, Ordering::Release);
         if self.commands.send(make(self.generation)).is_err() {
             log::error!("the audio decoder thread has stopped");
         }
     }
 
-    /// Start playing `path` from the beginning.
-    pub fn open(&mut self, path: &Path) {
+    /// Start playing a file from the beginning, or connect to a stream.
+    pub fn open(&mut self, location: &Location) {
         self.shared.paused.store(false, Ordering::Relaxed);
-        let path = path.to_path_buf();
-        self.send(|generation| Command::Open { path, generation }, 0.0);
+        let location = location.clone();
+        self.send(
+            |generation| Command::Open {
+                location,
+                generation,
+            },
+            0.0,
+        );
         self.track_generation = self.generation;
     }
 
@@ -524,6 +666,10 @@ mod tests {
 
     impl Rig {
         fn new() -> Rig {
+            Rig::with(stream::Settings::default())
+        }
+
+        fn with(network: stream::Settings) -> Rig {
             let shared = Arc::new(Shared::default());
             shared.volume.store(1.0);
             let (queue, queue_rx) = rtrb::RingBuffer::new(RATE as usize);
@@ -531,7 +677,15 @@ mod tests {
             let mut mixer = output::Mixer::new(Arc::clone(&shared), queue_rx, vis_tx, RATE);
             let (commands, command_rx) = mpsc::channel();
             let (event_tx, events) = mpsc::channel();
-            decode::spawn(Arc::clone(&shared), queue, RATE, command_rx, event_tx).unwrap();
+            decode::spawn(
+                Arc::clone(&shared),
+                queue,
+                RATE,
+                command_rx,
+                event_tx,
+                network,
+            )
+            .unwrap();
             let stop = Arc::new(AtomicBool::new(false));
             let halt = Arc::clone(&stop);
             let device = std::thread::spawn(move || {
@@ -586,7 +740,7 @@ mod tests {
         let rig = Rig::new();
         rig.commands
             .send(Command::Open {
-                path: path.clone(),
+                location: Location::File(path.clone()),
                 generation: 1,
             })
             .unwrap();
@@ -612,7 +766,7 @@ mod tests {
         let rig = Rig::new();
         rig.commands
             .send(Command::Open {
-                path: path.clone(),
+                location: Location::File(path.clone()),
                 generation: 1,
             })
             .unwrap();
@@ -630,12 +784,101 @@ mod tests {
         rig.commands.send(Command::Stop { generation: 3 }).unwrap();
         rig.commands
             .send(Command::Open {
-                path: PathBuf::from("/nonexistent.mp3"),
+                location: Location::File(PathBuf::from("/nonexistent.mp3")),
                 generation: 4,
             })
             .unwrap();
         assert!(matches!(rig.event(), (4, Event::Failed(_))));
         let _ = rig.finish();
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_stream_plays_names_its_songs_reconnects_and_finally_fails() {
+        use crate::http::tests::serve;
+        use std::time::Duration;
+        // One second of a quiet square wave at 22.05 kHz, sent as a SHOUTcast station would,
+        // with the song's title after the first 4000 bytes. The server drops the connection
+        // after it, and again after a second visit; then nothing answers.
+        let wav = source::tests::write_wav("stream", 22_050, 1, 22_050, |i, _| {
+            if i % 50 < 25 { 3000 } else { -3000 }
+        });
+        let bytes = std::fs::read(&wav).unwrap();
+        std::fs::remove_file(&wav).unwrap();
+        let mut reply = b"ICY 200 OK\r\nicy-name:Radio Llama\r\nicy-metaint:4000\r\n\
+                          content-type:audio/wav\r\n\r\n"
+            .to_vec();
+        reply.extend(stream::tests::with_metadata(
+            &bytes,
+            4000,
+            &[Some("Band - Song")],
+        ));
+        let (address, _server) = serve(vec![vec![reply.clone()], vec![reply]], Duration::ZERO);
+        let rig = Rig::with(stream::Settings {
+            retry: stream::Retry {
+                attempts: 1,
+                delay: Duration::from_millis(50),
+            },
+            timeouts: crate::http::Timeouts::default(),
+        });
+        rig.commands
+            .send(Command::Open {
+                location: Location::Url(format!("{address}/;stream")),
+                generation: 1,
+            })
+            .unwrap();
+        let mut events = Vec::new();
+        loop {
+            let (generation, event) = rig.event();
+            assert_eq!(generation, 1);
+            let failed = matches!(event, Event::Failed(_));
+            events.push(event);
+            if failed {
+                break;
+            }
+        }
+        // The device plays out what is queued, both visits' audio: two seconds at 48 kHz.
+        let mut played = rig.position();
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = rig.position();
+            if now == played {
+                break;
+            }
+            played = now;
+        }
+        let _ = rig.finish();
+        assert_eq!(events[0], Event::Status(StreamStatus::Connecting));
+        let started: Vec<&TrackInfo> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Started(info) => Some(info),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started.len(), 2, "{events:?}");
+        assert_eq!((started[0].sample_rate, started[0].channels), (22_050, 1));
+        let station = events.iter().find_map(|e| match e {
+            Event::Station(s) => Some(s),
+            _ => None,
+        });
+        let station = station.unwrap();
+        assert_eq!(station.name.as_deref(), Some("Radio Llama"));
+        assert!(!station.format.is_empty() && !station.codec.is_empty());
+        let titles = events
+            .iter()
+            .filter(|e| **e == Event::StreamTitle("Band - Song".into()))
+            .count();
+        assert_eq!(titles, 2);
+        assert!(events.contains(&Event::Status(StreamStatus::Playing)));
+        assert!(events.contains(&Event::Status(StreamStatus::Reconnecting)));
+        assert!(
+            matches!(events.last(), Some(Event::Failed(why)) if why.contains("tried")),
+            "{events:?}"
+        );
+        assert!(
+            (95_000..=97_000).contains(&played),
+            "{played} frames played"
+        );
     }
 }

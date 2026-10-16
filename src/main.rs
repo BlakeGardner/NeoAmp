@@ -4,15 +4,18 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use neoamp::app::{self, Options};
+use neoamp::audio::{self, Location};
 
 const USAGE: &str = "\
 usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>]
-              [<file.wsz>] [<audio file, folder or playlist>...]
+              [<file.wsz>] [<audio file, folder, playlist or stream URL>...]
 
   <file.wsz>           load a classic Winamp 2.x skin (also: drop one onto a window)
   <audio file/folder>  replace the playlist and play the first (dropping onto a window
                        adds instead); folders add their MP3, MP2, AAC, M4A, WAV, AIFF, FLAC
                        and Ogg Vorbis files, and .m3u, .m3u8 and .pls playlists their entries
+  <http(s)://...>      an internet radio stream, a playlist leading to one, or a file on
+                       the web
   --scale <factor>     zoom the windows (default: the saved zoom, else from the screen
                        height, 1.5 at 1440p)
   --screenshot <png>   render one frame at 1x to a PNG and exit
@@ -21,8 +24,8 @@ Settings and the playlist are remembered between runs; NEOAMP_CONFIG_DIR=<folder
 them somewhere other than the platform's config folder.
 
 keys: Z/X/C/V/B transport, Shift+V fade out and stop, L open files, Shift+L open a
-      folder, S shuffle, R repeat, J jump to file, Alt+3 file info, Ctrl+T time mode,
-      Ctrl+D double size, Ctrl+A always on top, Ctrl+W windowshade,
+      folder, Ctrl+L open a URL, S shuffle, R repeat, J jump to file, Alt+3 file info,
+      Ctrl+T time mode, Ctrl+D double size, Ctrl+A always on top, Ctrl+W windowshade,
       Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
       Alt+G equalizer, Alt+E playlist, Alt+F main menu (or right-click), Alt+S skins,
       arrows volume/seek
@@ -60,8 +63,9 @@ fn parse_args(args: &[String]) -> Result<Option<Options>> {
                 None => bail!("--skin needs a path to a .wsz file"),
             },
             flag if flag.starts_with('-') => bail!("unknown option {flag}\n\n{USAGE}"),
+            url if audio::is_web_url(url) => opts.files.push(Location::from_arg(url)),
             path if is_skin(path) => opts.skin = Some(PathBuf::from(path)),
-            path => opts.files.push(PathBuf::from(path)),
+            path => opts.files.push(Location::File(PathBuf::from(path))),
         }
     }
     Ok(Some(opts))
@@ -106,14 +110,26 @@ mod tests {
     }
 
     #[test]
-    fn audio_files_and_folders_go_to_the_playlist() {
-        let opts = parse_args(&args(&["a.mp3", "Skin.WSZ", "music/", "b.wav"]))
-            .unwrap()
-            .unwrap();
+    fn audio_files_folders_and_streams_go_to_the_playlist() {
+        let opts = parse_args(&args(&[
+            "a.mp3",
+            "Skin.WSZ",
+            "music/",
+            "https://radio.example/skins.wsz",
+            "b.wav",
+        ]))
+        .unwrap()
+        .unwrap();
         assert_eq!(opts.skin.as_deref(), Some(std::path::Path::new("Skin.WSZ")));
+        let file = |p: &str| Location::File(PathBuf::from(p));
         assert_eq!(
             opts.files,
-            ["a.mp3", "music/", "b.wav"].map(PathBuf::from).to_vec()
+            [
+                file("a.mp3"),
+                file("music/"),
+                Location::Url("https://radio.example/skins.wsz".into()),
+                file("b.wav"),
+            ]
         );
     }
 

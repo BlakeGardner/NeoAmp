@@ -78,6 +78,10 @@ pub enum AppCommand {
     AddFiles,
     /// Pick a folder whose files join the playlist.
     AddFolder,
+    /// Ask for a URL to play in place of the playlist.
+    PlayUrl,
+    /// Ask for a URL to add to the playlist.
+    AddUrl,
     /// Pick a playlist file to replace the playlist.
     LoadList,
     /// Save the playlist to a file, named in the platform's dialog.
@@ -168,6 +172,7 @@ fn main_menu(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
             KeyCmd::OpenFolder,
             Shortcut::char('L').shift(),
         ),
+        key("Play &URL...", KeyCmd::OpenUrl, Shortcut::char('L').ctrl()),
         Item::separator(),
         key(
             "Playlist &Editor",

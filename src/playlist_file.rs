@@ -4,14 +4,15 @@
 //! Playlists often come from Windows, so the parsers accept `\r\n` and `\n`, and text that is
 //! not UTF-8 is read as Windows-1252, the codepage Winamp wrote on Western systems. Entries
 //! may be absolute paths, paths relative to the playlist's folder (with `\` separators on
-//! every system), or `file://` URLs. Other URLs (internet radio) are skipped for now.
+//! every system), `file://` URLs, or `http://` and `https://` URLs, which are internet radio
+//! streams (or files on the web) and are kept as written. URLs of other kinds are skipped.
 
 use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::audio;
+use crate::audio::{self, Location};
 use crate::ui::Track;
 use crate::{m3u, pls};
 
@@ -84,12 +85,19 @@ pub fn save(path: &Path, tracks: &[Track]) -> Result<PathBuf> {
 }
 
 /// Playlist entries for what the user opened: a folder adds its playable files (subfolders
-/// included), a playlist file its entries, and any other file itself. A playlist that cannot
-/// be read is skipped (logged).
+/// included), a playlist file its entries, and any other file or a URL itself. A playlist
+/// that cannot be read is skipped (logged).
 #[must_use]
-pub fn expand(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Track> {
+pub fn expand(items: impl IntoIterator<Item = Location>) -> Vec<Track> {
     let mut tracks = Vec::new();
-    for path in paths {
+    for item in items {
+        let path = match item {
+            Location::File(path) => path,
+            url @ Location::Url(_) => {
+                tracks.push(Track::new(url));
+                continue;
+            }
+        };
         if path.is_dir() {
             tracks.extend(audio::audio_files([path]).into_iter().map(Track::from_path));
         } else if is_playlist(&path) {
@@ -104,19 +112,26 @@ pub fn expand(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Track> {
     tracks
 }
 
-/// The file a playlist entry names, with relative paths taken from `base`, the playlist's
-/// folder. `None` for an entry that is a URL other than `file:`.
-pub(crate) fn entry_path(raw: &[u8], base: &Path) -> Option<PathBuf> {
+/// The file or stream a playlist entry names, with relative paths taken from `base`, the
+/// playlist's folder. `None` for a URL NeoAmp cannot play (logged).
+pub(crate) fn entry_location(raw: &[u8], base: &Path) -> Option<Location> {
     if let Some(rest) = strip_prefix_ignore_case(raw, b"file:") {
-        return file_url_path(rest);
+        return file_url_path(rest).map(Location::File);
     }
-    if is_url(raw) {
-        log::info!(
-            "skipping {}: streams are not supported yet",
-            decode_text(raw)
-        );
+    let text = raw.trim_ascii();
+    if is_url(text) {
+        let url = decode_text(text);
+        if audio::is_web_url(&url) {
+            return Some(Location::Url(url.into_owned()));
+        }
+        log::info!("skipping {url}: only http and https streams can be played");
         return None;
     }
+    entry_path(raw, base).map(Location::File)
+}
+
+/// The file a playlist entry that is not a URL names, with relative paths taken from `base`.
+fn entry_path(raw: &[u8], base: &Path) -> Option<PathBuf> {
     let path = local_path(raw, base);
     // A name that is not UTF-8 may be Windows-1252 from a Windows playlist rather than the
     // file system's own bytes. On Windows (and macOS) names are Unicode, so it must be.
@@ -320,6 +335,15 @@ pub(crate) fn written_path<'a>(path: &'a Path, base: Option<&Path>) -> Cow<'a, [
     }
 }
 
+/// How an entry is written in a playlist kept in folder `base`: a file as [`written_path`]
+/// writes it, a URL as it is.
+pub(crate) fn written_location<'a>(location: &'a Location, base: Option<&Path>) -> Cow<'a, [u8]> {
+    match location {
+        Location::File(path) => written_path(path, base),
+        Location::Url(url) => Cow::Borrowed(url.as_bytes()),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -342,20 +366,24 @@ mod tests {
         assert!(!is_playlist(Path::new("m3u")));
     }
 
+    fn file(bytes: &[u8]) -> Option<Location> {
+        Some(Location::File(path_from_bytes(bytes)))
+    }
+
     #[test]
     fn file_urls_become_paths() {
         let base = Path::new("/lists");
         assert_eq!(
-            entry_path(b"file:///music/a%20b.mp3", base),
-            Some(path_from_bytes(b"/music/a b.mp3"))
+            entry_location(b"file:///music/a%20b.mp3", base),
+            file(b"/music/a b.mp3")
         );
         assert_eq!(
-            entry_path(b"FILE://localhost/music/c.mp3", base),
-            Some(path_from_bytes(b"/music/c.mp3"))
+            entry_location(b"FILE://localhost/music/c.mp3", base),
+            file(b"/music/c.mp3")
         );
         assert_eq!(
-            entry_path(b"file:/music/d.mp3", base),
-            Some(path_from_bytes(b"/music/d.mp3"))
+            entry_location(b"file:/music/d.mp3", base),
+            file(b"/music/d.mp3")
         );
         assert_eq!(percent_decode(b"100%25 %zz%4"), b"100% %zz%4");
     }
@@ -365,21 +393,28 @@ mod tests {
     fn windows_file_urls_have_drives_and_shares() {
         let base = Path::new("C:\\lists");
         assert_eq!(
-            entry_path(b"file:///C:/Music/a.mp3", base),
-            Some(PathBuf::from("C:/Music/a.mp3"))
+            entry_location(b"file:///C:/Music/a.mp3", base),
+            Some(Location::File(PathBuf::from("C:/Music/a.mp3")))
         );
         assert_eq!(
-            entry_path(b"file://server/share/a.mp3", base),
-            Some(PathBuf::from("\\\\server\\share\\a.mp3"))
+            entry_location(b"file://server/share/a.mp3", base),
+            Some(Location::File(PathBuf::from("\\\\server\\share\\a.mp3")))
         );
     }
 
     #[test]
-    fn stream_urls_are_skipped_but_drive_letters_are_not_urls() {
+    fn web_urls_are_streams_others_are_skipped_and_drive_letters_are_not_urls() {
+        let base = Path::new("/");
         assert_eq!(
-            entry_path(b"http://radio.example/stream", Path::new("/")),
-            None
+            entry_location(b"http://radio.example:8000/stream \r", base),
+            Some(Location::Url("http://radio.example:8000/stream".into()))
         );
+        assert_eq!(
+            entry_location(b"HTTPS://radio.example/a.pls", base),
+            Some(Location::Url("HTTPS://radio.example/a.pls".into()))
+        );
+        assert_eq!(entry_location(b"rtsp://radio.example/live", base), None);
+        assert_eq!(entry_location(b"mms://radio.example/live", base), None);
         assert!(is_url(b"https://x"));
         assert!(!is_url(b"C:\\Music\\a.mp3"));
         assert!(!is_url(b"C:/Music/a.mp3"));
@@ -439,10 +474,16 @@ mod tests {
             Track {
                 title: "Band - Song".into(),
                 seconds: Some(61),
-                path: dir.join("sub").join("a.mp3"),
+                location: Location::File(dir.join("sub").join("a.mp3")),
             },
             // Absolute on every system, and outside the playlist's folder.
             Track::from_path(std::env::temp_dir().join("neoamp-elsewhere").join("b.flac")),
+            Track {
+                title: "Radio Llama".into(),
+                seconds: None,
+                location: Location::Url("https://radio.example/llama?x=1&y=2".into()),
+            },
+            Track::from_url("http://radio.example:8000/".into()),
         ];
         for name in ["list.m3u", "list.M3U8", "list.pls"] {
             let saved = save(&dir.join(name), &tracks).unwrap();
@@ -471,14 +512,18 @@ mod tests {
         std::fs::write(dir.join("album").join("cover.jpg"), b"").unwrap();
         std::fs::write(dir.join("list.m3u"), b"#EXTINF:5,Five\r\nx.mp3\r\n").unwrap();
         let got = expand([
-            dir.join("album"),
-            dir.join("list.m3u"),
-            dir.join("single.wav"),
-            dir.join("missing.pls"),
+            Location::File(dir.join("album")),
+            Location::File(dir.join("list.m3u")),
+            Location::File(dir.join("single.wav")),
+            Location::Url("http://radio.example/live".into()),
+            Location::File(dir.join("missing.pls")),
         ]);
         let titles: Vec<&str> = got.iter().map(|t| t.title.as_str()).collect();
-        assert_eq!(titles, ["1", "2", "Five", "single"]);
-        assert_eq!(got[2].path, dir.join("x.mp3"));
+        assert_eq!(
+            titles,
+            ["1", "2", "Five", "single", "http://radio.example/live"]
+        );
+        assert_eq!(got[2].location, Location::File(dir.join("x.mp3")));
         assert!(load(Path::new("song.mp3")).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }

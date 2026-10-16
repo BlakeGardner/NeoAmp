@@ -38,6 +38,14 @@ serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 dirs = "6"
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+# HTTPS for internet radio (src/http.rs), the same on every platform. ring is its crypto: it
+# compiles a little C and assembly with the platform's C compiler, but needs no system library.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# Mozilla's root certificates, built in, so certificates are checked the same way everywhere.
+webpki-roots = "1"
+# The clipboard, for pasting into the dialogs' text boxes: native on Windows and macOS, X11
+# (XWayland included) on Linux. Pure Rust.
+arboard = { version = "3", default-features = false }
 
 [profile.dev]
 opt-level = 1

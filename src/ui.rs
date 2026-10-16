@@ -6,11 +6,12 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::audio::{EQ_RANGE_DB, EqSettings, Event, TrackInfo};
+use crate::audio::{EQ_RANGE_DB, EqSettings, Event, Location, Station, StreamStatus, TrackInfo};
 use crate::canvas::{Image, Rect};
 use crate::cursor::SkinCursor;
 use crate::eqf::{self, Preset};
 use crate::font::TtfFont;
+use crate::info::StreamDetails;
 use crate::menus::{AppCommand, Command, MenuKind};
 use crate::playlist::{self, Rng, Shuffle, SortKey};
 use crate::skin::{Mask, Skin};
@@ -410,6 +411,8 @@ pub enum KeyCmd {
     OpenFiles,
     /// Play a folder.
     OpenFolder,
+    /// Ask for a URL to play.
+    OpenUrl,
     ToggleAlwaysOnTop,
     /// Open the main menu.
     MainMenu,
@@ -478,11 +481,12 @@ pub enum CursorMove {
 /// One playlist entry.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Track {
-    /// "Artist - Title" from the tags, or the file name until they have been read.
+    /// "Artist - Title" from the tags, or the file name until they have been read. For a
+    /// stream, the station's name, or its URL until the station has named itself.
     pub title: String,
-    /// Length in whole seconds; `None` until known.
+    /// Length in whole seconds; `None` until known, and for streams.
     pub seconds: Option<u32>,
-    pub path: PathBuf,
+    pub location: Location,
 }
 
 impl Track {
@@ -495,8 +499,33 @@ impl Track {
                 |s| s.to_string_lossy().into_owned(),
             ),
             seconds: None,
-            path,
+            location: Location::File(path),
         }
+    }
+
+    /// An entry for a stream, titled by its URL until the station names itself.
+    #[must_use]
+    pub fn from_url(url: String) -> Track {
+        Track {
+            title: url.clone(),
+            seconds: None,
+            location: Location::Url(url),
+        }
+    }
+
+    /// An entry for a file or a stream (see [`Track::from_path`] and [`Track::from_url`]).
+    #[must_use]
+    pub fn new(location: Location) -> Track {
+        match location {
+            Location::File(path) => Track::from_path(path),
+            Location::Url(url) => Track::from_url(url),
+        }
+    }
+
+    /// A stream still titled by its URL, which its station's name may replace.
+    #[must_use]
+    pub fn is_untitled_stream(&self) -> bool {
+        self.location.url() == Some(self.title.as_str())
     }
 }
 
@@ -541,6 +570,10 @@ pub struct Ui {
     failures: usize,
     /// A fade-out under way. Playing, pausing or stopping otherwise cancels it.
     fade: Fade,
+    /// What the stream playing has told about itself; `None` unless a stream plays.
+    stream: Option<StreamDetails>,
+    /// How the stream playing is getting on; `Playing` when no stream plays.
+    stream_status: StreamStatus,
     pub volume: f32,
     pub balance: f32,
     pub shuffle: bool,
@@ -603,6 +636,11 @@ pub struct Ui {
     /// The current track's marquee text: `title_text` and the length.
     title_chars: Vec<char>,
     title_scrolls: bool,
+    /// The marquee scrolls from here: it starts over from its first character when its text
+    /// changes, as Winamp's did for a new song.
+    title_from: Instant,
+    /// The marquee's text changed since the last [`Ui::tick`].
+    title_moved: bool,
 }
 
 impl Default for Ui {
@@ -643,6 +681,8 @@ impl Ui {
             seek_to: None,
             failures: 0,
             fade: Fade::Off,
+            stream: None,
+            stream_status: StreamStatus::Playing,
             volume: DEFAULT_VOLUME,
             balance: 0.0,
             shuffle: false,
@@ -686,6 +726,8 @@ impl Ui {
             title_text: String::new(),
             title_chars: Vec::new(),
             title_scrolls: false,
+            title_from: now,
+            title_moved: false,
         }
     }
 
@@ -709,7 +751,7 @@ impl Ui {
             .map(|(i, (title, seconds))| Track {
                 title: (*title).into(),
                 seconds: Some(*seconds),
-                path: PathBuf::from(format!("demo/{:02}.mp3", i + 1)),
+                location: Location::File(PathBuf::from(format!("demo/{:02}.mp3", i + 1))),
             })
             .collect();
         ui.selected = vec![false; ui.tracks.len()];
@@ -858,6 +900,43 @@ impl Ui {
         }
     }
 
+    /// Whether the current track is an internet stream.
+    #[must_use]
+    pub fn is_stream(&self) -> bool {
+        self.track().is_some_and(|t| t.location.is_url())
+    }
+
+    /// Whether the "working" light is lit: a stream is connecting or buffering.
+    #[must_use]
+    pub fn is_working(&self) -> bool {
+        self.state == PlayState::Playing && self.stream_status != StreamStatus::Playing
+    }
+
+    /// Whether the position bar shows its thumb: not while stopped, nor for a stream.
+    #[must_use]
+    pub fn shows_position(&self) -> bool {
+        self.state != PlayState::Stopped && !self.is_stream()
+    }
+
+    /// The song the stream playing names, if it names one.
+    #[must_use]
+    pub fn stream_song(&self) -> Option<&str> {
+        self.stream.as_ref()?.song.as_deref()
+    }
+
+    /// What the File info dialog shows about `location`, if it is a stream: what it has told
+    /// while playing, if it is the stream playing, else nothing yet.
+    #[must_use]
+    pub fn stream_details(&self, location: &Location) -> Option<StreamDetails> {
+        location.url()?;
+        let playing = self.state != PlayState::Stopped
+            && self.track().is_some_and(|t| &t.location == location);
+        Some(match &self.stream {
+            Some(details) if playing => details.clone(),
+            _ => StreamDetails::default(),
+        })
+    }
+
     /// Length of the current track in seconds; 0 while unknown.
     #[must_use]
     pub fn track_len(&self) -> f32 {
@@ -910,6 +989,14 @@ impl Ui {
         self.seek_to = None;
         self.fade = Fade::Off;
         self.shuffler.mark(self.current);
+        let stream = self.is_stream();
+        self.stream = stream.then(StreamDetails::default);
+        self.stream_status = if stream {
+            StreamStatus::Connecting
+        } else {
+            StreamStatus::Playing
+        };
+        self.refresh_title();
         actions.push(Action::Audio(Transport::Open(self.current)));
     }
 
@@ -947,9 +1034,14 @@ impl Ui {
         self.seek_to = None;
         self.fade = Fade::Off;
         self.vis.reset();
+        let was_stream = self.stream.take().is_some();
+        self.stream_status = StreamStatus::Playing;
         if self.orphan.take().is_some() {
             // Back to an entry of the playlist: the one that followed, or the last.
             self.current = self.current.min(self.tracks.len().saturating_sub(1));
+            self.refresh_title();
+        } else if was_stream {
+            // The song it named, and its status, leave the title.
             self.refresh_title();
         }
     }
@@ -1004,6 +1096,8 @@ impl Ui {
     /// Make playlist entry `idx` current without starting it, scrolling the playlist to it.
     pub fn select(&mut self, idx: usize) {
         self.orphan = None;
+        self.stream = None;
+        self.stream_status = StreamStatus::Playing;
         if self.tracks.is_empty() {
             self.current = 0;
         } else {
@@ -1113,9 +1207,10 @@ impl Ui {
         self.volume = (self.volume + VOLUME_STEP * steps as f32).clamp(0.0, 1.0);
     }
 
-    /// Jump to `secs` into the current track, within its length when that is known.
+    /// Jump to `secs` into the current track, within its length when that is known. Streams
+    /// cannot seek.
     fn seek(&mut self, secs: f32, actions: &mut Vec<Action>) {
-        if self.state == PlayState::Stopped {
+        if self.state == PlayState::Stopped || self.is_stream() {
             return;
         }
         let len = self.track_len();
@@ -1130,7 +1225,7 @@ impl Ui {
 
     /// The position bar works while a track with a known length is playing or paused.
     fn can_seek(&self) -> bool {
-        self.state != PlayState::Stopped && self.track_len() > 0.0
+        self.state != PlayState::Stopped && self.track_len() > 0.0 && !self.is_stream()
     }
 
     /// React to the audio engine: show what it opened, and move on when a track ends or fails.
@@ -1143,7 +1238,16 @@ impl Ui {
                 if let Some(kbps) = info.kbps {
                     self.kbps = kbps;
                 }
-                if let Some(path) = self.track().map(|t| t.path.clone()) {
+                if let Some(stream) = self.stream.as_mut() {
+                    stream.info = Some(info.clone());
+                }
+                // A stream's tags, if it has any, would name whatever played as it connected;
+                // its entry keeps the station's name.
+                if let Some(path) = self
+                    .track()
+                    .and_then(|t| t.location.path())
+                    .map(Path::to_path_buf)
+                {
                     self.set_track_info(self.current, &path, &info);
                 }
             }
@@ -1152,7 +1256,7 @@ impl Ui {
             Event::Finished => self.advance(actions),
             Event::Failed(why) => {
                 if let Some(t) = self.track() {
-                    log::warn!("cannot play {}: {why}", t.path.display());
+                    log::warn!("cannot play {}: {why}", t.location);
                 }
                 self.failures += 1;
                 if self.failures >= self.tracks.len() {
@@ -1161,7 +1265,37 @@ impl Ui {
                     self.advance(actions);
                 }
             }
+            Event::Station(station) => self.station(*station),
+            Event::StreamTitle(title) => {
+                if let Some(stream) = self.stream.as_mut() {
+                    stream.song = (!title.is_empty()).then_some(title);
+                    self.refresh_title();
+                }
+            }
+            Event::Status(status) => {
+                if self.stream.is_some() && status != self.stream_status {
+                    self.stream_status = status;
+                    self.refresh_title();
+                }
+            }
         }
+    }
+
+    /// The stream playing has said what station it is. An entry still titled by its URL takes
+    /// the station's name; one titled already, by a playlist file or by hand, keeps its title.
+    fn station(&mut self, station: Station) {
+        if self.stream.is_none() {
+            return;
+        }
+        if let (Some(name), Some(row)) = (&station.name, self.current_row())
+            && let Some(track) = self.tracks.get_mut(row).filter(|t| t.is_untitled_stream())
+        {
+            track.title.clone_from(name);
+        }
+        if let Some(stream) = self.stream.as_mut() {
+            stream.station = Some(station);
+        }
+        self.refresh_title();
     }
 
     /// Append files to the playlist, titled by file name until their tags are read. Returns
@@ -1298,8 +1432,13 @@ impl Ui {
     }
 
     /// Remove the entries whose file `exists` says is gone (Winamp's "Remove all dead files").
+    /// Streams stay: whether one is there can only be found out by playing it.
     pub fn remove_missing(&mut self, exists: impl Fn(&Path) -> bool) {
-        let remove: Vec<bool> = self.tracks.iter().map(|t| !exists(&t.path)).collect();
+        let remove: Vec<bool> = self
+            .tracks
+            .iter()
+            .map(|t| t.location.path().is_some_and(|p| !exists(p)))
+            .collect();
         self.remove_rows(&remove);
     }
 
@@ -1399,10 +1538,11 @@ impl Ui {
     /// Fill in a playlist entry's title and length once its file has been read. The entry is
     /// `idx` if that still plays `path`; if entries have moved since, it is found by its file.
     pub fn set_track_info(&mut self, idx: usize, path: &Path, info: &TrackInfo) {
-        let idx = if self.tracks.get(idx).is_some_and(|t| t.path == path) {
+        let plays = |t: &Track| t.location.path() == Some(path);
+        let idx = if self.tracks.get(idx).is_some_and(plays) {
             idx
         } else {
-            match self.tracks.iter().position(|t| t.path == path) {
+            match self.tracks.iter().position(plays) {
                 Some(i) => i,
                 None => return,
             }
@@ -1451,27 +1591,47 @@ impl Ui {
     /// Advance the visualiser. Call once per frame before drawing.
     pub fn tick(&mut self, now: Instant) {
         self.vis.update(now, self.state == PlayState::Playing);
+        if std::mem::take(&mut self.title_moved) {
+            self.title_from = now;
+        }
     }
 
     // ----- text ---------------------------------------------------------------------------
 
     /// Rebuild the cached titles: `"N. Title"`, and the marquee's `"N. Title (m:ss)"`, padded
-    /// when it scrolls.
+    /// when it scrolls. A stream's title is the song it names, else the entry's (the station),
+    /// and while it connects or buffers the marquee says so first: `"[Buffering: 45%] N. ..."`.
     fn refresh_title(&mut self) {
         if self.orphan.is_some() {
             // The track playing has left the playlist; its title stays as it was.
             return;
         }
         self.title_text.clear();
-        self.title_chars.clear();
         self.title_scrolls = false;
         // Without an orphan, the current track is the current entry.
         let Some(t) = self.tracks.get(self.current) else {
+            self.title_moved |= !self.title_chars.is_empty();
+            self.title_chars.clear();
             return;
         };
+        let name = self
+            .stream
+            .as_ref()
+            .and_then(|s| s.song.as_deref())
+            .unwrap_or(&t.title);
         let mut s = String::with_capacity(64);
-        push_fmt(&mut s, format_args!("{}. {}", self.current + 1, t.title));
-        self.title_text.clone_from(&s);
+        match self.stream_status {
+            StreamStatus::Playing => {}
+            StreamStatus::Connecting => s.push_str("[Connecting] "),
+            StreamStatus::Buffering(percent) => {
+                push_fmt(&mut s, format_args!("[Buffering: {percent}%] "));
+            }
+            StreamStatus::Reconnecting => s.push_str("[Reconnecting] "),
+        }
+        let status = s.len();
+        push_fmt(&mut s, format_args!("{}. {name}", self.current + 1));
+        self.title_text.clear();
+        self.title_text.push_str(&s[status..]);
         if let Some(secs) = t.seconds {
             s.push_str(" (");
             write_time(&mut s, secs);
@@ -1481,7 +1641,11 @@ impl Ui {
         if self.title_scrolls {
             s.push_str(MARQUEE_SEPARATOR);
         }
-        self.title_chars.extend(s.chars());
+        if !self.title_chars.iter().copied().eq(s.chars()) {
+            self.title_chars.clear();
+            self.title_chars.extend(s.chars());
+            self.title_moved = true;
+        }
     }
 
     /// The current track's number in the playlist and its title ("3. Artist - Title"), as the
@@ -1512,7 +1676,8 @@ impl Ui {
         let len = self.title_chars.len().max(1);
         let step = if self.title_scrolls {
             // Reduce modulo the length first so the narrowing cast cannot truncate.
-            let steps = now.saturating_duration_since(self.start).as_millis() / MARQUEE_STEP_MS;
+            let steps =
+                now.saturating_duration_since(self.title_from).as_millis() / MARQUEE_STEP_MS;
             usize::try_from(steps % len as u128).unwrap_or(0)
         } else {
             0
@@ -2253,6 +2418,7 @@ impl Ui {
         use PlItem::*;
         let popup = |kind| Self::menu(kind, WindowKind::Playlist, None);
         match item {
+            AddUrl => actions.push(Action::App(AppCommand::AddUrl)),
             AddDir => actions.push(Action::App(AppCommand::AddFolder)),
             AddFile => actions.push(Action::App(AppCommand::AddFiles)),
             RemoveMisc => actions.push(popup(MenuKind::PlaylistRemove)),
@@ -2266,8 +2432,8 @@ impl Ui {
             SaveList => actions.push(Action::App(AppCommand::SaveList)),
             LoadList => actions.push(Action::App(AppCommand::LoadList)),
             FileInfo => actions.push(Action::App(AppCommand::FileInfo(InfoOf::Selection))),
-            // Streams (URLs) and Winamp's miscellaneous options are not implemented.
-            AddUrl | MiscOptions => {}
+            // Winamp's miscellaneous options are not implemented.
+            MiscOptions => {}
         }
     }
 
@@ -2356,6 +2522,7 @@ impl Ui {
             KeyCmd::Next => self.next(&mut actions),
             KeyCmd::OpenFiles => actions.push(Action::OpenFiles),
             KeyCmd::OpenFolder => actions.push(Action::OpenFolder),
+            KeyCmd::OpenUrl => actions.push(Action::App(AppCommand::PlayUrl)),
             KeyCmd::ToggleAlwaysOnTop => self.toggle_always_on_top(&mut actions),
             KeyCmd::MainMenu | KeyCmd::SkinsMenu => {
                 let kind = if cmd == KeyCmd::MainMenu {
@@ -2593,7 +2760,7 @@ mod tests {
             ui.key(KeyCmd::FileInfo(InfoOf::Selection)),
             vec![info(InfoOf::Selection)]
         );
-        let path = |t: Option<&Track>| t.map(|t| t.path.clone());
+        let path = |t: Option<&Track>| t.map(|t| t.location.clone());
         assert_eq!(path(ui.info_track(InfoOf::Current)), path(ui.tracks.get(1)));
         // The demo selects the first entry.
         assert_eq!(
@@ -2896,6 +3063,20 @@ mod tests {
         assert_eq!(t0.chars().count(), m::MARQUEE_CHARS);
         assert_eq!(&t0[1..], &t1[..t1.len() - 1]);
         assert!(t0.starts_with("1. DJ Mike Llama"));
+    }
+
+    #[test]
+    fn the_marquee_starts_over_when_its_text_changes() {
+        let mut ui = Ui::demo();
+        let later = ui.start + Duration::from_secs(10);
+        assert!(!ui.marquee_text(later).starts_with("1. "), "scrolled along");
+        let _ = ui.key(KeyCmd::Next);
+        ui.tick(later);
+        assert!(ui.marquee_text(later).starts_with("2. Nullsoft"));
+        // Text that stays the same scrolls on from there.
+        let after = later + Duration::from_secs(1);
+        ui.tick(after);
+        assert!(!ui.marquee_text(after).starts_with("2. "));
     }
 
     #[test]
@@ -3725,5 +3906,130 @@ mod tests {
         ui.remove_missing(|p| p.ends_with("03.mp3"));
         assert_eq!(ui.tracks.len(), 1);
         assert_eq!(ui.tracks[0].title, "Justin F. - Rolling Llama (Radio Edit)");
+        // Whether a stream is there can only be found out by playing it.
+        let _ = ui.add_tracks([Track::from_url("http://radio.example/".into())]);
+        ui.remove_missing(|_| false);
+        assert_eq!(ui.tracks.len(), 1);
+        assert!(ui.tracks[0].location.is_url());
+    }
+
+    fn radio() -> Ui {
+        let mut ui = Ui::new();
+        let _ = ui.add_tracks([
+            Track::from_url("http://radio.example/live".into()),
+            Track {
+                title: "My Station".into(),
+                seconds: None,
+                location: Location::Url("https://other.example/".into()),
+            },
+        ]);
+        ui
+    }
+
+    fn window_title(ui: &Ui) -> String {
+        let mut s = String::new();
+        ui.write_window_title(&mut s);
+        s
+    }
+
+    #[test]
+    fn a_stream_shows_its_progress_its_station_and_its_songs() {
+        let mut ui = radio();
+        let now = ui.start;
+        let mut actions = Vec::new();
+        ui.play_track(0, &mut actions);
+        assert_eq!(actions, [audio(Transport::Open(0))]);
+        assert!(ui.is_working() && !ui.shows_position());
+        assert!(
+            ui.marquee_text(now)
+                .starts_with("[Connecting] 1. http://radio")
+        );
+        let event = |ui: &mut Ui, e| {
+            let mut actions = Vec::new();
+            ui.audio_event(e, &mut actions);
+            assert!(actions.is_empty(), "{actions:?}");
+        };
+        event(&mut ui, Event::Status(StreamStatus::Buffering(40)));
+        assert!(ui.marquee_text(now).starts_with("[Buffering: 40%] 1. "));
+        assert_eq!(ui.title(), "1. http://radio.example/live");
+        let info = TrackInfo {
+            sample_rate: 44_100,
+            channels: 2,
+            kbps: Some(128),
+            ..TrackInfo::default()
+        };
+        event(&mut ui, Event::Started(info.clone()));
+        assert_eq!((ui.khz, ui.kbps, ui.stereo), (44, 128, true));
+        assert_eq!(ui.tracks[0].seconds, None);
+        let station = Station {
+            name: Some("Radio Llama".into()),
+            ..Station::default()
+        };
+        event(&mut ui, Event::Station(Box::new(station.clone())));
+        event(&mut ui, Event::Status(StreamStatus::Playing));
+        assert!(!ui.is_working());
+        assert_eq!(
+            ui.tracks[0].title, "Radio Llama",
+            "the entry takes its name"
+        );
+        assert_eq!(ui.marquee_text(now), "1. Radio Llama");
+        event(&mut ui, Event::StreamTitle("Band - Song".into()));
+        assert_eq!(ui.stream_song(), Some("Band - Song"));
+        assert_eq!(ui.marquee_text(now), "1. Band - Song");
+        assert_eq!(window_title(&ui), "1. Band - Song - NeoAmp");
+        assert_eq!(
+            ui.tracks[0].title, "Radio Llama",
+            "the entry keeps the station"
+        );
+        let details = ui.stream_details(&ui.tracks[0].location.clone()).unwrap();
+        assert_eq!(details.station, Some(station));
+        assert_eq!(details.song.as_deref(), Some("Band - Song"));
+        assert_eq!(details.info, Some(info));
+        assert_eq!(
+            ui.stream_details(&ui.tracks[1].location.clone()),
+            Some(StreamDetails::default()),
+            "a stream not playing has told nothing"
+        );
+        assert_eq!(ui.stream_details(&Location::File("/a.mp3".into())), None);
+        event(&mut ui, Event::StreamTitle(String::new()));
+        assert_eq!(ui.title(), "1. Radio Llama");
+        // Streams cannot seek.
+        assert!(ui.key(KeyCmd::SeekForward).is_empty());
+        assert!(ui.key(KeyCmd::SeekBack).is_empty());
+        let _ = ui.key(KeyCmd::Stop);
+        assert_eq!(ui.marquee_text(now), "1. Radio Llama");
+        assert!(ui.stream_song().is_none());
+    }
+
+    #[test]
+    fn a_stream_titled_by_its_playlist_keeps_its_title() {
+        let mut ui = radio();
+        let mut actions = Vec::new();
+        ui.play_track(1, &mut actions);
+        let station = Station {
+            name: Some("Server's own name".into()),
+            ..Station::default()
+        };
+        ui.audio_event(Event::Station(Box::new(station)), &mut actions);
+        assert_eq!(ui.tracks[1].title, "My Station");
+        // A station's news about a stream no longer playing changes nothing.
+        let _ = ui.key(KeyCmd::Stop);
+        ui.audio_event(Event::StreamTitle("Late".into()), &mut actions);
+        ui.audio_event(Event::Status(StreamStatus::Reconnecting), &mut actions);
+        assert_eq!(ui.marquee_text(ui.start), "2. My Station");
+    }
+
+    #[test]
+    fn a_stream_that_cannot_be_kept_going_gives_way_to_the_next_entry() {
+        let mut ui = radio();
+        let mut actions = Vec::new();
+        ui.play_track(0, &mut actions);
+        actions.clear();
+        ui.audio_event(Event::Failed("gave up".into()), &mut actions);
+        assert_eq!(actions, [audio(Transport::Open(1))]);
+        assert!(
+            ui.marquee_text(ui.start)
+                .starts_with("[Connecting] 2. My Station")
+        );
     }
 }

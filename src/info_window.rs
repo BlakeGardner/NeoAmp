@@ -1,6 +1,7 @@
 //! The File info dialog's OS window (see [`crate::dialog_window`]). The file is read on a
 //! thread of its own, so a slow disk never holds up the interface: the dialog opens at once and
-//! fills in when the file has been read.
+//! fills in when the file has been read. What it shows about a stream comes from the app,
+//! which hears it from the audio engine as the stream plays.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -13,11 +14,11 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::WindowId;
 
-use crate::audio;
+use crate::audio::{self, Location};
 use crate::canvas::Image;
 use crate::dialog_window::{DialogWindow, window_size};
 use crate::font::TtfFont;
-use crate::info::{self, Contents, Info, Key, Outcome};
+use crate::info::{self, Contents, Info, Key, Outcome, StreamDetails};
 use crate::menu;
 
 /// The dialog and its window.
@@ -62,9 +63,21 @@ fn read(path: PathBuf) -> Receiver<Contents> {
     rx
 }
 
+/// What the dialog shows first about `location`, and where a file's details will arrive: a
+/// file is read on a thread of its own, and a stream shows `stream` (nothing yet, if `None`).
+fn start(
+    location: &Location,
+    stream: Option<StreamDetails>,
+) -> (Contents, Option<Receiver<Contents>>) {
+    match location {
+        Location::File(path) => (Contents::Reading, Some(read(path.clone()))),
+        Location::Url(_) => (Contents::Stream(Box::new(stream.unwrap_or_default())), None),
+    }
+}
+
 impl InfoWindow {
-    /// Open the dialog about the file at `path`, at `zoom` on a desktop scaled by
-    /// `scale_factor`.
+    /// Open the dialog about a file or a stream (showing `stream` about a stream), at `zoom`
+    /// on a desktop scaled by `scale_factor`.
     ///
     /// # Errors
     /// Fails if no font is found or the window cannot be created.
@@ -73,13 +86,15 @@ impl InfoWindow {
         zoom: f64,
         scale_factor: f64,
         on_top: bool,
-        path: PathBuf,
+        location: Location,
+        stream: Option<StreamDetails>,
     ) -> Result<InfoWindow> {
         let scale = zoom * scale_factor;
         let font =
             TtfFont::load_menu(menu::font_px(scale)).context("no font for the File info dialog")?;
-        let reading = Some(read(path.clone()));
-        let info = Info::new(scale, &font, path);
+        let (contents, reading) = start(&location, stream);
+        let mut info = Info::new(scale, &font, location);
+        info.set_contents(contents);
         let (w, h) = info.size();
         let window = DialogWindow::open(el, info::TITLE, (w, h), on_top)?;
         Ok(InfoWindow {
@@ -102,15 +117,29 @@ impl InfoWindow {
         self.focused
     }
 
-    /// Show the file at `path` instead, and bring the dialog to the front with the keyboard
-    /// focus.
-    pub(crate) fn show(&mut self, path: PathBuf) {
-        if path != self.info.path() {
-            self.reading = Some(read(path.clone()));
-            self.info.show(path);
+    /// Show another file or stream instead (showing `stream` about a stream), and bring the
+    /// dialog to the front with the keyboard focus.
+    pub(crate) fn show(&mut self, location: Location, stream: Option<StreamDetails>) {
+        if &location != self.info.location() {
+            let (contents, reading) = start(&location, stream);
+            self.reading = reading;
+            self.info.show(location);
+            self.info.set_contents(contents);
             self.redraw();
         }
         self.window.window().focus_window();
+    }
+
+    /// The stream at `url` has told more about itself: show it, if the dialog is about it.
+    pub(crate) fn update_stream(&mut self, url: &str, stream: StreamDetails) {
+        if self.info.location().url() != Some(url) {
+            return;
+        }
+        let contents = Contents::Stream(Box::new(stream));
+        if self.info.contents() != &contents {
+            self.info.set_contents(contents);
+            self.redraw();
+        }
     }
 
     fn pointer(&self) -> (i32, i32) {

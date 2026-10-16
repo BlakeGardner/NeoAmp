@@ -9,7 +9,9 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
 use winit::window::WindowId;
 
+use crate::app::{EditShortcut, edit_shortcut};
 use crate::canvas::Image;
+use crate::clipboard;
 use crate::dialog_window::{DialogWindow, window_size};
 use crate::font::TtfFont;
 use crate::jump::{self, Jump, Key, Outcome};
@@ -162,9 +164,14 @@ impl JumpWindow {
                 let shortcut = self.modifiers.control_key()
                     || self.modifiers.alt_key()
                     || self.modifiers.super_key();
-                match (key, &event.text) {
-                    (Some(key), _) => self.jump.key(key, tracks, now),
-                    (None, Some(text)) if !shortcut => self.jump.text(text, tracks, now),
+                match (edit_shortcut(&event, self.modifiers), key, &event.text) {
+                    (Some(EditShortcut::Paste), ..) => match clipboard::text() {
+                        Some(text) => self.jump.text(text.trim(), tracks, now),
+                        None => Outcome::None,
+                    },
+                    (Some(EditShortcut::SelectAll), ..) => self.jump.select_all(now),
+                    (None, Some(key), _) => self.jump.key(key, tracks, now),
+                    (None, None, Some(text)) if !shortcut => self.jump.text(text, tracks, now),
                     _ => Outcome::None,
                 }
             }

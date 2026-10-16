@@ -16,7 +16,9 @@ use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::Path;
 
-use crate::playlist_file::{decode_text, entry_path, strip_prefix_ignore_case, written_path};
+use crate::playlist_file::{
+    decode_text, entry_location, strip_prefix_ignore_case, written_location,
+};
 use crate::ui::Track;
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
@@ -30,11 +32,11 @@ pub fn write(tracks: &[Track], base: Option<&Path>) -> Vec<u8> {
     out.extend_from_slice(b"[playlist]\r\n");
     let mut n = 0;
     for track in tracks {
-        let path = written_path(&track.path, base);
+        let path = written_location(&track.location, base);
         if path.contains(&b'\n') || path.contains(&b'\r') {
             log::warn!(
                 "{} has a line break in its name; it cannot be saved in the playlist",
-                track.path.display()
+                track.location
             );
             continue;
         }
@@ -93,7 +95,7 @@ pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
     entries
         .into_values()
         .filter_map(|e| {
-            let mut track = Track::from_path(entry_path(&e.file?, base)?);
+            let mut track = Track::new(entry_location(&e.file?, base)?);
             track.seconds = e.seconds;
             if let Some(title) = e.title.filter(|t| !t.is_empty()) {
                 track.title = title;
@@ -107,6 +109,7 @@ pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::audio::Location;
     use std::path::PathBuf;
 
     #[test]
@@ -123,12 +126,12 @@ mod tests {
                 Track {
                     title: "First".into(),
                     seconds: Some(213),
-                    path: Path::new("/lists").join("sub/one.mp3"),
+                    location: Location::File(Path::new("/lists").join("sub/one.mp3")),
                 },
                 Track {
                     title: "Second".into(),
                     seconds: None,
-                    path: Path::new("/lists").join("two.mp3"),
+                    location: Location::File(Path::new("/lists").join("two.mp3")),
                 },
                 Track::from_path(Path::new("/lists").join("four.ogg")),
             ]
@@ -142,7 +145,7 @@ mod tests {
             Track {
                 title: "A = B, live".into(),
                 seconds: Some(5),
-                path: base.join("a.mp3"),
+                location: Location::File(base.join("a.mp3")),
             },
             Track::from_path(std::env::temp_dir().join("b.flac")),
         ];
@@ -156,11 +159,36 @@ mod tests {
     }
 
     #[test]
-    fn streams_and_line_breaks_are_left_out() {
-        let text = b"[playlist]\nFile1=http://radio.example:8000/\nFile2=ok.mp3\n";
+    fn shoutcast_station_lists_give_streams() {
+        // As the SHOUTcast directory wrote them: one station, several servers.
+        let text = b"[playlist]\r\nnumberofentries=2\r\n\
+                     File1=http://radio.example:8000/\r\nTitle1=(#1 - 12/500) Radio Llama\r\n\
+                     Length1=-1\r\nFile2=http://backup.example:8000/\r\nLength2=-1\r\n\
+                     File3=mms://radio.example/old\r\nFile4=ok.mp3\r\nVersion=2\r\n";
         let got = parse(text, Path::new("/"));
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].path, PathBuf::from("/ok.mp3"));
+        assert_eq!(
+            got,
+            vec![
+                Track {
+                    title: "(#1 - 12/500) Radio Llama".into(),
+                    seconds: None,
+                    location: Location::Url("http://radio.example:8000/".into()),
+                },
+                Track::from_url("http://backup.example:8000/".into()),
+                Track::from_path(PathBuf::from("/ok.mp3")),
+            ],
+            "the mms stream is skipped"
+        );
+        let bytes = write(&got[..1], Some(Path::new("/lists")));
+        assert!(
+            String::from_utf8(bytes)
+                .unwrap()
+                .starts_with("[playlist]\r\nFile1=http://radio.example:8000/\r\n")
+        );
+    }
+
+    #[test]
+    fn line_breaks_are_left_out() {
         let bad = [Track::from_path(PathBuf::from("/a\nb.mp3"))];
         assert!(
             String::from_utf8(write(&bad, None))

@@ -3,7 +3,8 @@
 NeoAmp is a music player in Rust with a pixel-exact reproduction of the
 classic Winamp 2.x interface (main window, equalizer and playlist editor),
 drawn with classic Winamp skins, that plays MP3, MP2, AAC, M4A (AAC and
-Apple Lossless), WAV, AIFF, FLAC and Ogg Vorbis files. The transport buttons, position bar, volume, balance and ten-band
+Apple Lossless), WAV, AIFF, FLAC and Ogg Vorbis files, and SHOUTcast and
+Icecast internet radio. The transport buttons, position bar, volume, balance and ten-band
 equalizer all act on the audio, and the visualizer shows what is actually
 playing.
 
@@ -42,21 +43,26 @@ program does the same:
 - `src/playlist.rs` sorts, moves and shuffles playlist entries;
   `src/playlist_file.rs` loads and saves playlist files through `src/m3u.rs`
   and `src/pls.rs` (see [Playlist](#playlist)).
-- `src/jump.rs` is the Jump to file dialog and `src/info.rs` the File info
-  dialog; `src/jump_window.rs` and `src/info_window.rs` give them windows
-  through `src/dialog_window.rs`, and `src/classic.rs` holds the Windows 2000
-  colours, bevels and buttons they share with the menus.
-- `src/audio/` plays the music (see [Audio](#audio)), and `src/vis.rs` turns
-  the samples being played into the spectrum analyzer and oscilloscope.
+- `src/jump.rs` is the Jump to file dialog, `src/info.rs` the File info
+  dialog and `src/url_dialog.rs` the Open URL dialog; `src/jump_window.rs`,
+  `src/info_window.rs` and `src/url_window.rs` give them windows through
+  `src/dialog_window.rs`. `src/text_box.rs` is their edit box,
+  `src/clipboard.rs` reads the clipboard for it, and `src/classic.rs` holds
+  the Windows 2000 colours, bevels and buttons they share with the menus.
+- `src/audio/` plays the music (see [Audio](#audio)), internet radio included
+  (`src/audio/stream.rs`, fetched by `src/http.rs`; see
+  [Internet radio](#internet-radio)), and `src/vis.rs` turns the samples being
+  played into the spectrum analyzer and oscilloscope.
 - `src/settings.rs` remembers the settings and the playlist between runs (see
   [Saved settings](#saved-settings)); `src/m3u.rs` reads and writes the
   playlist file.
 - `src/lib.rs` exposes all of the above as a library; `src/main.rs` only
   parses the command line. `cargo test` covers layout, hit testing, input,
   playlist editing and playlist files, the skin parsers, the blitter, the
-  dialogs and menus, the saved settings and playlist, and the audio pipeline
+  dialogs and menus, the saved settings and playlist, the audio pipeline
   (decoding, resampling, the equalizer, and the decoder and mixer threads
-  working together).
+  working together), and the HTTP client and internet radio, against small
+  servers the tests run on the computer itself.
 
 Each NeoAmp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
@@ -187,7 +193,8 @@ Winamp 2.x used the system's own menus, so NeoAmp draws its menus the way
 Windows 2000 did, grey and bevelled, whatever skin is loaded:
 
 - **Main menu**: the options button at the left of the main title bar,
-  **Alt+F**, or a right-click on any window. It plays a file or a folder,
+  **Alt+F**, or a right-click on any window. It plays a file, a folder or a
+  URL (see [Internet radio](#internet-radio)),
   shows or hides the equalizer and playlist, and holds the Skins, Options,
   Playback and Visualization submenus, and Exit.
 - **Options**: the `O` in the clutter bar (also in the main menu). Time
@@ -286,6 +293,82 @@ Saving goes by the extension of the name given: `.pls` writes PLS, anything
 else extended M3U. A name without an extension gets `.m3u8`, since not every
 platform's save dialog adds the chosen type's extension.
 
+## Internet radio
+
+NeoAmp plays SHOUTcast and Icecast stations, as Winamp did, and files on the
+web.
+
+**Opening a stream.** **Ctrl+L** (Cmd+L on macOS) or Play URL... in the main
+menu opens a dialog drawn like Windows 2000's: paste or type the address and
+press Enter or Open. The stream replaces the playlist and plays, as with
+Winamp's Open URL. The playlist's ADD > URL opens the same dialog as Add URL,
+which adds the address to the end of the playlist instead. When the clipboard
+holds a web address, the dialog starts with it, selected, so that Enter opens
+it and typing replaces it; Ctrl+V pastes and Ctrl+A selects the whole
+address. An address without `http://` gets it (`radio.example:8000`), and a
+file path or `file://` URL opens that file. Stream URLs also work on the
+command line and in `.m3u`, `.m3u8` and `.pls` playlist files, and are saved
+as they were written.
+
+**Station playlists.** Stations usually link a playlist (`listen.pls`,
+`stream.m3u`) rather than the stream itself. NeoAmp reads it when the entry
+plays, and plays the first stream in it that answers; SHOUTcast's playlists
+list several servers for one station, so the others are fallbacks. The entry
+stays one entry, the playlist's address, so the station's servers are looked
+up afresh each time it plays. A playlist is recognised by its media type, or
+else by `.pls`, `.m3u` or `.m3u8` at the end of its address.
+
+**What it shows.** While a stream connects the scrolling title says
+`[Connecting]`, then `[Buffering: 45%]` until a couple of seconds of audio
+have arrived, and the small light left of the play indicator is lit (the
+skin's "working" light, which Winamp lit while buffering). Then the entry
+takes the name the station gives itself, unless a playlist file named it
+already, and the scrolling title and the window title show the song the
+station says is playing (its SHOUTcast/Icecast metadata), or the station's
+name when it names none. The song changes as its audio reaches the speakers.
+Whenever the scrolling title changes (a new song or a new status, or for a
+file a new track) it starts again from its first character, as Winamp's did.
+The time counts up from the start; the position bar has no thumb and the
+arrow keys do not seek, since a stream has no length. The bitrate and sample
+rate show as for files. Equalizer auto-load presets go by file name, so a
+stream has none.
+
+**Dropouts.** If the connection drops, or nothing arrives for 15 seconds,
+NeoAmp connects again, showing `[Reconnecting]`. It tries three more times,
+after 1, 2 and 4 seconds; if those fail too, it moves on to the next entry,
+as for a file that cannot be played. A connection that lasted half a minute
+counts as good, so a station that drops now and then is followed for as long
+as it plays. If the audio runs out while the connection is slow, the title
+shows `[Buffering: ...]` again until a couple of seconds are back. A paused
+stream keeps what arrives, up to about half a minute at 128 kbit/s; if the
+station drops the connection meanwhile, NeoAmp reconnects when play resumes,
+skipping ahead to what the station plays by then.
+
+**Formats.** Streams are decoded like files, so MP3, AAC, Ogg Vorbis (whose
+song titles come in each song's own tags, as Icecast sends them), FLAC and WAV
+play. HE-AAC ("AAC+"), common at low bitrates, plays only as its AAC core: at
+half the sample rate and without its high frequencies, since symphonia has no
+decoder for the rest. Opus streams and HLS (`.m3u8` playlists of short
+segments, which many broadcasters' own web players use) do not play; NeoAmp
+logs why and moves on. A file on the web plays to its end, without seeking.
+
+**How it works.** `src/http.rs` is a small HTTP/1.1 client written for this,
+because SHOUTcast 1.x servers answer `ICY 200 OK` instead of
+`HTTP/1.0 200 OK`, which general-purpose clients reject. HTTPS uses
+[rustls](https://crates.io/crates/rustls) with Mozilla's root certificates
+built in ([webpki-roots](https://crates.io/crates/webpki-roots)), so every
+platform checks certificates the same way. A certificate that only the
+system trusts, such as one from a company's own authority, is refused.
+`src/audio/stream.rs` connects on a thread of its own, follows playlists,
+takes the song titles out of the audio and passes the audio to the decoder
+thread through a buffer, which symphonia reads like a file that cannot seek.
+
+Everything here works the same on Linux, Windows and macOS. Only the
+clipboard differs, through [arboard](https://crates.io/crates/arboard): on
+Linux it is X11's, which XWayland shares with Wayland applications, so under
+pure Wayland with no XWayland the dialog cannot paste. Internet radio has
+been tried on Linux only.
+
 ## Playlist
 
 The playlist editor works as Winamp 2.x's did.
@@ -311,7 +394,7 @@ MISC does nothing (it is Winamp's misc options) and LIST OPTS loads a list.
 
 | Menu | Items |
 | --- | --- |
-| ADD | URL (not yet: see Phase 6 of the roadmap), folder, files |
+| ADD | URL (see [Internet radio](#internet-radio)), folder, files |
 | REM | misc (opens a menu with Remove all dead files), all, crop, selected |
 | SEL | invert, none, all |
 | MISC | sort (opens a menu: by title, file name, or path; reverse; randomize), file info (for the first selected entry, see [File info](#file-info)) and misc options (does nothing yet) |
@@ -343,8 +426,10 @@ playlists often come from Windows:
   did, without following symbolic links. Absolute Windows paths (`C:\...`)
   only work on Windows.
 - `file://` URLs are read. A `file://server/share/...` URL names a network
-  share, which only Windows can open; elsewhere it is skipped. Other URLs
-  (internet radio) are skipped and logged until streams are supported.
+  share, which only Windows can open; elsewhere it is skipped. `http://` and
+  `https://` URLs are internet radio streams (see
+  [Internet radio](#internet-radio)), and are saved as they were written.
+  Other kinds of URL (`rtsp://`, `mms://`) are skipped and logged.
 
 Saved lists are UTF-8 whatever their extension, with `\r\n` line ends for PLS
 and `\n` for M3U. Files inside the playlist's folder (or below it) are written
@@ -353,11 +438,13 @@ with their full paths.
 
 **Jump to file.** **J** (in any window, or Playback > Jump to file...) opens a
 dialog drawn like Windows 2000's, as Winamp's was: type, and the list narrows
-to the entries whose title or file name holds every word typed, ignoring case.
+to the entries whose title or file name (for a stream, its URL) holds every
+word typed, ignoring case.
 Up, Down, Page Up and Page Down move the highlight, Enter, the Jump button or a
 double-click plays it, and Escape or Close closes the dialog. Left, Right,
-Home and End move the caret in the search box. Clipboard paste is not
-supported. The dialog is an ordinary window with the system's own title bar,
+Home and End move the caret in the search box; Ctrl+V (Cmd+V on macOS) pastes,
+and Ctrl+A selects all of it, so that typing replaces it. The dialog is an
+ordinary window with the system's own title bar,
 so the window manager places and moves it; it is drawn with softbuffer like
 the menus, at the same size, in Tahoma where the system has it.
 
@@ -375,7 +462,11 @@ writes to music files. Enter, Escape, Space or Close closes it; asking for
 another file while it is open shows that one instead.
 
 The file is read on a thread of its own, so the dialog opens at once and
-fills in a moment later; a file that cannot be read says why. Tags come from
+fills in a moment later; a file that cannot be read says why. For an internet
+stream it shows the address, and while the stream plays, what its station
+says: the song (as the title), the genre, its description (as the comment),
+its name and web site, and the stream's format, bitrate, sample rate and
+channels. It follows the stream as the songs change. Tags come from
 whatever the file holds (ID3v1 and ID3v2, APE, Vorbis comments, FLAC, MP4 and
 RIFF INFO tags); a Vorbis DESCRIPTION counts as the comment. Like the Jump
 to file dialog, it is an ordinary window with the system's title bar, drawn
@@ -458,7 +549,7 @@ Two files share one folder, with the skins and presets the menus list:
   the defaults.
 - `playlist.m3u8` is the playlist as an extended M3U file, which other players
   can open too. Entries whose length it records are not scanned again at
-  startup.
+  startup. Streams are kept as their URLs, titled with their station's name.
 - `skins/` (`Skins\` on Windows and macOS) holds the skins the Skins menu
   lists. A skin opened from anywhere else, dropped onto a window or given on
   the command line is copied in, so it stays listed.
@@ -508,6 +599,10 @@ nothing extra):
 sudo apt install libasound2-dev
 ```
 
+HTTPS for internet radio comes from rustls, whose cryptography (ring)
+compiles a little C and assembly with the C compiler Rust already uses on each
+platform; it needs no system library.
+
 ```bash
 cargo run --release
 ```
@@ -522,6 +617,12 @@ them if nothing is playing. Eject picks files in a dialog (see
 
 ```bash
 cargo run --release -- ~/Music/some-album
+```
+
+Stream URLs work the same way (see [Internet radio](#internet-radio)):
+
+```bash
+cargo run --release -- http://radio.example:8000/listen.pls
 ```
 
 Load another classic skin from the Skins menu (**Alt+S**), by passing it on
@@ -554,6 +655,7 @@ cargo run --release -- --screenshot shot.png
 | Fade out, then stop | Shift-click Stop; Playback > Stop w/ fadeout | Shift+V |
 | Open files (they replace the playlist) | either eject button | L |
 | Open a folder (it replaces the playlist) | Play Folder... in the main menu | Shift+L |
+| Open a URL: internet radio, or a file on the web (it replaces the playlist) | Play URL... in the main menu | Ctrl+L |
 | Play a playlist entry | double-click it | Enter (playlist) |
 | Jump to file (search the playlist) | Playback > Jump to file... | J |
 | File info (tags and details) | the `I` in the clutter bar; MISC > FILE INFO (selected entry) | Alt+3 (in the playlist: the selected entry) |
@@ -561,7 +663,7 @@ cargo run --release -- --screenshot shot.png
 | Move the selected entries | drag them | Alt+Up / Alt+Down (playlist) |
 | Remove entries | REM menu | Delete: selected, Ctrl+Delete: crop, Alt+Delete: dead files (playlist) |
 | Sort, reverse, randomize | MISC > SORT LIST | Ctrl+Shift+1 / 2 / 3: by title / file name / path, Ctrl+R, Ctrl+Shift+R (playlist) |
-| Add files or a folder to the playlist | ADD menu | |
+| Add files, a folder or a URL to the playlist | ADD menu | |
 | New, load and save playlist files | LIST OPTS menu | Ctrl+N / Ctrl+O / Ctrl+S (playlist) |
 | Scroll the playlist | the scroll bar, its arrows, or the mouse wheel | |
 | Shuffle / Repeat | toggle buttons | S / R |
@@ -586,7 +688,7 @@ cargo run --release -- --screenshot shot.png
 
 Keys marked "(playlist)" work while the playlist window has the focus.
 [docs/SHORTCUTS.md](docs/SHORTCUTS.md) lists every key, including those of the
-menus and the Jump to file dialog.
+menus and the dialogs.
 
 On macOS, Cmd takes Ctrl's place in every shortcut above (Cmd+A, Cmd+Shift+1,
 ...) and Option is Alt; the menus show them as ⌘A, ⇧⌘1, ⌥E. There are two
@@ -605,16 +707,18 @@ most Mac apps.
 - Classic 2.x skins (`.wsz`) only. Modern `.wal` skins are a different format.
 - The minibrowser window and a Preferences dialog (Winamp's Ctrl+P) are not
   implemented. The menus leave out what NeoAmp cannot do yet
-  (Play Location, Preferences and the like) rather than grey it.
+  (Preferences and the like) rather than grey it.
 - The File info dialog shows tags but cannot edit them.
-- Internet radio is not supported yet: ADD > URL does nothing, Winamp's
-  Ctrl+L (open a URL) is not implemented, and stream URLs in playlist files
-  are skipped. The playlist's MISC OPTIONS item does nothing, and there is no
-  right-click menu for the playlist's entries (a right-click there opens the
-  main menu).
-- The Jump to file dialog's search box has no clipboard (paste) or text
-  selection, and the dialog keeps its highlight by position, not by entry, if
-  the playlist changes while it is open.
+- Internet radio plays HE-AAC ("AAC+") streams only as their AAC core,
+  without their high frequencies, and does not play Opus or HLS streams (see
+  [Internet radio](#internet-radio)). There is no directory of stations, no
+  recording of streams, and no seeking in a stream or a file on the web.
+- The playlist's MISC OPTIONS item does nothing, and there is no right-click
+  menu for the playlist's entries (a right-click there opens the main menu).
+- The dialogs' edit boxes paste (Ctrl+V) and select all (Ctrl+A), but cannot
+  copy, or select part of their text. The Jump to file dialog keeps its
+  highlight by position, not by entry, if the playlist changes while it is
+  open.
 - Tracks play back to back with a short gap, not gaplessly.
 - The output device is opened once, at startup, and never reopened. On Linux
   that device is PipeWire's or PulseAudio's, which move the stream to another

@@ -1,7 +1,7 @@
 //! The Jump to file dialog (J): a search box over the playlist, drawn like the Windows 2000
 //! dialog Winamp 2.x showed. Typing narrows the list to the entries whose title or file name
-//! holds every word typed, ignoring case; Enter, a double-click or the Jump button plays the
-//! highlighted entry and closes the dialog.
+//! (for a stream, its URL) holds every word typed, ignoring case; Enter, a double-click or
+//! the Jump button plays the highlighted entry and closes the dialog.
 //!
 //! This is the dialog's state, layout, input and drawing; `jump_window` gives it an OS
 //! window. Geometry is in physical pixels: Windows' sizes at 96 DPI times the dialog's scale,
@@ -9,18 +9,18 @@
 
 use std::time::Instant;
 
+use crate::audio::Location;
 use crate::canvas::{Image, Rect};
 use crate::classic::{self, FACE, GRAY_TEXT, SELECTION, SELECTION_TEXT, TEXT, WINDOW, line, px};
 use crate::font::TtfFont;
 use crate::menu::Measure;
+use crate::text_box::{Edit, TextBox};
 use crate::ui::{Track, push_fmt};
 
 /// The window's title.
 pub const TITLE: &str = "Jump to file";
 /// Two clicks on the same row closer than this count as a double-click.
 const DOUBLE_CLICK_MS: u128 = 400;
-/// The caret is shown for this long, then hidden for as long (Windows' default).
-const CARET_BLINK_MS: u128 = 530;
 
 /// Sizes at 96 DPI, which `px` scales.
 mod metric {
@@ -29,8 +29,6 @@ mod metric {
     pub const MARGIN: i32 = 8;
     pub const GAP: i32 = 6;
     pub const EDIT_H: i32 = 21;
-    /// From the edit box's edge to its text.
-    pub const TEXT_PAD: i32 = 4;
     pub const ROW_H: i32 = 14;
     pub const SCROLL_W: i32 = 16;
     pub const MIN_THUMB: i32 = 8;
@@ -173,9 +171,8 @@ impl Layout {
 pub struct Jump {
     scale: f64,
     layout: Layout,
-    query: String,
-    /// The caret's byte offset in `query`.
-    caret: usize,
+    /// The search box.
+    search: TextBox,
     /// The playlist entries that match, in playlist order.
     matches: Vec<usize>,
     /// The highlighted entry, as an index into `matches`.
@@ -190,8 +187,6 @@ pub struct Jump {
     /// While the scroll bar's thumb is dragged: the pointer's offset from the thumb's top.
     thumb_grab: i32,
     last_click: Option<(usize, Instant)>,
-    /// The caret blinks from here, so it shows at once after typing.
-    blink_from: Instant,
 }
 
 impl Jump {
@@ -202,8 +197,7 @@ impl Jump {
         Jump {
             scale,
             layout: Layout::new(scale, m),
-            query: String::new(),
-            caret: 0,
+            search: TextBox::new(now),
             matches: Vec::new(),
             // Resolved against the matches by `refresh`.
             selected: current,
@@ -213,7 +207,6 @@ impl Jump {
             pointer: (-1, -1),
             thumb_grab: 0,
             last_click: None,
-            blink_from: now,
         }
     }
 
@@ -237,7 +230,7 @@ impl Jump {
 
     #[must_use]
     pub fn query(&self) -> &str {
-        &self.query
+        self.search.text()
     }
 
     /// The playlist entries listed, in order.
@@ -274,7 +267,8 @@ impl Jump {
     /// first.
     fn filter(&mut self, tracks: &[Track], keep: Option<usize>) {
         let words: Vec<String> = self
-            .query
+            .search
+            .text()
             .split_whitespace()
             .map(str::to_lowercase)
             .collect();
@@ -284,8 +278,10 @@ impl Jump {
             haystack.clear();
             haystack.push_str(&t.title.to_lowercase());
             haystack.push('\n');
-            if let Some(name) = t.path.file_name() {
-                haystack.push_str(&name.to_string_lossy().to_lowercase());
+            match &t.location {
+                Location::File(_) => haystack.push_str(&t.location.name().to_lowercase()),
+                // A stream's whole address, so that its host finds it.
+                Location::Url(url) => haystack.push_str(&url.to_lowercase()),
             }
             if words.iter().all(|w| haystack.contains(w.as_str())) {
                 self.matches.push(i);
@@ -343,56 +339,64 @@ impl Jump {
     }
 
     /// The text changed: match again.
-    fn edited(&mut self, tracks: &[Track], now: Instant) {
-        self.blink_from = now;
+    fn edited(&mut self, tracks: &[Track]) {
         let keep = self.selected_entry();
         self.filter(tracks, keep);
     }
 
-    /// Typed text (from the keyboard's layout, so already shifted or composed).
+    /// Typed or pasted text (typed text comes from the keyboard's layout, so already shifted
+    /// or composed).
     pub fn text(&mut self, text: &str, tracks: &[Track], now: Instant) -> Outcome {
-        let typed: String = text.chars().filter(|c| !c.is_control()).collect();
-        if typed.is_empty() {
+        if !self.search.insert(text, now) {
             return Outcome::None;
         }
-        self.query.insert_str(self.caret, &typed);
-        self.caret += typed.len();
-        self.edited(tracks, now);
+        self.edited(tracks);
+        Outcome::Redraw
+    }
+
+    /// Select everything in the search box (Ctrl+A), so that typing replaces it.
+    pub fn select_all(&mut self, now: Instant) -> Outcome {
+        self.search.select_all(now);
         Outcome::Redraw
     }
 
     /// A key that is not text.
     pub fn key(&mut self, key: Key, tracks: &[Track], now: Instant) -> Outcome {
-        let before = |q: &str, at: usize| q[..at].chars().next_back().map_or(0, char::len_utf8);
-        let after = |q: &str, at: usize| q[at..].chars().next().map_or(0, char::len_utf8);
-        match key {
-            Key::Up => self.move_selection(-1),
-            Key::Down => self.move_selection(1),
-            Key::PageUp => self.move_selection(-self.page()),
-            Key::PageDown => self.move_selection(self.page()),
-            Key::Left => self.caret -= before(&self.query, self.caret),
-            Key::Right => self.caret += after(&self.query, self.caret),
-            Key::Home => self.caret = 0,
-            Key::End => self.caret = self.query.len(),
-            Key::Backspace | Key::Delete => {
-                let (from, to) = if key == Key::Backspace {
-                    (self.caret - before(&self.query, self.caret), self.caret)
-                } else {
-                    (self.caret, self.caret + after(&self.query, self.caret))
-                };
-                if from == to {
-                    return Outcome::None;
-                }
-                self.query.replace_range(from..to, "");
-                self.caret = from;
-                self.edited(tracks, now);
+        let edit = match key {
+            Key::Up => {
+                self.move_selection(-1);
+                return Outcome::Redraw;
             }
-            Key::Enter => {
-                return self.selected_entry().map_or(Outcome::None, Outcome::Jump);
+            Key::Down => {
+                self.move_selection(1);
+                return Outcome::Redraw;
             }
+            Key::PageUp => {
+                self.move_selection(-self.page());
+                return Outcome::Redraw;
+            }
+            Key::PageDown => {
+                self.move_selection(self.page());
+                return Outcome::Redraw;
+            }
+            Key::Enter => return self.selected_entry().map_or(Outcome::None, Outcome::Jump),
             Key::Escape => return Outcome::Close,
+            Key::Left => Edit::Left,
+            Key::Right => Edit::Right,
+            Key::Home => Edit::Home,
+            Key::End => Edit::End,
+            Key::Backspace => Edit::Backspace,
+            Key::Delete => Edit::Delete,
+        };
+        let had = (self.search.text().len(), self.search.is_all_selected());
+        if self.search.edit(edit, now) {
+            self.edited(tracks);
+        } else if matches!(edit, Edit::Backspace | Edit::Delete)
+            && had == (self.search.text().len(), false)
+        {
+            // Nothing to delete.
+            return Outcome::None;
         }
-        self.blink_from = now;
         Outcome::Redraw
     }
 
@@ -461,30 +465,6 @@ impl Jump {
         None
     }
 
-    /// The caret's byte offset nearest to `x` in the search box.
-    fn caret_at(&self, x: i32, m: &dyn Measure) -> usize {
-        let start = self.text_x() - self.text_shift(m);
-        let mut best = (0, (x - start).abs());
-        for (at, ch) in self.query.char_indices() {
-            let end = at + ch.len_utf8();
-            let d = (x - start - m.text_width(&self.query[..end])).abs();
-            if d < best.1 {
-                best = (end, d);
-            }
-        }
-        best.0
-    }
-
-    fn text_x(&self) -> i32 {
-        self.layout.edit.x + px(metric::TEXT_PAD, self.scale)
-    }
-
-    /// How far the search text is shifted left to keep the caret in the box.
-    fn text_shift(&self, m: &dyn Measure) -> i32 {
-        let room = self.layout.edit.w - 2 * px(metric::TEXT_PAD, self.scale);
-        (m.text_width(&self.query[..self.caret]) - room).max(0)
-    }
-
     /// The pointer pressed at (`x`, `y`).
     pub fn pointer_down(&mut self, x: i32, y: i32, now: Instant, m: &dyn Measure) -> Outcome {
         self.pointer = (x, y);
@@ -492,10 +472,7 @@ impl Jump {
             return Outcome::None;
         };
         match part {
-            Part::Edit => {
-                self.caret = self.caret_at(x, m);
-                self.blink_from = now;
-            }
+            Part::Edit => self.search.click(x, self.layout.edit, self.scale, m, now),
             Part::Row(i) => {
                 let double = matches!(self.last_click,
                     Some((j, t)) if j == i && now.saturating_duration_since(t).as_millis() < DOUBLE_CLICK_MS);
@@ -576,8 +553,7 @@ impl Jump {
     /// Whether the caret shows at `now`.
     #[must_use]
     pub fn caret_on(&self, now: Instant) -> bool {
-        let ms = now.saturating_duration_since(self.blink_from).as_millis();
-        (ms / CARET_BLINK_MS).is_multiple_of(2)
+        self.search.caret_on(now)
     }
 
     /// Draw the dialog into `c`, which must be [`Jump::size`]. `font` must be the menu font at
@@ -593,22 +569,7 @@ impl Jump {
 
         font.draw(c, LABEL, l.label_x, centred(l.edit), TEXT, all);
 
-        // The search box.
-        c.fill_rect(l.edit, WINDOW);
-        classic::sunken(c, l.edit, t);
-        let inner = Rect::new(
-            l.edit.x + 2 * t,
-            l.edit.y + 2 * t,
-            l.edit.w - 4 * t,
-            l.edit.h - 4 * t,
-        );
-        let x = self.text_x() - self.text_shift(font);
-        font.draw(c, &self.query, x, centred(l.edit), TEXT, inner);
-        if self.caret_on(now) {
-            let cx = x + font.width(&self.query[..self.caret]);
-            let caret = Rect::new(cx, centred(l.edit), t, lh);
-            c.fill_rect_clipped(caret, TEXT, inner);
-        }
+        self.search.draw(c, font, l.edit, t, self.scale, now);
 
         // The list.
         c.fill_rect(l.list, WINDOW);
@@ -725,7 +686,7 @@ mod tests {
         .map(|(title, file)| Track {
             title: title.into(),
             seconds: None,
-            path: PathBuf::from("/music").join(file),
+            location: Location::File(PathBuf::from("/music").join(file)),
         })
         .collect()
     }
@@ -776,6 +737,21 @@ mod tests {
             Outcome::None,
             "controls are not text"
         );
+    }
+
+    #[test]
+    fn streams_are_found_by_their_address() {
+        let now = Instant::now();
+        let mut list = tracks();
+        list.push(Track {
+            title: "Radio Llama".into(),
+            seconds: None,
+            location: Location::Url("https://ice.radio.example/llama-128".into()),
+        });
+        let mut jump = Jump::new(1.0, &Fixed, None, now);
+        jump.refresh(&list, 1);
+        let _ = jump.text("radio.example", &list, now);
+        assert_eq!(jump.matches(), [4]);
     }
 
     #[test]
@@ -838,7 +814,7 @@ mod tests {
     fn a_click_in_the_search_box_places_the_caret() {
         let (mut jump, list, now) = open(None);
         let _ = jump.text("abcd", &list, now);
-        let x = jump.text_x() + 2 * 6 + 1; // just after "ab"
+        let x = TextBox::text_x(jump.layout.edit, 1.0) + 2 * 6 + 1; // just after "ab"
         let y = centre(jump.layout.edit).1;
         let _ = jump.pointer_down(x, y, now, &Fixed);
         let _ = jump.text("-", &list, now);

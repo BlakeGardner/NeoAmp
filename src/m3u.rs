@@ -8,7 +8,9 @@
 use std::io::Write as _;
 use std::path::Path;
 
-use crate::playlist_file::{decode_text, entry_path, strip_prefix_ignore_case, written_path};
+use crate::playlist_file::{
+    decode_text, entry_location, strip_prefix_ignore_case, written_location,
+};
 use crate::ui::Track;
 
 const HEADER: &[u8] = b"#EXTM3U\n";
@@ -23,11 +25,11 @@ pub fn write(tracks: &[Track], base: Option<&Path>) -> Vec<u8> {
     let mut out = Vec::with_capacity(HEADER.len() + tracks.len() * 96);
     out.extend_from_slice(HEADER);
     for track in tracks {
-        let path = written_path(&track.path, base);
+        let path = written_location(&track.location, base);
         if path.contains(&b'\n') || path.contains(&b'\r') {
             log::warn!(
                 "{} has a line break in its name; it cannot be saved in the playlist",
-                track.path.display()
+                track.location
             );
             continue;
         }
@@ -43,8 +45,8 @@ pub fn write(tracks: &[Track], base: Option<&Path>) -> Vec<u8> {
 
 /// The entries of an M3U or extended M3U file. Relative paths are taken from `base`, the
 /// playlist's folder. Comments and directives other than `#EXTINF` are skipped, as are URLs
-/// other than `file:` ones, and an entry without a usable `#EXTINF` line is titled by its file
-/// name with its length unknown.
+/// other than `file:`, `http:` and `https:` ones, and an entry without a usable `#EXTINF`
+/// line is titled by its file name (a stream by its URL) with its length unknown.
 #[must_use]
 pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
     let bytes = bytes.strip_prefix(BOM).unwrap_or(bytes);
@@ -62,10 +64,10 @@ pub fn parse(bytes: &[u8], base: &Path) -> Vec<Track> {
             continue;
         }
         let info = info.take();
-        let Some(path) = entry_path(line, base) else {
+        let Some(location) = entry_location(line, base) else {
             continue;
         };
-        let mut track = Track::from_path(path);
+        let mut track = Track::new(location);
         if let Some((seconds, title)) = info {
             track.seconds = seconds;
             if !title.is_empty() {
@@ -94,13 +96,14 @@ fn parse_extinf(text: &[u8]) -> (Option<u32>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::Location;
     use std::path::PathBuf;
 
     fn track(title: &str, seconds: Option<u32>, path: &str) -> Track {
         Track {
             title: title.into(),
             seconds,
-            path: PathBuf::from(path),
+            location: Location::from_arg(path),
         }
     }
 
@@ -134,15 +137,33 @@ mod tests {
     #[test]
     fn file_urls_windows_1252_titles_and_streams() {
         let text = b"#EXTM3U\n#EXTINF:5,Caf\xE9\nfile:///music/a%20b.mp3\n\
-                     #EXTINF:-1,Radio\nhttp://radio.example/stream\nlast.mp3\n";
+                     #EXTINF:-1,Radio\nhttp://radio.example/stream\n\
+                     #EXTINF:-1,Not for us\nrtsp://radio.example/live\nlast.mp3\n\
+                     https://radio.example/untitled\n";
         let got = parse(text, Path::new("/lists"));
         assert_eq!(
             got,
             vec![
                 track("Café", Some(5), "/music/a b.mp3"),
+                track("Radio", None, "http://radio.example/stream"),
                 Track::from_path(Path::new("/lists").join("last.mp3")),
+                Track::from_url("https://radio.example/untitled".into()),
             ],
-            "the stream is skipped, and its #EXTINF does not stick to the next entry"
+            "the rtsp stream is skipped, and its #EXTINF does not stick to the next entry"
+        );
+    }
+
+    #[test]
+    fn streams_are_written_as_their_urls() {
+        let tracks = [track(
+            "Radio Llama",
+            None,
+            "https://radio.example/llama.pls",
+        )];
+        let bytes = write(&tracks, Some(Path::new("/lists")));
+        assert_eq!(
+            bytes,
+            b"#EXTM3U\n#EXTINF:-1,Radio Llama\nhttps://radio.example/llama.pls\n"
         );
     }
 
@@ -150,8 +171,11 @@ mod tests {
     fn relative_paths_are_taken_from_the_playlist_folder() {
         let base = Path::new("lists").join("rock");
         let got = parse(b"song.mp3\n../other.mp3\n", &base);
-        assert_eq!(got[0].path, base.join("song.mp3"));
-        assert_eq!(got[1].path, Path::new("lists").join("other.mp3"));
+        assert_eq!(got[0].location, Location::File(base.join("song.mp3")));
+        assert_eq!(
+            got[1].location,
+            Location::File(Path::new("lists").join("other.mp3"))
+        );
     }
 
     #[test]
@@ -182,6 +206,6 @@ mod tests {
         let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/music/caf\xE9.mp3"));
         let tracks = [Track::from_path(path.clone())];
         let got = parse(&write(&tracks, None), Path::new("/"));
-        assert_eq!(got[0].path, path);
+        assert_eq!(got[0].location, Location::File(path));
     }
 }

@@ -6,6 +6,7 @@
 
 use std::hash::{BuildHasher, RandomState};
 
+use crate::audio::Location;
 use crate::ui::Track;
 
 /// What "Sort list" sorts by.
@@ -13,9 +14,9 @@ use crate::ui::Track;
 pub enum SortKey {
     /// The title the playlist shows.
     Title,
-    /// The file's name without its folder.
+    /// The file's name without its folder (for a stream, the last part of its URL).
     FileName,
-    /// The whole path.
+    /// The whole path (for a stream, its URL).
     Path,
 }
 
@@ -36,12 +37,11 @@ pub fn sort_order(tracks: &[Track], key: SortKey) -> Vec<usize> {
 fn sort_text(track: &Track, key: SortKey) -> String {
     match key {
         SortKey::Title => track.title.to_lowercase(),
-        SortKey::FileName => track
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_lowercase())
-            .unwrap_or_default(),
-        SortKey::Path => track.path.to_string_lossy().to_lowercase(),
+        SortKey::FileName => track.location.name().to_lowercase(),
+        SortKey::Path => match &track.location {
+            Location::File(path) => path.to_string_lossy().to_lowercase(),
+            Location::Url(url) => url.to_lowercase(),
+        },
     }
 }
 
@@ -271,13 +271,12 @@ impl Shuffle {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn track(title: &str, path: &str) -> Track {
         Track {
             title: title.into(),
             seconds: None,
-            path: PathBuf::from(path),
+            location: Location::from_arg(path),
         }
     }
 
@@ -296,6 +295,14 @@ mod tests {
         assert_eq!(sort_order(&tracks, SortKey::FileName), [2, 0, 1]);
         assert_eq!(sort_order(&tracks, SortKey::Path), [2, 1, 0]);
         assert_eq!(sort_order(&[], SortKey::Title), Vec::<usize>::new());
+        // Streams sort by the end of their URL, or by the whole URL.
+        let mixed = [
+            track("x", "/m/b.mp3"),
+            track("y", "HTTP://radio.example/a-stream?id=9"),
+            track("z", "/m/c.mp3"),
+        ];
+        assert_eq!(sort_order(&mixed, SortKey::FileName), [1, 0, 2]);
+        assert_eq!(sort_order(&mixed, SortKey::Path), [0, 2, 1]);
     }
 
     #[test]

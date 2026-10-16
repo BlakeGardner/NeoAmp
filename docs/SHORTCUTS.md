@@ -11,7 +11,9 @@ See [macOS differences](#macos-differences).
 The code is `App::key_cmd` and `App::playlist_key` in
 [src/app.rs](../src/app.rs), with the menus' keys in
 [src/menu.rs](../src/menu.rs), the Jump to file dialog's in
-[src/jump.rs](../src/jump.rs) and the File info dialog's in
+[src/jump.rs](../src/jump.rs) and [src/jump_window.rs](../src/jump_window.rs),
+the Open URL dialog's in [src/url_window.rs](../src/url_window.rs), the edit
+boxes' in [src/text_box.rs](../src/text_box.rs) and the File info dialog's in
 [src/info_window.rs](../src/info_window.rs).
 
 ## Main, equalizer and playlist windows
@@ -42,6 +44,7 @@ These work in whichever of the three windows has the focus. The playlist has
 | --- | --- | --- |
 | L | L | Open files; they replace the playlist |
 | Shift+L | ⇧L | Open a folder; its files replace the playlist |
+| Ctrl+L | ⌘L | Open a URL (internet radio, or a file on the web); it replaces the playlist |
 | J | J | Jump to file: search the playlist and play an entry |
 | Alt+3 | ⌥3 | File info: the current track's tags and details |
 
@@ -136,9 +139,30 @@ added to the search.
 | Page Up / Page Down | Page Up / Page Down | Move the highlight a page |
 | Left / Right | ← / → | Move the caret in the search box |
 | Home / End | Home / End | Move the caret to the start or end of the search box |
-| Backspace | Delete | Delete the character before the caret |
-| Delete | ⌦ | Delete the character after the caret |
+| Backspace | Delete | Delete the character before the caret (or everything, when all is selected) |
+| Delete | ⌦ | Delete the character after the caret (or everything, when all is selected) |
+| Ctrl+V | ⌘V | Paste the clipboard's text into the search box |
+| Ctrl+A | ⌘A | Select everything in the search box, so that typing replaces it |
 | Enter | Return | Play the highlighted entry and close the dialog |
+| Escape | Esc | Close the dialog |
+
+## Open URL dialog
+
+Ctrl+L or Play URL... in the main menu opens it as "Open URL"; the
+playlist's ADD > URL opens it as "Add URL". It starts with the address on the
+clipboard, selected, if the clipboard holds one, so that Enter opens it and
+typing replaces it. A key typed with Ctrl, Alt or Cmd held is not added to
+the address.
+
+| Key | macOS | Action |
+| --- | --- | --- |
+| Left / Right | ← / → | Move the caret (with all selected: to its start or end) |
+| Home / End | Home / End | Move the caret to the start or end |
+| Backspace | Delete | Delete the character before the caret (or everything, when all is selected) |
+| Delete | ⌦ | Delete the character after the caret (or everything, when all is selected) |
+| Ctrl+V | ⌘V | Paste the clipboard's text |
+| Ctrl+A | ⌘A | Select the whole address |
+| Enter | Return | Open (or Add) the address and close the dialog |
 | Escape | Esc | Close the dialog |
 
 ## File info dialog
@@ -156,12 +180,12 @@ The dialog only shows a file's tags and details; its one button is Close.
   the MISC > SORT LIST menu there.
 - Delete is the forward-delete key, fn+Delete on a laptop keyboard. The key
   labelled "delete" on a Mac is Backspace, which only edits the Jump to file
-  search.
+  search and the Open URL address.
 - ⌘W shades a window, as Ctrl+W does in Winamp, rather than closing it as in
   most Mac apps.
 
 ## Not implemented yet
 
 Winamp shortcuts that NeoAmp does not have yet (see the
-[roadmap](ROADMAP.md)): Ctrl+L (open a URL), which waits for internet radio
-(Phase 6), and Ctrl+P (preferences), since NeoAmp has no Preferences dialog.
+[roadmap](ROADMAP.md)): Ctrl+P (preferences), since NeoAmp has no Preferences
+dialog.

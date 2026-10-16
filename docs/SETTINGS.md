@@ -288,10 +288,13 @@ The playlist is an extended M3U file, which other players can open too:
 /home/me/Music/theme.mp3
 #EXTINF:-1,02 Untitled
 /home/me/Music/02 Untitled.flac
+#EXTINF:-1,Radio Llama
+https://radio.example/llama.pls
 ```
 
 - Each entry is an optional `#EXTINF:<seconds>,<title>` line followed by the
-  file's path. `-1` means the length is not known yet.
+  file's path, or for an internet radio stream its `http://` or `https://`
+  URL. `-1` means the length is not known yet; a stream's is always `-1`.
 - NeoAmp shows the title and length from the file straight away. At startup
   it reads the tags again only for entries whose length is unknown, so a tag
   edited since shows up when that track next plays.
@@ -308,6 +311,13 @@ The playlist is an extended M3U file, which other players can open too:
   left out, with a warning.
 - Tracks that no longer exist stay in the playlist and are skipped when they
   fail to play.
+- **Streams** are written as their URLs, exactly as they were given. Their
+  title is the station's name: the one a playlist file gave it, or else the
+  name the station's server sent the first time it played (until then, the
+  URL itself). The song a station is playing is never saved. Streams are not
+  read at startup; only playing one tells what it is. URLs of other kinds
+  (`rtsp://`, `mms://`, ...) in a hand-edited file are skipped, with a
+  message in the log.
 
 ## Skins, presets and auto-load presets
 
@@ -344,6 +354,9 @@ NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
 
 - Whether a track was playing. NeoAmp always starts stopped, as Winamp did.
 - How far into the track it was.
+- What a stream was playing, and what its station said about itself (genre,
+  web site, bitrate), apart from the station's name, which becomes its
+  entry's title. The Open URL dialog keeps no list of recent addresses.
 - Which playlist rows were selected, and how far the playlist was scrolled
   (it scrolls to the current entry).
 - The output device. NeoAmp uses the system's default device.
@@ -353,8 +366,9 @@ NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
 Anything given on the command line wins over the saved settings and is then
 remembered like any other change:
 
-- Audio files or folders replace the saved playlist, and the first one plays.
-  Without any, the saved playlist comes back.
+- Audio files, folders, playlist files or stream URLs replace the saved
+  playlist, and the first one plays. Without any, the saved playlist comes
+  back.
 - A `.wsz` file (or `--skin`) replaces the saved skin, and is copied into the
   skins folder.
 - `--scale` replaces the saved zoom.

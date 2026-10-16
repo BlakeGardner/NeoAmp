@@ -9,10 +9,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use symphonia::core::formats::probe::Hint;
 
 use super::resample::Resampler;
-use super::source::Source;
-use super::{Command, Event, Shared};
+use super::source::{Read, Source};
+use super::stream::{self, Next, PipeReader, SegmentInfo, StreamInput};
+use super::{Command, Event, FileDetails, Location, Shared, Station, StreamStatus};
 
 /// How long to wait for room in a full ring before checking for commands again.
 const POLL: Duration = Duration::from_millis(10);
@@ -21,20 +23,24 @@ const POLL: Duration = Duration::from_millis(10);
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Start the decoder thread. It exits when `commands` is disconnected (the player was dropped).
+/// Streams connect with `network`'s settings.
 pub(super) fn spawn(
     shared: Arc<Shared>,
     queue: rtrb::Producer<f32>,
     rate: u32,
     commands: Receiver<Command>,
     events: Sender<(u64, Event)>,
+    network: stream::Settings,
 ) -> Result<()> {
     let worker = Worker {
         shared,
         queue,
         events,
         rate,
+        network,
         generation: 0,
         track: None,
+        waiting: false,
         pending: Vec::new(),
         pending_at: 0,
         packet: Vec::new(),
@@ -48,13 +54,43 @@ pub(super) fn spawn(
 
 /// The track being decoded.
 struct Track {
-    source: Source,
-    /// `None` when the file is already at the device rate.
+    /// The generation of the `Open` that started it, which its events carry.
+    generation: u64,
+    /// `None` while a stream connects and buffers, until its audio has been recognised, and
+    /// between one connection's audio and the next's.
+    source: Option<Source>,
+    /// `None` when the audio is already at the device rate.
     resampler: Option<Resampler>,
     /// The file has been read to the end (its tail may still be in `pending`).
     ended: bool,
     /// `ended_generation` has been published for this generation.
     end_published: bool,
+    /// The network side of an internet stream.
+    stream: Option<StreamInput>,
+}
+
+impl Track {
+    fn new(
+        generation: u64,
+        source: Option<Source>,
+        resampler: Option<Resampler>,
+        stream: Option<StreamInput>,
+    ) -> Track {
+        Track {
+            generation,
+            source,
+            resampler,
+            ended: false,
+            end_published: false,
+            stream,
+        }
+    }
+}
+
+/// Tell the UI `event` about the track started by `generation`.
+fn send(events: &Sender<(u64, Event)>, generation: u64, event: Event) {
+    // The receiver only goes away with the player, which also ends this thread.
+    let _ = events.send((generation, event));
 }
 
 struct Worker {
@@ -63,9 +99,12 @@ struct Worker {
     events: Sender<(u64, Event)>,
     /// The device's sample rate.
     rate: u32,
+    network: stream::Settings,
     /// The generation of the last command handled.
     generation: u64,
     track: Option<Track>,
+    /// A stream is connecting or buffering: check back on it shortly.
+    waiting: bool,
     /// Audio at the device rate waiting for room in the ring, read from `pending_at`.
     pending: Vec<f32>,
     pending_at: usize,
@@ -81,7 +120,7 @@ impl Worker {
                     Ok(c) => Some(c),
                     Err(_) => return,
                 }
-            } else if self.is_blocked() {
+            } else if self.is_blocked() || self.waiting {
                 match commands.recv_timeout(POLL) {
                     Ok(c) => Some(c),
                     Err(RecvTimeoutError::Timeout) => None,
@@ -114,24 +153,40 @@ impl Worker {
     }
 
     fn send(&self, generation: u64, event: Event) {
-        // The receiver only goes away with the player, which also ends this thread.
-        let _ = self.events.send((generation, event));
+        send(&self.events, generation, event);
     }
 
     fn handle(&mut self, command: Command) {
         match command {
-            Command::Open { path, generation } => {
+            Command::Open {
+                location,
+                generation,
+            } => {
                 self.generation = generation;
                 self.track = None;
+                self.waiting = false;
                 self.flush(0);
-                match self.open(&path) {
+                self.shared.kbps.store(0, Ordering::Relaxed);
+                let opened = match location {
+                    Location::File(path) => self.open(&path, generation),
+                    Location::Url(url) => StreamInput::start(url, self.network)
+                        .map(|input| Track::new(generation, None, None, Some(input))),
+                };
+                match opened {
                     Ok(track) => {
-                        let info = track.source.info.clone();
-                        self.shared
-                            .kbps
-                            .store(info.kbps.unwrap_or(0), Ordering::Relaxed);
+                        let started = track.source.as_ref().map(|s| s.info.clone());
                         self.track = Some(track);
-                        self.send(generation, Event::Started(info));
+                        match started {
+                            Some(info) => {
+                                self.shared
+                                    .kbps
+                                    .store(info.kbps.unwrap_or(0), Ordering::Relaxed);
+                                self.send(generation, Event::Started(info));
+                            }
+                            None => {
+                                self.send(generation, Event::Status(StreamStatus::Connecting));
+                            }
+                        }
                     }
                     Err(e) => self.send(generation, Event::Failed(format!("{e:#}"))),
                 }
@@ -145,7 +200,14 @@ impl Worker {
                     self.flush(0);
                     return;
                 };
-                match track.source.seek(seconds) {
+                let Some(source) = track.source.as_mut().filter(|_| track.stream.is_none()) else {
+                    // Streams cannot seek (and the UI never asks): carry on from here.
+                    log::debug!("ignoring a seek in a stream");
+                    let here = self.shared.position.load(Ordering::Relaxed);
+                    self.flush(here);
+                    return;
+                };
+                match source.seek(seconds) {
                     Ok(at) => {
                         if let Some(r) = track.resampler.as_mut() {
                             r.reset();
@@ -169,22 +231,23 @@ impl Worker {
             Command::Stop { generation } => {
                 self.generation = generation;
                 self.track = None;
+                self.waiting = false;
                 self.flush(0);
             }
         }
     }
 
-    fn open(&self, path: &Path) -> Result<Track> {
+    fn open(&self, path: &Path, generation: u64) -> Result<Track> {
         let source = Source::open(path)?;
-        let resampler = (source.rate != self.rate)
+        let resampler = self.resampler_for(&source)?;
+        Ok(Track::new(generation, Some(source), resampler, None))
+    }
+
+    /// A resampler from `source`'s rate to the device's, unless they are the same.
+    fn resampler_for(&self, source: &Source) -> Result<Option<Resampler>> {
+        (source.rate != self.rate)
             .then(|| Resampler::new(source.rate, self.rate))
-            .transpose()?;
-        Ok(Track {
-            source,
-            resampler,
-            ended: false,
-            end_published: false,
-        })
+            .transpose()
     }
 
     /// Have the callback drop everything queued and count the new generation's position from
@@ -209,13 +272,132 @@ impl Worker {
         }
     }
 
-    /// Queue what is pending, then decode the next packet if the ring has room for more.
+    /// Queue what is pending, then decode the next packet if the ring has room for more (and,
+    /// for a stream, there is enough to decode).
     fn step(&mut self) {
+        self.waiting = false;
         if self.push_pending() {
-            self.decode_next();
-            self.push_pending();
+            if self.ready_to_decode() {
+                self.decode_next();
+                self.push_pending();
+            } else {
+                self.waiting = true;
+            }
         }
         self.publish_end();
+    }
+
+    /// The device has less than an eighth of its queue left to play.
+    fn queue_low(&self) -> bool {
+        let capacity = self.queue.buffer().capacity();
+        capacity - self.queue.slots() < capacity / 8
+    }
+
+    /// Whether to decode a packet now. Files always may; a stream is told how the network is
+    /// doing, and its news is passed on to the UI.
+    fn ready_to_decode(&mut self) -> bool {
+        let queue_low = self.queue_low();
+        let Some(track) = self.track.as_mut() else {
+            return false;
+        };
+        let generation = track.generation;
+        let Some(input) = track.stream.as_mut() else {
+            return true;
+        };
+        for title in input.due_titles() {
+            send(&self.events, generation, Event::StreamTitle(title));
+        }
+        let next = input.next(track.source.is_some(), queue_low);
+        if let Some(status) = input.take_status() {
+            send(&self.events, generation, Event::Status(status));
+        }
+        match next {
+            Next::Decode => true,
+            Next::Wait => false,
+            Next::Open(info) => {
+                self.open_segment(info);
+                false
+            }
+            Next::End => {
+                track.ended = true;
+                false
+            }
+            Next::Fail(why) => {
+                send(&self.events, generation, Event::Failed(why));
+                self.track = None;
+                false
+            }
+        }
+    }
+
+    /// Recognise the audio of the stream's segment now being read, and start playing it.
+    fn open_segment(&mut self, info: SegmentInfo) {
+        let Some(track) = self.track.as_ref() else {
+            return;
+        };
+        let Some(input) = track.stream.as_ref() else {
+            return;
+        };
+        let reader = PipeReader::new(
+            Arc::clone(input.pipe()),
+            Arc::clone(&self.shared),
+            track.generation,
+        );
+        let mut hint = Hint::new();
+        if let Some(mime) = &info.mime {
+            hint.mime_type(mime);
+        }
+        if let Some(ext) = &info.extension {
+            hint.with_extension(ext);
+        }
+        let opened = Source::open_stream(Box::new(reader), &hint);
+        self.start_source(opened, info.station);
+    }
+
+    /// Play a stream's audio, recognised afresh after connecting (again), or after a chained
+    /// stream started its next song. Tell the UI what it is, or why it cannot be played.
+    fn start_source(&mut self, opened: Result<(Source, FileDetails)>, mut station: Station) {
+        let opened = opened.and_then(|(source, details)| {
+            let resampler = self.resampler_for(&source)?;
+            Ok((source, details, resampler))
+        });
+        let Some(track) = self.track.as_mut() else {
+            return;
+        };
+        let generation = track.generation;
+        let (source, details, resampler) = match opened {
+            Ok(opened) => opened,
+            Err(e) => {
+                send(&self.events, generation, Event::Failed(format!("{e:#}")));
+                self.track = None;
+                return;
+            }
+        };
+        station.format = details.format;
+        station.codec = details.codec;
+        let mut info = source.info.clone();
+        info.kbps = station.kbps.or(info.kbps);
+        self.shared
+            .kbps
+            .store(info.kbps.unwrap_or(0), Ordering::Relaxed);
+        track.source = Some(source);
+        track.resampler = resampler;
+        send(&self.events, generation, Event::Started(info));
+        send(
+            &self.events,
+            generation,
+            Event::Station(Box::new(station.clone())),
+        );
+        // A chained Ogg stream names each song in its own tags.
+        if let Some(title) = details.tags.playlist_title() {
+            send(&self.events, generation, Event::StreamTitle(title));
+        }
+        if let Some(input) = track.stream.as_mut() {
+            input.playing(station);
+            if let Some(status) = input.take_status() {
+                send(&self.events, generation, Event::Status(status));
+            }
+        }
     }
 
     fn decode_next(&mut self) {
@@ -225,15 +407,19 @@ impl Worker {
         if track.ended {
             return;
         }
+        let Some(source) = track.source.as_mut() else {
+            return;
+        };
         self.packet.clear();
-        let more = match track.source.read(&mut self.packet) {
-            Ok(more) => more,
+        let read = match source.read(&mut self.packet) {
+            Ok(read) => read,
             Err(e) => {
                 // A broken file mid-way: play what was decoded and move on.
                 log::warn!("decoding stopped: {e:#}");
-                false
+                Read::End
             }
         };
+        let more = read == Read::Audio;
         let converted = match track.resampler.as_mut() {
             Some(r) => {
                 let result = r.process(&self.packet, &mut self.pending);
@@ -252,11 +438,30 @@ impl Worker {
             log::warn!("resampling failed: {e:#}");
             track.ended = true;
         }
-        if !more {
-            track.ended = true;
-        }
-        if let Some(kbps) = track.source.take_kbps() {
+        if let Some(kbps) = source.take_kbps() {
             self.shared.kbps.store(kbps, Ordering::Relaxed);
+        }
+        if more {
+            return;
+        }
+        if track.stream.is_none() {
+            track.ended = true;
+            return;
+        }
+        // A stream: this connection's audio is over. The next is recognised afresh once it
+        // has buffered; a chained stream's next song is decoded at once.
+        track.resampler = None;
+        let Some(source) = track.source.take() else {
+            return;
+        };
+        if read == Read::NewStream {
+            let station = track
+                .stream
+                .as_ref()
+                .map(|s| s.station.clone())
+                .unwrap_or_default();
+            let next = source.next_stream();
+            self.start_source(next, station);
         }
     }
 

@@ -1,16 +1,17 @@
-//! Reading one audio file with symphonia: its tags and length, and its audio as stereo `f32`
-//! at the file's own sample rate.
+//! Reading one audio file or stream with symphonia: its tags and length, and its audio as
+//! stereo `f32` at its own sample rate.
 
 use std::fs::File;
 use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use symphonia::core::codecs::audio::well_known::CODEC_ID_OPUS;
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::{MetadataOptions, StandardTag};
 use symphonia::core::units::{Duration, Time, TimeBase, Timestamp};
 
@@ -37,6 +38,18 @@ pub(super) struct Source {
     bitrate_secs: f64,
 }
 
+/// What [`Source::read`] found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Read {
+    /// A packet's audio.
+    Audio,
+    /// The end of the file, or of what a stream's connection delivered.
+    End,
+    /// A new stream starts in the same bytes, with tracks and decoders of its own: the next
+    /// song of a chained Ogg stream, as Icecast sends them. See [`Source::next_stream`].
+    NewStream,
+}
+
 /// A probed file before a decoder is attached.
 struct Opened {
     format: Box<dyn FormatReader>,
@@ -53,14 +66,41 @@ fn open_format(path: &Path) -> Result<(Opened, FileDetails)> {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(ext);
     }
+    probe_format(mss, &hint, size)
+}
+
+/// Recognise what `mss` holds, `size` bytes of it if that is known, and read its tags.
+fn probe_format(
+    mss: MediaSourceStream<'static>,
+    hint: &Hint,
+    size: Option<u64>,
+) -> Result<(Opened, FileDetails)> {
     let mut format = symphonia::default::get_probe()
         .probe(
-            &hint,
+            hint,
             mss,
             FormatOptions::default(),
             MetadataOptions::default(),
         )
         .context("unsupported or unrecognised format")?;
+    let (track, details) = describe(format.as_mut(), size, false)?;
+    let opened = Opened {
+        format,
+        track_id: track.0,
+        time_base: track.1,
+        info: details.info.clone(),
+    };
+    Ok((opened, details))
+}
+
+/// The audio track `format` plays (its id and time base), and what it holds. The tags are those
+/// of every metadata revision so far, or with `latest`, only of the newest: those of the song
+/// a chained stream has just started.
+fn describe(
+    format: &mut dyn FormatReader,
+    size: Option<u64>,
+    latest: bool,
+) -> Result<((u32, Option<TimeBase>), FileDetails)> {
     let track = format
         .default_track(TrackType::Audio)
         .context("no audio track")?;
@@ -91,7 +131,7 @@ fn open_format(path: &Path) -> Result<(Opened, FileDetails)> {
     let bits_per_sample = params.bits_per_sample;
     let track_id = track.id;
     let time_base = track.time_base;
-    let tags = read_tags(format.as_mut());
+    let tags = read_tags(format, latest);
     let info = TrackInfo {
         title: tags.playlist_title(),
         seconds,
@@ -103,17 +143,11 @@ fn open_format(path: &Path) -> Result<(Opened, FileDetails)> {
         tags,
         format: format.format_info().long_name.to_owned(),
         codec,
-        info: info.clone(),
+        info,
         bits_per_sample,
         size,
     };
-    let opened = Opened {
-        format,
-        track_id,
-        time_base,
-        info,
-    };
-    Ok((opened, details))
+    Ok(((track_id, time_base), details))
 }
 
 /// Read a file's tags and length without decoding it.
@@ -126,14 +160,17 @@ pub(super) fn details(path: &Path) -> Result<FileDetails> {
     open_format(path).map(|(_, d)| d)
 }
 
-/// The tags in every metadata revision read so far. Where a tag appears more than once, the
-/// first non-empty value counts, from the oldest revision on, and in each the media's tags
-/// before the track's.
-fn read_tags(format: &mut dyn FormatReader) -> Tags {
+/// The tags in every metadata revision read so far, or with `latest`, in the newest only.
+/// Where a tag appears more than once, the first non-empty value counts, from the oldest
+/// revision on, and in each the media's tags before the track's.
+fn read_tags(format: &mut dyn FormatReader, latest: bool) -> Tags {
     let mut tags = Tags::default();
     let mut track_number = None;
     let mut track_total = None;
     let mut log = format.metadata();
+    if latest {
+        log.skip_to_latest();
+    }
     loop {
         if let Some(rev) = log.current() {
             let per_track = rev.per_track.iter().flat_map(|t| &t.metadata.tags);
@@ -180,6 +217,35 @@ fn read_tags(format: &mut dyn FormatReader) -> Tags {
 impl Source {
     pub(super) fn open(path: &Path) -> Result<Source> {
         let (opened, _) = open_format(path)?;
+        Source::decode(opened)
+    }
+
+    /// Start reading a stream from `media`, which cannot seek. `hint` may give its media type
+    /// and the extension its URL ends in. Returns the source and what the stream holds.
+    pub(super) fn open_stream(
+        media: Box<dyn MediaSource>,
+        hint: &Hint,
+    ) -> Result<(Source, FileDetails)> {
+        let mss = MediaSourceStream::new(media, Default::default());
+        let (opened, details) = probe_format(mss, hint, None)?;
+        Ok((Source::decode(opened)?, details))
+    }
+
+    /// After [`Read::NewStream`]: decode the stream that has started, whose tracks and tags
+    /// the format reader has read already (it has moved on to them).
+    pub(super) fn next_stream(mut self) -> Result<(Source, FileDetails)> {
+        let ((track_id, time_base), details) = describe(self.format.as_mut(), None, true)?;
+        let opened = Opened {
+            format: self.format,
+            track_id,
+            time_base,
+            info: details.info.clone(),
+        };
+        Ok((Source::decode(opened)?, details))
+    }
+
+    /// Attach a decoder to a probed file or stream.
+    fn decode(opened: Opened) -> Result<Source> {
         let track = opened
             .format
             .tracks()
@@ -193,7 +259,13 @@ impl Source {
             .context("no audio codec parameters")?;
         let decoder = symphonia::default::get_codecs()
             .make_audio_decoder(params, &AudioDecoderOptions::default())
-            .context("unsupported codec")?;
+            .with_context(|| {
+                if params.codec == CODEC_ID_OPUS {
+                    "unsupported codec (Opus)".to_owned()
+                } else {
+                    format!("unsupported codec ({})", params.codec)
+                }
+            })?;
         Ok(Source {
             format: opened.format,
             decoder,
@@ -223,15 +295,16 @@ impl Source {
         }
     }
 
-    /// Decode the next packet and append it to `out` as interleaved stereo. Returns `false` at
-    /// the end of the file.
-    pub(super) fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {
+    /// Decode the next packet and append it to `out` as interleaved stereo.
+    pub(super) fn read(&mut self, out: &mut Vec<f32>) -> Result<Read> {
         loop {
             let packet = match self.format.next_packet() {
                 Ok(Some(p)) => p,
-                // `ResetRequired` means a chained stream (e.g. a new Ogg link); treat it as the end.
-                Ok(None) | Err(Error::ResetRequired) => return Ok(false),
-                Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => return Ok(false),
+                Ok(None) => return Ok(Read::End),
+                Err(Error::ResetRequired) => return Ok(Read::NewStream),
+                Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => {
+                    return Ok(Read::End);
+                }
                 Err(e) => return Err(e.into()),
             };
             if packet.track_id != self.track_id {
@@ -262,7 +335,7 @@ impl Source {
                 continue;
             }
             to_stereo(&self.decoded[skip * channels..], channels, out);
-            return Ok(true);
+            return Ok(Read::Audio);
         }
     }
 
@@ -356,7 +429,7 @@ pub(super) mod tests {
 
     fn read_all(src: &mut Source) -> Vec<f32> {
         let mut out = Vec::new();
-        while src.read(&mut out).unwrap() {}
+        while src.read(&mut out).unwrap() == Read::Audio {}
         out
     }
 
@@ -483,7 +556,7 @@ pub(super) mod tests {
         let mut src = Source::open(&path).unwrap();
         let at = src.seek(1.25).unwrap();
         let mut out = Vec::new();
-        assert!(src.read(&mut out).unwrap());
+        assert_eq!(src.read(&mut out).unwrap(), Read::Audio);
         let rest = read_all(&mut src);
         std::fs::remove_file(&path).unwrap();
         assert!((at - 1.25).abs() < 1e-9);
@@ -492,6 +565,38 @@ pub(super) mod tests {
         assert!((first - 2000.0).abs() < 0.1, "got {first}");
         assert!((out[1] + 1.0 / 32768.0).abs() < 1e-6);
         assert_eq!((out.len() + rest.len()) / 2, 6000);
+    }
+
+    /// Two Ogg Vorbis songs of a quarter second each at 8 kHz, "Chain - One" and
+    /// "Chain - Two", one after the other in one stream, as Icecast sends a station's songs.
+    const CHAINED: &[u8] = include_bytes!("testdata/chained.ogg");
+
+    #[test]
+    fn a_chained_stream_moves_on_to_its_next_song_and_its_tags() {
+        let media = symphonia::core::io::ReadOnlySource::new(std::io::Cursor::new(CHAINED));
+        let (mut src, details) = Source::open_stream(Box::new(media), &Hint::new()).unwrap();
+        assert_eq!(
+            details.tags.playlist_title().as_deref(),
+            Some("Chain - One")
+        );
+        let mut out = Vec::new();
+        let mut read = Read::Audio;
+        while read == Read::Audio {
+            read = src.read(&mut out).unwrap();
+        }
+        assert_eq!(read, Read::NewStream);
+        let first = out.len() / 2;
+        let (mut src, details) = src.next_stream().unwrap();
+        assert_eq!(
+            details.tags.playlist_title().as_deref(),
+            Some("Chain - Two")
+        );
+        assert_eq!((details.info.sample_rate, details.info.channels), (8000, 1));
+        while src.read(&mut out).unwrap() == Read::Audio {}
+        let second = out.len() / 2 - first;
+        for frames in [first, second] {
+            assert!((1500..=2500).contains(&frames), "{frames} frames");
+        }
     }
 
     #[test]

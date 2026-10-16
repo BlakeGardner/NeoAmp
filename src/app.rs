@@ -26,7 +26,7 @@ use winit::monitor::MonitorHandle;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
 use winit::window::{Cursor, CursorIcon, CustomCursor, Window, WindowId, WindowLevel};
 
-use crate::audio::{Player, Scanner};
+use crate::audio::{Location, Player, Scanner};
 use crate::canvas::{Image, Rect};
 use crate::cursor::SkinCursor;
 use crate::dock::{self, SNAP_DISTANCE};
@@ -52,6 +52,8 @@ use crate::ui::{
     Ui, WindowKind,
 };
 use crate::upscale::{Upscaler, window_to_canvas};
+use crate::url_dialog::{Outcome as UrlOutcome, Purpose as UrlPurpose};
+use crate::url_window::UrlWindow;
 use crate::vis;
 use crate::zoom::Zoom;
 
@@ -112,8 +114,9 @@ pub struct Options {
     pub screenshot: Option<PathBuf>,
     /// The zoom to start at; `None` keeps the saved zoom or picks one from the screen height.
     pub zoom: Option<Zoom>,
-    /// Audio files and folders. They replace the saved playlist, and the first file plays.
-    pub files: Vec<PathBuf>,
+    /// Audio files, folders, playlist files and streams. They replace the saved playlist, and
+    /// the first one plays.
+    pub files: Vec<Location>,
 }
 
 /// Round a length in screen pixels to whole pixels. Window geometry stays far inside `i32`,
@@ -141,7 +144,7 @@ fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
 
 /// Whether the modifier of Winamp's Ctrl shortcuts is held. On macOS that is Cmd, as in Mac
 /// apps; the menus write it as ⌘ there (see [`crate::shortcut`]).
-fn ctrl_held(m: ModifiersState) -> bool {
+pub(crate) fn ctrl_held(m: ModifiersState) -> bool {
     if cfg!(target_os = "macos") {
         m.super_key()
     } else {
@@ -151,11 +154,32 @@ fn ctrl_held(m: ModifiersState) -> bool {
 
 /// The key a shortcut is matched against. On macOS, Option types other characters (Option+G
 /// is "©" and Option+E starts an accent), so while it is held the key is read without it.
-fn shortcut_key(event: &KeyEvent, m: ModifiersState) -> Key {
+pub(crate) fn shortcut_key(event: &KeyEvent, m: ModifiersState) -> Key {
     if cfg!(target_os = "macos") && m.alt_key() {
         event.key_without_modifiers()
     } else {
         event.logical_key.clone()
+    }
+}
+
+/// A clipboard shortcut in a dialog's edit box.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum EditShortcut {
+    /// Ctrl+V (Cmd+V on macOS).
+    Paste,
+    /// Ctrl+A (Cmd+A on macOS).
+    SelectAll,
+}
+
+/// The edit box shortcut `event` is, if it is one.
+pub(crate) fn edit_shortcut(event: &KeyEvent, m: ModifiersState) -> Option<EditShortcut> {
+    if !ctrl_held(m) || m.alt_key() {
+        return None;
+    }
+    match &shortcut_key(event, m) {
+        Key::Character(s) if s.eq_ignore_ascii_case("v") => Some(EditShortcut::Paste),
+        Key::Character(s) if s.eq_ignore_ascii_case("a") => Some(EditShortcut::SelectAll),
+        _ => None,
     }
 }
 
@@ -258,6 +282,7 @@ pub fn run(opts: Options) -> Result<()> {
         popups: Popups::default(),
         jump: None,
         info: None,
+        url: None,
         menu_skins: Vec::new(),
         menu_presets: Vec::new(),
         focused: false,
@@ -274,7 +299,10 @@ pub fn run(opts: Options) -> Result<()> {
         }
         tracks
     } else {
-        let files = opts.files.into_iter().map(absolute);
+        let files = opts.files.into_iter().map(|item| match item {
+            Location::File(path) => Location::File(absolute(path)),
+            url @ Location::Url(_) => url,
+        });
         let mut actions = Vec::new();
         app.add_tracks(playlist_file::expand(files), true, &mut actions);
         app.perform_audio(actions);
@@ -601,6 +629,8 @@ struct App {
     jump: Option<JumpWindow>,
     /// The File info dialog, while it is open.
     info: Option<InfoWindow>,
+    /// The Open URL (or Add URL) dialog, while it is open.
+    url: Option<UrlWindow>,
     /// The skins and preset files the open menu lists; its commands number them.
     menu_skins: Vec<Entry>,
     menu_presets: Vec<Entry>,
@@ -670,7 +700,7 @@ impl App {
 
     /// The current file's name, which auto-load presets go by.
     fn track_file_name(&self) -> Option<String> {
-        let name = self.ui.track()?.path.file_name()?;
+        let name = self.ui.track()?.location.path()?.file_name()?;
         Some(name.to_string_lossy().into_owned())
     }
 
@@ -679,7 +709,12 @@ impl App {
         if !self.ui.eq_auto {
             return;
         }
-        let Some(name) = self.ui.tracks.get(i).and_then(|t| t.path.file_name()) else {
+        let Some(name) = self
+            .ui
+            .tracks
+            .get(i)
+            .and_then(|t| t.location.path()?.file_name())
+        else {
             return;
         };
         if let Some(preset) = self.autoload.find(&name.to_string_lossy()) {
@@ -769,6 +804,8 @@ impl App {
             }
             AppCommand::AddFiles => self.show_dialog(Purpose::AddFiles),
             AppCommand::AddFolder => self.show_dialog(Purpose::AddFolder),
+            AppCommand::PlayUrl => self.open_url(UrlPurpose::Play, el),
+            AppCommand::AddUrl => self.open_url(UrlPurpose::Add, el),
             AppCommand::LoadList => self.show_dialog(Purpose::LoadList),
             AppCommand::SaveList => self.show_dialog(Purpose::SaveList),
             AppCommand::JumpToFile => self.open_jump(el),
@@ -779,11 +816,12 @@ impl App {
     /// Show the File info dialog about the track `of` names, or that track in the dialog if it
     /// is open already. With an empty playlist there is nothing to show.
     fn open_info(&mut self, of: InfoOf, el: &ActiveEventLoop) {
-        let Some(path) = self.ui.info_track(of).map(|t| t.path.clone()) else {
+        let Some(location) = self.ui.info_track(of).map(|t| t.location.clone()) else {
             return;
         };
+        let stream = self.ui.stream_details(&location);
         if let Some(info) = self.info.as_mut() {
-            info.show(path);
+            info.show(location, stream);
             return;
         }
         let scale_factor = self
@@ -795,7 +833,8 @@ impl App {
             self.ui.zoom.factor(),
             scale_factor,
             self.ui.always_on_top,
-            path,
+            location,
+            stream,
         );
         match opened {
             Ok(info) => self.info = Some(info),
@@ -816,6 +855,71 @@ impl App {
         if self.info.is_none() || focus_event {
             self.focus_changed(now);
         }
+    }
+
+    /// Show the Open URL dialog (or Add URL, for `purpose`), or bring it to the front if it is
+    /// open for that already.
+    fn open_url(&mut self, purpose: UrlPurpose, el: &ActiveEventLoop) {
+        if let Some(url) = &self.url
+            && url.purpose() == purpose
+        {
+            url.raise();
+            return;
+        }
+        let scale_factor = self
+            .pane(WindowKind::Main)
+            .map_or(1.0, |p| p.window.scale_factor());
+        // Like the other dialogs, it follows the zoom but not double size.
+        let opened = UrlWindow::open(
+            el,
+            purpose,
+            self.ui.zoom.factor(),
+            scale_factor,
+            self.ui.always_on_top,
+            Instant::now(),
+        );
+        match opened {
+            Ok(url) => self.url = Some(url),
+            Err(e) => log::error!("cannot show the {} dialog: {e:#}", purpose.title()),
+        }
+    }
+
+    /// An event for the Open URL dialog's window.
+    fn url_event(&mut self, event: WindowEvent, now: Instant, el: &ActiveEventLoop) {
+        let Some(url) = self.url.as_mut() else {
+            return;
+        };
+        let focus_event = matches!(event, WindowEvent::Focused(_));
+        let purpose = url.purpose();
+        let outcome = url.window_event(event, now);
+        if matches!(outcome, UrlOutcome::Open(_) | UrlOutcome::Close) {
+            // A closed window reports no more focus changes, so the focus it had is lost now.
+            self.url = None;
+        }
+        if let UrlOutcome::Open(location) = outcome {
+            self.open_location(location, purpose, el);
+        }
+        if self.url.is_none() || focus_event {
+            self.focus_changed(now);
+        }
+    }
+
+    /// Play what the Open URL dialog was given, in place of the playlist, as Winamp's did; or
+    /// for Add URL, add it to the end. A file there, a folder or a playlist file works too.
+    fn open_location(&mut self, location: Location, purpose: UrlPurpose, el: &ActiveEventLoop) {
+        log::info!("opening {location}");
+        let tracks = playlist_file::expand([location]);
+        if tracks.is_empty() {
+            log::info!("nothing playable there");
+            return;
+        }
+        let mut actions = Vec::new();
+        let play = purpose == UrlPurpose::Play;
+        if play {
+            self.ui.clear_playlist(&mut actions);
+        }
+        let _ = self.add_tracks(tracks, play, &mut actions);
+        self.handle(actions, el);
     }
 
     /// Show the Jump to file dialog, or bring it to the front if it is open.
@@ -939,6 +1043,7 @@ impl App {
             || self.popups.has_focus()
             || self.jump.as_ref().is_some_and(JumpWindow::has_focus)
             || self.info.as_ref().is_some_and(InfoWindow::has_focus)
+            || self.url.as_ref().is_some_and(UrlWindow::has_focus)
     }
 
     /// A window of ours gained or lost the focus.
@@ -1001,8 +1106,9 @@ impl App {
     ) -> std::ops::Range<usize> {
         let added = self.ui.add_tracks(tracks);
         for (i, track) in self.ui.tracks.iter().enumerate().skip(added.start) {
-            if track.seconds.is_none() {
-                self.scanner.scan(i, track.path.clone());
+            // Streams are not scanned: only playing one tells what it is.
+            if let (None, Some(path)) = (track.seconds, track.location.path()) {
+                self.scanner.scan(i, path.to_path_buf());
             }
         }
         if play && self.ui.state == PlayState::Stopped && !added.is_empty() {
@@ -1090,7 +1196,8 @@ impl App {
             return;
         }
         let mut actions = Vec::new();
-        let _ = self.add_tracks(playlist_file::expand([path]), true, &mut actions);
+        let tracks = playlist_file::expand([Location::File(path)]);
+        let _ = self.add_tracks(tracks, true, &mut actions);
         self.handle(actions, el);
     }
 
@@ -1147,7 +1254,7 @@ impl App {
             | Purpose::LoadList
             | Purpose::AddFiles
             | Purpose::AddFolder => {
-                let tracks = playlist_file::expand(paths);
+                let tracks = playlist_file::expand(paths.into_iter().map(Location::File));
                 if tracks.is_empty() {
                     log::info!("nothing playable there");
                     return;
@@ -1190,8 +1297,8 @@ impl App {
         match t {
             Transport::Open(i) => {
                 if let Some(track) = self.ui.tracks.get(i) {
-                    log::info!("playing {}", track.path.display());
-                    player.open(&track.path);
+                    log::info!("playing {}", track.location);
+                    player.open(&track.location);
                 }
             }
             Transport::Pause => player.set_paused(true),
@@ -1990,6 +2097,7 @@ impl App {
                 ("f", _, true) => KeyCmd::MainMenu,
                 ("s", _, true) => KeyCmd::SkinsMenu,
                 ("l", false, false) if shift => KeyCmd::OpenFolder,
+                ("l", true, false) => KeyCmd::OpenUrl,
                 ("=" | "+", true, _) => KeyCmd::ZoomIn,
                 ("-" | "_", true, _) => KeyCmd::ZoomOut,
                 ("0", true, _) => KeyCmd::ZoomReset,
@@ -2205,6 +2313,10 @@ impl ApplicationHandler for App {
             self.info_event(event, now);
             return;
         }
+        if self.url.as_ref().is_some_and(|u| u.id() == id) {
+            self.url_event(event, now, el);
+            return;
+        }
         if self.popups.owns(id) {
             match &event {
                 WindowEvent::KeyboardInput { event, .. } => self.menu_key(event, el),
@@ -2323,8 +2435,18 @@ impl ApplicationHandler for App {
             if let Some(jump) = self.jump.as_mut() {
                 jump.tick(&self.ui.tracks, self.ui.playlist_version(), now);
             }
+            if let Some(url) = self.url.as_mut() {
+                url.tick(now);
+            }
             if let Some(info) = self.info.as_mut() {
                 info.tick();
+                // A stream's details arrive as it plays.
+                if let Some(location) = self.ui.track().map(|t| &t.location)
+                    && let (Some(url), Some(details)) =
+                        (location.url(), self.ui.stream_details(location))
+                {
+                    info.update_stream(url, details);
+                }
             }
             for p in &self.panes {
                 p.window.request_redraw();
