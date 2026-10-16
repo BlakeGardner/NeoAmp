@@ -381,7 +381,7 @@ fn os_bytes(s: &OsStr) -> Vec<u8> {
 #[cfg(windows)]
 fn os_string(bytes: Vec<u8>) -> Option<OsString> {
     use std::os::windows::ffi::OsStringExt;
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let wide: Vec<u16> = bytes
