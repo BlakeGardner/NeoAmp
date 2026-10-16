@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -59,8 +59,7 @@ impl UrlWindow {
         now: Instant,
     ) -> Result<UrlWindow> {
         let scale = zoom * scale_factor;
-        let font = TtfFont::load_menu(menu::font_px(scale))
-            .with_context(|| format!("no font for the {} dialog", purpose.title()))?;
+        let font = TtfFont::load_menu(menu::font_px(scale));
         let start = clipboard::web_url();
         let dialog = UrlDialog::new(purpose, scale, start.as_deref(), now);
         let (w, h) = dialog.size();

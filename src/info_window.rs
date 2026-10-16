@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -90,8 +90,7 @@ impl InfoWindow {
         stream: Option<StreamDetails>,
     ) -> Result<InfoWindow> {
         let scale = zoom * scale_factor;
-        let font =
-            TtfFont::load_menu(menu::font_px(scale)).context("no font for the File info dialog")?;
+        let font = TtfFont::load_menu(menu::font_px(scale));
         let (contents, reading) = start(&location, stream);
         let mut info = Info::new(scale, &font, location);
         info.set_contents(contents);

@@ -750,9 +750,7 @@ mod tests {
 
     #[test]
     fn it_draws_its_tags() {
-        let Some(font) = TtfFont::load_menu(crate::menu::font_px(1.0)) else {
-            return; // no font on this system
-        };
+        let font = TtfFont::load_menu(crate::menu::font_px(1.0));
         let mut info = Info::new(1.0, &font, Location::File("/m/a.mp3".into()));
         info.set_contents(Contents::Read(Box::new(details())));
         let (w, h) = info.size();

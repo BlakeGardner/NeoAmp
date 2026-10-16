@@ -983,9 +983,7 @@ mod tests {
 
     #[test]
     fn drawing_lights_the_hot_item_and_marks_checked_ones() {
-        let Some(font) = TtfFont::load_menu(font_px(1.0)) else {
-            return; // no system font to draw with
-        };
+        let font = TtfFont::load_menu(font_px(1.0));
         let mut m = Menus::open(sample(), Anchor::Point(0, 0), SCREEN, 1.0, true, &font);
         let _ = m.key(Key::Char('m'), &font);
         let r = m.rect(1).unwrap();

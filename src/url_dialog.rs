@@ -424,9 +424,7 @@ mod tests {
 
     #[test]
     fn it_draws_its_box_and_buttons() {
-        let Some(font) = TtfFont::load_menu(crate::menu::font_px(1.0)) else {
-            return; // no font on this system
-        };
+        let font = TtfFont::load_menu(crate::menu::font_px(1.0));
         let now = Instant::now();
         let d = UrlDialog::new(Purpose::Play, 1.0, Some("http://radio.example/"), now);
         let (w, h) = d.size();

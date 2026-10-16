@@ -99,8 +99,8 @@ pointers" and "Stop with fadeout" in the README.
       [src/audio/mod.rs](../src/audio/mod.rs).
 - [x] Show the current song in the OS window title, for the taskbar and
       Alt+Tab: "3. Artist - Title - NeoAmp [Paused]", as Winamp wrote it.
-- [x] Honour `Font=` in `pledit.txt`, looking the family up among the
-      system's fonts with fontdb ([src/font.rs](../src/font.rs)).
+- [x] Honour `Font=` in `pledit.txt`, with built-in free fonts standing in
+      for the families skins name ([src/font.rs](../src/font.rs)).
 - [x] Use the skin's cursors (`.cur` files, [src/cursor.rs](../src/cursor.rs)),
       borrowing the base skin's where a skin has none.
 - [x] File info dialog (the **I** button, Alt+3, MISC > FILE INFO),

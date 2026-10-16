@@ -32,7 +32,7 @@ use crate::cursor::SkinCursor;
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::eqf::{self, AutoLoad};
 use crate::file_dialog::{FileDialog, Purpose};
-use crate::font::{FontLibrary, TtfFont};
+use crate::font::TtfFont;
 use crate::info::Outcome as InfoOutcome;
 use crate::info_window::InfoWindow;
 use crate::instance::{self, Claim};
@@ -241,12 +241,11 @@ pub fn run(opts: Options) -> Result<()> {
         .as_deref()
         .map(|p| load_skin(p, &base))
         .transpose()?;
-    let mut fonts = FontLibrary::default();
 
     if let Some(out) = &opts.screenshot {
         let skin = custom.as_ref().unwrap_or(&base);
-        let font = TtfFont::load_playlist(&skin.pledit.font, TtfFont::DEFAULT_PX, &mut fonts);
-        return render_screenshot(Ui::demo(), skin, font.as_ref(), out);
+        let font = TtfFont::load_playlist(&skin.pledit.font, TtfFont::DEFAULT_PX);
+        return render_screenshot(Ui::demo(), skin, Some(&font), out);
     }
 
     match &store {
@@ -263,7 +262,7 @@ pub fn run(opts: Options) -> Result<()> {
     };
     let autoload = store.as_ref().map(Store::load_autoload).unwrap_or_default();
     let font_family = custom.as_ref().unwrap_or(&base).pledit.font.clone();
-    let font = TtfFont::load_playlist(&font_family, TtfFont::DEFAULT_PX, &mut fonts);
+    let font = TtfFont::load_playlist(&font_family, TtfFont::DEFAULT_PX);
 
     let mut ui = Ui::new();
     settings.apply(&mut ui);
@@ -288,7 +287,6 @@ pub fn run(opts: Options) -> Result<()> {
         skin_path,
         font,
         font_family,
-        fonts,
         pointers: HashMap::new(),
         panes: Vec::with_capacity(3),
         drag: None,
@@ -606,12 +604,10 @@ struct App {
     custom: Option<Skin>,
     /// The file `custom` came from, to be remembered.
     skin_path: Option<PathBuf>,
-    /// The playlist's font: the one the skin names, if the system has it.
-    font: Option<TtfFont>,
+    /// The playlist's font: the built-in one for the family the skin names.
+    font: TtfFont,
     /// The family the skin named when `font` was loaded.
     font_family: String,
-    /// The system's fonts, where the skin's is looked for.
-    fonts: FontLibrary,
     /// The skin's pointers made ready for the windows, at each scale a window has needed.
     pointers: HashMap<(SkinCursor, u16), CustomCursor>,
     panes: Vec<Pane>,
@@ -732,7 +728,7 @@ impl App {
             return;
         }
         let family = family.clone();
-        self.font = TtfFont::load_playlist(&family, TtfFont::DEFAULT_PX, &mut self.fonts);
+        self.font = TtfFont::load_playlist(&family, TtfFont::DEFAULT_PX);
         self.font_family = family;
     }
 
@@ -2354,7 +2350,7 @@ impl App {
     fn render(&mut self, kind: WindowKind, now: Instant) {
         let skin = self.custom.as_ref().unwrap_or(&self.base);
         let ui = &self.ui;
-        let font = self.font.as_ref();
+        let font = Some(&self.font);
         let Some(pane) = self.panes.iter_mut().find(|p| p.kind == kind) else {
             return;
         };

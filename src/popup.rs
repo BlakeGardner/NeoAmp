@@ -151,12 +151,9 @@ impl Popups {
         self.close();
         let px = menu::font_px(scale);
         let font = match self.font.take() {
-            Some(font) if font.px() == px => Some(font),
-            Some(font) => Some(font.resized(px)),
+            Some(font) if font.px() == px => font,
+            Some(font) => font.resized(px),
             None => TtfFont::load_menu(px),
-        };
-        let Some(font) = font else {
-            return;
         };
         self.menus = Some(Menus::open(items, anchor, screen, scale, keyboard, &font));
         self.font = Some(font);

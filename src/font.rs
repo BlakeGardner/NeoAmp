@@ -1,9 +1,7 @@
 //! Text rendering: the skin's 5x6 bitmap font (text.bmp) and TrueType fonts for the playlist
-//! and the menus. The playlist's font is the one the skin's `pledit.txt` names, found among the
-//! system's fonts by [`FontLibrary`].
-
-use std::path::{Path, PathBuf};
-use std::time::Instant;
+//! and the menus. The TrueType fonts are built into NeoAmp, which reads none from the system,
+//! so the text looks the same everywhere: the font a skin's `pledit.txt` names gets the
+//! built-in one made to stand in for it.
 
 use crate::canvas::{Image, Rect};
 use crate::shortcut::Style;
@@ -89,131 +87,52 @@ pub struct TtfFont {
     letter_spacing: f32,
 }
 
-/// Arial and its look-alikes, for the playlist (and the menus when there is no Tahoma).
-/// Windows' own folder is added by [`windows_font`].
-const SANS: &[&str] = &[
-    "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
-    "/usr/share/fonts/truetype/msttcorefonts/arial.ttf",
-    "/usr/share/fonts/TTF/arial.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/System/Library/Fonts/Supplemental/Arial.ttf",
+// The fonts built into NeoAmp. NeoAmp reads no fonts from the system: fontdue draws these the
+// same way everywhere, so the text looks the same on every system. `fonts/README.md` says where
+// each comes from and under which licence.
+
+/// Liberation Sans, made to Arial's measurements: the playlist's font for Arial (nearly every
+/// skin names it) and for any family not built in, and the menus' and dialogs' font.
+const SANS: &[u8] = include_bytes!("../fonts/LiberationSans-Regular.ttf");
+/// Liberation Mono, made to Courier New's measurements.
+const MONO: &[u8] = include_bytes!("../fonts/LiberationMono-Regular.ttf");
+/// Liberation Serif, made to Times New Roman's measurements.
+const SERIF: &[u8] = include_bytes!("../fonts/LiberationSerif-Regular.ttf");
+/// Wine's Tahoma, its free stand-in for Microsoft's.
+const TAHOMA: &[u8] = include_bytes!("../fonts/tahoma.ttf");
+/// DejaVu Sans, which has the key symbols macOS writes shortcuts with (⌘ ⌥ ⇧ ← → ⌦), which
+/// the menus' font lacks.
+const DEJAVU_SANS: &[u8] = include_bytes!("../fonts/DejaVuSans.ttf");
+
+/// The font families skins name, matched ignoring case as Windows matched them, and the
+/// built-in font each gets: one made to the same measurements where there is one, else the
+/// nearest in look and width.
+const BUILT_IN: &[(&str, &[u8])] = &[
+    ("Arial", SANS),
+    ("Helvetica", SANS),
+    ("Liberation Sans", SANS),
+    ("Courier New", MONO),
+    ("Courier", MONO),
+    ("Andale Mono", MONO),
+    // Within a pixel in 50 characters of Lucida Console's width.
+    ("Lucida Console", MONO),
+    ("Lucida Sans Typewriter", MONO),
+    // Old X11 skins (from XMMS) name X's own fonts.
+    ("Fixed", MONO),
+    ("Liberation Mono", MONO),
+    ("Times New Roman", SERIF),
+    ("Times", SERIF),
+    ("Liberation Serif", SERIF),
+    ("Tahoma", TAHOMA),
+    // Windows' bitmap font, which Tahoma was drawn after.
+    ("MS Sans Serif", TAHOMA),
+    ("Microsoft Sans Serif", TAHOMA),
+    // About 3% narrower than Verdana, and like it in look.
+    ("Verdana", DEJAVU_SANS),
+    ("Lucida Sans", DEJAVU_SANS),
+    ("Lucida Sans Unicode", DEJAVU_SANS),
+    ("DejaVu Sans", DEJAVU_SANS),
 ];
-
-/// Tahoma, the menu font of Windows 2000 and XP, where Winamp 2.x ran. macOS ships it, and so
-/// does Wine (its own lookalike).
-const TAHOMA: &[&str] = &[
-    "/usr/share/wine/fonts/tahoma.ttf",
-    "/usr/share/fonts/truetype/msttcorefonts/tahoma.ttf",
-    "/usr/share/fonts/truetype/msttcorefonts/Tahoma.ttf",
-    "/usr/share/fonts/TTF/tahoma.ttf",
-    "/System/Library/Fonts/Supplemental/Tahoma.ttf",
-];
-
-/// Fonts made to the measurements of Windows fonts that skins name, for systems without them:
-/// text set in one takes the same room as in the other.
-const SUBSTITUTES: &[(&str, &[&str])] = &[
-    ("Courier New", &["Liberation Mono", "Cousine"]),
-    ("Times New Roman", &["Liberation Serif", "Tinos"]),
-    ("Arial Narrow", &["Liberation Sans Narrow"]),
-];
-
-/// Fonts with the key symbols macOS writes shortcuts with (⌘ ⌥ ⇧), which Tahoma and Arial
-/// lack. Windows' own folder is added by [`windows_font`] (Segoe UI Symbol).
-const SYMBOLS: &[&str] = &[
-    "/System/Library/Fonts/LucidaGrande.ttc",
-    "/System/Library/Fonts/Apple Symbols.ttf",
-    "/System/Library/Fonts/Menlo.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-];
-
-/// `file` in Windows' font folder (`%WINDIR%\Fonts`). `None` elsewhere.
-fn windows_font(file: &str) -> Option<PathBuf> {
-    if cfg!(windows) {
-        std::env::var_os("WINDIR").map(|dir| Path::new(&dir).join("Fonts").join(file))
-    } else {
-        None
-    }
-}
-
-/// Where to look for a font: Windows' font folder first, then `paths`.
-fn candidates(windows_file: &str, paths: &[&str]) -> Vec<PathBuf> {
-    windows_font(windows_file)
-        .into_iter()
-        .chain(paths.iter().map(PathBuf::from))
-        .collect()
-}
-
-/// The system's fonts, by family name, for the playlist font a skin names. Indexing them reads
-/// the names in every font file, so it is done once, the first time a skin names a font other
-/// than Arial.
-#[derive(Default)]
-pub struct FontLibrary {
-    db: Option<fontdb::Database>,
-}
-
-impl std::fmt::Debug for FontLibrary {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FontLibrary")
-            .field("faces", &self.db.as_ref().map(fontdb::Database::len))
-            .finish()
-    }
-}
-
-impl FontLibrary {
-    fn db(&mut self) -> &fontdb::Database {
-        self.db.get_or_insert_with(|| {
-            let started = Instant::now();
-            let mut db = fontdb::Database::new();
-            db.load_system_fonts();
-            log::debug!(
-                "indexed {} system fonts in {:?}",
-                db.len(),
-                started.elapsed()
-            );
-            db
-        })
-    }
-
-    /// The face of `family` closest to a regular one, as the bytes of its file and its index
-    /// in the file. Family names are matched ignoring case, as Windows matches them.
-    fn find(&mut self, family: &str) -> Option<(Vec<u8>, u32)> {
-        let wanted = family.to_lowercase();
-        let db = self.db();
-        let face = db
-            .faces()
-            .filter(|f| {
-                f.families
-                    .iter()
-                    .any(|(name, _)| name.to_lowercase() == wanted)
-            })
-            .min_by_key(|f| regular_distance(f.style, f.weight, f.stretch))?;
-        db.with_face_data(face.id, |data, index| (data.to_vec(), index))
-    }
-}
-
-/// How far a face is from the regular one of its family: upright first, then the weight, then
-/// the width.
-fn regular_distance(
-    style: fontdb::Style,
-    weight: fontdb::Weight,
-    stretch: fontdb::Stretch,
-) -> (bool, u16, u16) {
-    (
-        style != fontdb::Style::Normal,
-        weight.0.abs_diff(fontdb::Weight::NORMAL.0),
-        stretch
-            .to_number()
-            .abs_diff(fontdb::Stretch::Normal.to_number()),
-    )
-}
 
 impl std::fmt::Debug for TtfFont {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -233,116 +152,58 @@ impl TtfFont {
     /// The playlist's letter spacing.
     const PLAYLIST_SPACING: f32 = 0.5;
 
-    /// The playlist font: the first Arial-like font found.
+    /// The playlist's default font: the built-in Liberation Sans, made to Arial's measurements.
     #[must_use]
-    pub fn load_system(px: f32) -> Option<TtfFont> {
-        let font = Self::load_first(&candidates("arial.ttf", SANS), px, Self::PLAYLIST_SPACING);
-        if font.is_none() {
-            log::warn!("no TrueType font found; playlist falls back to the bitmap font");
-        }
-        font
+    pub fn load_default(px: f32) -> TtfFont {
+        Self::built_in(SANS, px, Self::PLAYLIST_SPACING)
     }
 
-    /// The playlist font a skin names (`Font=` in its `pledit.txt`): that family if the system
-    /// has it, else one made to its measurements, else the default (see
-    /// [`TtfFont::load_system`]), which Arial, the font nearly every skin names, also gets.
+    /// The playlist font a skin names (`Font=` in its `pledit.txt`): the built-in font for that
+    /// family (`BUILT_IN`), else the default (see [`TtfFont::load_default`]).
     #[must_use]
-    pub fn load_playlist(family: &str, px: f32, lib: &mut FontLibrary) -> Option<TtfFont> {
+    pub fn load_playlist(family: &str, px: f32) -> TtfFont {
         let family = family.trim();
-        if family.is_empty() || family.eq_ignore_ascii_case("Arial") {
-            return Self::load_system(px);
-        }
-        let substitutes = SUBSTITUTES
+        let bytes = BUILT_IN
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(family))
-            .map_or(&[][..], |(_, subs)| *subs);
-        for name in std::iter::once(family).chain(substitutes.iter().copied()) {
-            if let Some((bytes, index)) = lib.find(name)
-                && let Some(font) = Self::parse(bytes, px, index)
-            {
-                log::info!("playlist font: {name}, as the skin asks for {family}");
-                return Some(Self::sized(font, px, Self::PLAYLIST_SPACING));
-            }
+            .map(|&(_, bytes)| bytes);
+        if bytes.is_none() && !family.is_empty() {
+            log::info!("the skin's font {family} is not built in; the playlist uses the default");
         }
-        // Wine's Tahoma is not among the system's fonts.
-        if family.eq_ignore_ascii_case("Tahoma")
-            && let Some(font) = Self::load_first(
-                &candidates("tahoma.ttf", TAHOMA),
-                px,
-                Self::PLAYLIST_SPACING,
-            )
-        {
-            return Some(font);
-        }
-        log::info!("the skin's font {family} is not installed; the playlist uses the default");
-        Self::load_system(px)
+        Self::built_in(bytes.unwrap_or(SANS), px, Self::PLAYLIST_SPACING)
     }
 
-    /// The menu font: Tahoma if the system has it, else the playlist's face, without letter
-    /// spacing, with a fallback for the symbols this platform's shortcuts are written with.
+    /// The menus' and dialogs' font: the built-in Liberation Sans, without letter spacing, with
+    /// a fallback for the symbols this platform's shortcuts are written with.
     #[must_use]
-    pub fn load_menu(px: f32) -> Option<TtfFont> {
-        let mut paths = candidates("tahoma.ttf", TAHOMA);
-        paths.extend(candidates("arial.ttf", SANS));
-        let font = Self::load_first(&paths, px, 0.0);
-        if font.is_none() {
-            log::warn!("no TrueType font found; menus cannot be shown");
-        }
-        font.map(|font| font.with_symbols(Style::CURRENT.symbols()))
+    pub fn load_menu(px: f32) -> TtfFont {
+        Self::built_in(SANS, px, 0.0).with_symbols(Style::CURRENT.symbols())
     }
 
-    /// This font, drawing those of `symbols` it lacks with the first font in `SYMBOLS` that
-    /// has them all.
+    /// One of the fonts built into NeoAmp, with its sizes worked out for `px`.
+    fn built_in(bytes: &[u8], px: f32, letter_spacing: f32) -> TtfFont {
+        Self::sized(Self::parse(bytes, px), px, letter_spacing)
+    }
+
+    /// This font, drawing those of `symbols` it lacks with the built-in DejaVu Sans, which has
+    /// all the symbols shortcuts are written with.
     #[must_use]
     pub fn with_symbols(self, symbols: &[char]) -> TtfFont {
-        let lacking = || {
-            symbols
-                .iter()
-                .copied()
-                .filter(|&ch| !self.font.has_glyph(ch))
-        };
-        if lacking().next().is_none() {
+        if symbols.iter().all(|&ch| self.font.has_glyph(ch)) {
             return self;
         }
-        let fallback = candidates("seguisym.ttf", SYMBOLS).iter().find_map(|path| {
-            let font = Self::parse(std::fs::read(path).ok()?, self.px, 0)?;
-            lacking().all(|ch| font.has_glyph(ch)).then(|| {
-                log::info!("symbol font: {}", path.display());
-                font
-            })
-        });
-        if fallback.is_none() {
-            let missing: String = lacking().collect();
-            log::warn!("no font found with {missing}; the menus show boxes for them");
-        }
+        let fallback = Some(Self::parse(DEJAVU_SANS, self.px));
         TtfFont { fallback, ..self }
     }
 
-    fn load_first(paths: &[PathBuf], px: f32, letter_spacing: f32) -> Option<TtfFont> {
-        paths.iter().find_map(|path| {
-            let font = Self::from_bytes(std::fs::read(path).ok()?, px)?;
-            log::info!("font: {}", path.display());
-            Some(TtfFont {
-                letter_spacing,
-                ..font
-            })
-        })
-    }
-
-    #[must_use]
-    pub fn from_bytes(bytes: Vec<u8>, px: f32) -> Option<TtfFont> {
-        let font = Self::parse(bytes, px, 0)?;
-        Some(Self::sized(font, px, Self::PLAYLIST_SPACING))
-    }
-
-    /// Face `index` of a font file (0 unless it is a collection), made ready for `px`.
-    fn parse(bytes: Vec<u8>, px: f32, index: u32) -> Option<fontdue::Font> {
+    /// A built-in font file, made ready for `px`.
+    fn parse(bytes: &[u8], px: f32) -> fontdue::Font {
         let settings = fontdue::FontSettings {
             scale: px,
-            collection_index: index,
             ..Default::default()
         };
-        fontdue::Font::from_bytes(bytes, settings).ok()
+        fontdue::Font::from_bytes(bytes, settings)
+            .expect("the built-in fonts are TrueType files that fontdue reads")
     }
 
     fn sized(font: fontdue::Font, px: f32, letter_spacing: f32) -> TtfFont {
@@ -478,68 +339,61 @@ mod tests {
     }
 
     #[test]
-    fn a_symbol_font_draws_the_mac_key_symbols_the_menu_font_lacks() {
-        let Some(font) = TtfFont::load_menu(12.0) else {
-            return; // no system font to draw with
-        };
-        let font = font.with_symbols(Style::Mac.symbols());
+    fn the_built_in_symbol_font_draws_the_mac_key_symbols_the_menu_font_lacks() {
+        let font = TtfFont::load_menu(12.0).with_symbols(Style::Mac.symbols());
+        assert!(font.fallback.is_some(), "the menu font lacks them");
         for &ch in Style::Mac.symbols() {
-            // Only a system with no font that has them all leaves them as boxes.
-            assert!(
-                font.face(ch).has_glyph(ch) || font.fallback.is_none(),
-                "{ch}"
-            );
+            assert!(font.face(ch).has_glyph(ch), "{ch}");
         }
         assert!(
             std::ptr::eq(font.face('A'), &font.font),
             "letters stay in the menu font"
         );
         let resized = font.resized(18.0);
-        assert_eq!(resized.fallback.is_some(), font.fallback.is_some());
+        assert!(resized.fallback.is_some());
+        let plain = TtfFont::load_menu(12.0).with_symbols(Style::Windows.symbols());
+        assert!(plain.fallback.is_none(), "no symbols, no fallback");
     }
 
     #[test]
-    fn regular_faces_come_first() {
-        use fontdb::{Stretch, Style, Weight};
-        let regular = regular_distance(Style::Normal, Weight::NORMAL, Stretch::Normal);
-        let bold = regular_distance(Style::Normal, Weight::BOLD, Stretch::Normal);
-        let light = regular_distance(Style::Normal, Weight::LIGHT, Stretch::Normal);
-        let italic = regular_distance(Style::Italic, Weight::NORMAL, Stretch::Normal);
-        let narrow = regular_distance(Style::Normal, Weight::NORMAL, Stretch::Condensed);
-        assert!(regular < light && light < bold && bold < italic);
-        assert!(regular < narrow && narrow < light);
+    fn every_built_in_font_can_be_drawn() {
+        for &(family, bytes) in BUILT_IN {
+            let font = TtfFont::built_in(bytes, TtfFont::DEFAULT_PX, 0.0);
+            assert!(font.name().is_some(), "{family}");
+            assert!(font.line_height() > 0, "{family}");
+        }
     }
 
     #[test]
-    fn the_skins_font_is_found_by_family_whatever_its_case() {
-        let mut lib = FontLibrary::default();
+    fn the_skins_font_gets_its_built_in_stand_in_whatever_its_case() {
         let px = TtfFont::DEFAULT_PX;
-        let Some(default) = TtfFont::load_system(px) else {
-            return; // no system font to draw with
-        };
-        let unknown = TtfFont::load_playlist("No Such Font 12345", px, &mut lib).unwrap();
-        assert_eq!(unknown.name(), default.name(), "falls back to the default");
-        let arial = TtfFont::load_playlist(" arial ", px, &mut lib).unwrap();
-        assert_eq!(arial.name(), default.name());
-        // A common family this system has, named in another case.
-        let common = [
-            "DejaVu Serif",
-            "Liberation Serif",
-            "Noto Serif",
-            "Georgia",
-            "Verdana",
-        ];
-        let has = |lib: &mut FontLibrary, name: &str| {
-            lib.db()
-                .faces()
-                .any(|f| f.families.iter().any(|(n, _)| n == name))
-        };
-        let Some(family) = common.into_iter().find(|name| has(&mut lib, name)) else {
-            return;
-        };
-        let font = TtfFont::load_playlist(&family.to_uppercase(), px, &mut lib).unwrap();
-        let name = font.name().unwrap_or_default();
-        assert!(name.starts_with(family), "{name} for {family}");
+        for (family, face) in [
+            ("Arial", "Liberation Sans"),
+            (" arial ", "Liberation Sans"),
+            ("COURIER NEW", "Liberation Mono"),
+            ("Times New Roman", "Liberation Serif"),
+            ("liberation serif", "Liberation Serif"),
+            ("tahoma", "Tahoma"),
+            ("DejaVu Sans", "DejaVu Sans"),
+        ] {
+            let font = TtfFont::load_playlist(family, px);
+            assert_eq!(font.name(), Some(face), "{family:?}");
+            assert_eq!(font.letter_spacing, TtfFont::PLAYLIST_SPACING);
+        }
+        let menu = TtfFont::load_menu(12.0);
+        assert_eq!(menu.name(), Some("Liberation Sans"));
+        assert_eq!(menu.letter_spacing, 0.0);
+    }
+
+    #[test]
+    fn a_font_that_is_not_built_in_gets_the_default() {
+        let px = TtfFont::DEFAULT_PX;
+        let default = TtfFont::load_default(px);
+        assert_eq!(default.name(), Some("Liberation Sans"));
+        for family in ["", "No Such Font 12345", "Broadway"] {
+            let font = TtfFont::load_playlist(family, px);
+            assert_eq!(font.name(), default.name(), "{family:?}");
+        }
     }
 
     #[test]
