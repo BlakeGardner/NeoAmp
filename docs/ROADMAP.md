@@ -137,13 +137,38 @@ streams, a station directory, and recording streams.
 
 ## Phase 7: Playback and platform integration
 
-- [ ] Gapless playback (the README lists the gap as a limitation).
-- [ ] Choose the output device, and reopen it when it disappears. On Windows
-      and macOS, playback goes silent until a restart today.
-- [ ] Media keys and the OS "now playing" display: MPRIS on Linux, SMTC on
-      Windows, Now Playing on macOS. The `souvlaki` crate covers all three.
-- [ ] Single instance: a file opened from the file manager while NeoAmp runs
-      goes to the running copy instead of starting a second one.
+Done: see "Gapless playback" and "Output device" under Audio, "Media keys and
+'now playing'" and "NeoAmp already running" in the README. Before any code,
+the claim that Windows and macOS go silent until a restart when the device
+changes was checked against cpal 0.18's code and its issue tracker
+(RustAudio/cpal#1183, #1339): a stream on the default device follows the
+system's default by itself on both (Windows 10's automatic stream routing,
+macOS's default output unit), so what silenced playback was a *chosen* device
+going away, or macOS left with no output at all. The user then chose: an
+Output Device submenu under Options; a chosen device that goes away hands
+over to the default and is returned to when it comes back; on Linux, the
+sound server's devices through cpal's pure-Rust PulseAudio host; and files
+opened in a second NeoAmp replace the playlist and play, with `--enqueue` to
+add them.
+
+- [x] Gapless playback: the decoder preloads the next file and queues it
+      straight after the current one, behind a mark the device callback
+      passes ([src/audio/decode.rs](../src/audio/decode.rs),
+      [src/audio/output.rs](../src/audio/output.rs)).
+- [x] Choose the output device (Options > Output Device), and reopen it
+      when it disappears, or go back to it when it returns
+      ([src/audio/device.rs](../src/audio/device.rs)).
+- [x] Media keys and the OS "now playing" display through `souvlaki`: MPRIS
+      on Linux, SMTC on Windows, Now Playing on macOS
+      ([src/now_playing.rs](../src/now_playing.rs)).
+- [x] Single instance: a file opened from the file manager while NeoAmp runs
+      goes to the running copy instead of starting a second one
+      ([src/instance.rs](../src/instance.rs)).
+
+Left out: cover art in the "now playing" display, and files opened from the
+macOS Finder (they arrive as an Apple Event that winit does not pass on, and
+NeoAmp has no app bundle yet). Output devices, media controls and the single
+instance were tried on Linux only.
 
 ## Optional
 

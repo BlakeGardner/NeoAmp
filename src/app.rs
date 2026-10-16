@@ -26,7 +26,7 @@ use winit::monitor::MonitorHandle;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
 use winit::window::{Cursor, CursorIcon, CustomCursor, Window, WindowId, WindowLevel};
 
-use crate::audio::{Location, Player, Scanner};
+use crate::audio::{self, Location, OutputDevice, Player, Scanner};
 use crate::canvas::{Image, Rect};
 use crate::cursor::SkinCursor;
 use crate::dock::{self, SNAP_DISTANCE};
@@ -35,11 +35,13 @@ use crate::file_dialog::{FileDialog, Purpose};
 use crate::font::{FontLibrary, TtfFont};
 use crate::info::Outcome as InfoOutcome;
 use crate::info_window::InfoWindow;
+use crate::instance::{self, Claim};
 use crate::jump::Outcome as JumpOutcome;
 use crate::jump_window::JumpWindow;
 use crate::library::{self, Entry};
 use crate::menu::{self, Anchor};
 use crate::menus::{self, AppCommand, Command, Library};
+use crate::now_playing::{self, NowPlaying};
 use crate::playlist::SortKey;
 use crate::playlist_file;
 use crate::popup::Popups;
@@ -48,8 +50,8 @@ use crate::shortcut::Shortcut;
 use crate::skin::Skin;
 use crate::sprites::pl::TRACK_H;
 use crate::ui::{
-    Action, CursorMove, InfoOf, KeyCmd, ListCmd, MenuRequest, Mods, PlayState, Track, Transport,
-    Ui, WindowKind,
+    Action, CursorMove, InfoOf, KeyCmd, ListCmd, MenuRequest, Mods, OutputChoice, PlayState, Track,
+    Transport, Ui, WindowKind,
 };
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::url_dialog::{Outcome as UrlOutcome, Purpose as UrlPurpose};
@@ -117,6 +119,8 @@ pub struct Options {
     /// Audio files, folders, playlist files and streams. They replace the saved playlist, and
     /// the first one plays.
     pub files: Vec<Location>,
+    /// Add `files` to the end of the playlist instead, without playing them.
+    pub enqueue: bool,
 }
 
 /// Round a length in screen pixels to whole pixels. Window geometry stays far inside `i32`,
@@ -201,9 +205,38 @@ fn is_digit_3(event: &KeyEvent) -> bool {
 /// cannot be written, if no windowing backend can be initialised, or if the playlist scanner
 /// thread cannot be started.
 pub fn run(opts: Options) -> Result<()> {
-    let base = Skin::from_wsz(BASE_SKIN, "base-2.91").context("embedded base skin")?;
-    // Paths are remembered, so they must not depend on the folder NeoAmp was started in.
+    // Paths are remembered, and may be handed to a NeoAmp running elsewhere, so they must not
+    // depend on the folder this one was started in.
     let skin_path = opts.skin.map(absolute);
+    let files: Vec<Location> = opts
+        .files
+        .into_iter()
+        .map(|item| match item {
+            Location::File(path) => Location::File(absolute(path)),
+            url @ Location::Url(_) => url,
+        })
+        .collect();
+    let store = Store::platform();
+    let instance = match (&opts.screenshot, &store) {
+        (None, Some(store)) => {
+            let request = instance::Request {
+                files: files.clone(),
+                skin: skin_path.clone(),
+                enqueue: opts.enqueue,
+            };
+            match instance::claim(store.dir(), &request) {
+                Claim::Forwarded => {
+                    log::info!("handed over to the NeoAmp already running");
+                    return Ok(());
+                }
+                Claim::First(server) => Some(server),
+                Claim::Alone => None,
+            }
+        }
+        _ => None,
+    };
+
+    let base = Skin::from_wsz(BASE_SKIN, "base-2.91").context("embedded base skin")?;
     let custom = skin_path
         .as_deref()
         .map(|p| load_skin(p, &base))
@@ -216,7 +249,6 @@ pub fn run(opts: Options) -> Result<()> {
         return render_screenshot(Ui::demo(), skin, font.as_ref(), out);
     }
 
-    let store = Store::platform();
     match &store {
         Some(store) => log::info!("settings are kept in {}", store.dir().display()),
         None => log::warn!("this system has no config folder; nothing will be remembered"),
@@ -235,7 +267,7 @@ pub fn run(opts: Options) -> Result<()> {
 
     let mut ui = Ui::new();
     settings.apply(&mut ui);
-    let player = match Player::new() {
+    let player = match Player::new(ui.output.as_ref().map(|o| o.id.clone())) {
         Ok(p) => {
             ui.vis.set_sample_rate(p.sample_rate());
             Some(p)
@@ -285,6 +317,9 @@ pub fn run(opts: Options) -> Result<()> {
         url: None,
         menu_skins: Vec::new(),
         menu_presets: Vec::new(),
+        menu_devices: Vec::new(),
+        now_playing: None,
+        instance,
         focused: false,
         focus_lost: None,
         title: crate::ui::APP_NAME.to_owned(),
@@ -292,17 +327,14 @@ pub fn run(opts: Options) -> Result<()> {
         swallow_release: false,
         wheel_rest: (WindowKind::Main, 0.0),
     };
-    let saved_tracks = if opts.files.is_empty() {
+    let saved_tracks = if files.is_empty() || opts.enqueue {
         let tracks = store.as_ref().and_then(Store::load_playlist);
         if let Some(tracks) = &tracks {
             app.restore_playlist(tracks, settings.playlist.current);
         }
+        let _ = app.add_tracks(playlist_file::expand(files), false, &mut Vec::new());
         tracks
     } else {
-        let files = opts.files.into_iter().map(|item| match item {
-            Location::File(path) => Location::File(absolute(path)),
-            url @ Location::Url(_) => url,
-        });
         let mut actions = Vec::new();
         app.add_tracks(playlist_file::expand(files), true, &mut actions);
         app.perform_audio(actions);
@@ -631,9 +663,15 @@ struct App {
     info: Option<InfoWindow>,
     /// The Open URL (or Add URL) dialog, while it is open.
     url: Option<UrlWindow>,
-    /// The skins and preset files the open menu lists; its commands number them.
+    /// The skins, preset files and output devices the open menu lists; its commands number
+    /// them.
     menu_skins: Vec<Entry>,
     menu_presets: Vec<Entry>,
+    menu_devices: Vec<OutputDevice>,
+    /// The system's media keys and "now playing" display, once the main window is open.
+    now_playing: Option<NowPlaying>,
+    /// Where NeoAmp started again hands over what it was asked to open.
+    instance: Option<instance::Server>,
     /// One of our windows, menus included, has the keyboard focus.
     focused: bool,
     /// When the last of our windows lost the focus.
@@ -810,7 +848,26 @@ impl App {
             AppCommand::SaveList => self.show_dialog(Purpose::SaveList),
             AppCommand::JumpToFile => self.open_jump(el),
             AppCommand::FileInfo(of) => self.open_info(of, el),
+            AppCommand::DefaultOutput => self.choose_output(None),
+            AppCommand::Output(i) => {
+                if let Some(device) = self.menu_devices.get(i) {
+                    self.choose_output(Some(OutputChoice {
+                        id: device.id.clone(),
+                        name: device.name.clone(),
+                    }));
+                }
+            }
+            AppCommand::KeepOutput => {}
         }
+    }
+
+    /// Play through `choice`, or the system's default device, from now on.
+    fn choose_output(&mut self, choice: Option<OutputChoice>) {
+        if let Some(player) = self.player.as_mut() {
+            player.set_device(choice.as_ref().map(|c| c.id.clone()));
+            self.ui.vis.set_sample_rate(player.sample_rate());
+        }
+        self.ui.output = choice;
     }
 
     /// Show the File info dialog about the track `of` names, or that track in the dialog if it
@@ -1008,11 +1065,15 @@ impl App {
         let has_auto_preset = self
             .track_file_name()
             .is_some_and(|name| self.autoload.find(&name).is_some());
+        if menus::lists_devices(req.kind) {
+            self.menu_devices = audio::output_devices();
+        }
         let lib = Library {
             skins: &self.menu_skins,
             skin: self.skin_path.as_deref(),
             presets: &self.menu_presets,
             has_auto_preset,
+            devices: &self.menu_devices,
         };
         let items = menus::build(req.kind, &self.ui, &lib);
         self.focus_lost = None;
@@ -1326,6 +1387,9 @@ impl App {
         }
         let mut actions = self.ui.advance_fade(now);
         if let Some(player) = self.player.as_mut() {
+            if player.maintain(now) {
+                self.ui.vis.set_sample_rate(player.sample_rate());
+            }
             while let Some(event) = player.poll() {
                 self.ui.audio_event(event, &mut actions);
             }
@@ -1336,6 +1400,7 @@ impl App {
         let Some(player) = self.player.as_mut() else {
             return;
         };
+        player.preload(self.ui.upcoming());
         player.set_volume(self.ui.output_volume(now));
         player.set_balance(self.ui.balance);
         player.set_eq(&self.ui.eq_settings());
@@ -1349,6 +1414,69 @@ impl App {
         }
         let vis = &mut self.ui.vis;
         player.drain_vis(|samples| vis.push_samples(samples));
+    }
+
+    /// Bring the windows back from the taskbar, and the main window to the front.
+    fn raise(&self) {
+        for p in &self.panes {
+            p.window.set_minimized(false);
+        }
+        if let Some(p) = self.pane(WindowKind::Main) {
+            p.window.focus_window();
+        }
+    }
+
+    /// Open what a later copy of NeoAmp was started with, and handed over before closing:
+    /// files replace the playlist and play (or join it, with `--enqueue`), and a skin is
+    /// shown. Started again with nothing to open, it brings this one to the front.
+    fn take_requests(&mut self, el: &ActiveEventLoop) {
+        while let Some(request) = self.instance.as_ref().and_then(instance::Server::poll) {
+            if let Some(skin) = &request.skin {
+                let path = install_skin(skin, self.store.as_ref());
+                self.load_skin(&path);
+            }
+            if request.files.is_empty() {
+                if request.skin.is_none() {
+                    self.raise();
+                }
+                continue;
+            }
+            let tracks = playlist_file::expand(request.files);
+            if tracks.is_empty() {
+                log::info!("nothing playable there");
+                continue;
+            }
+            let mut actions = Vec::new();
+            if !request.enqueue {
+                self.ui.clear_playlist(&mut actions);
+            }
+            let _ = self.add_tracks(tracks, !request.enqueue, &mut actions);
+            self.handle(actions, el);
+        }
+    }
+
+    /// Carry out what the system's media controls ask, and show them what plays.
+    fn sync_now_playing(&mut self, el: &ActiveEventLoop, now: Instant) {
+        let Some(np) = self.now_playing.as_mut() else {
+            return;
+        };
+        let mut requests = Vec::new();
+        while let Some(request) = np.poll() {
+            requests.push(request);
+        }
+        for request in requests {
+            match request {
+                now_playing::Request::Ui(r) => {
+                    let actions = self.ui.media(r);
+                    self.handle(actions, el);
+                }
+                now_playing::Request::Raise => self.raise(),
+                now_playing::Request::Quit => el.exit(),
+            }
+        }
+        if let Some(np) = self.now_playing.as_mut() {
+            np.update(&self.ui, now);
+        }
     }
 
     /// Set the zoom from the command line, or else the settings, or else the height of the
@@ -2014,6 +2142,12 @@ impl App {
                 Action::OpenMenu(req) => self.open_menu(req, el),
                 Action::App(command) => self.app_command(command, el),
                 Action::Audio(t) => self.transport(t),
+                Action::Advanced(i) => {
+                    if let Some(track) = self.ui.tracks.get(i) {
+                        log::info!("playing {} (gapless)", track.location);
+                    }
+                    self.load_auto_preset(i);
+                }
             }
         }
     }
@@ -2297,6 +2431,9 @@ impl ApplicationHandler for App {
             .map_or(1.0, |p| p.scale(self.ui.scale()));
         self.restore_offsets(at, &screens);
         self.sync_panes(el);
+        self.now_playing = self
+            .pane(WindowKind::Main)
+            .and_then(|p| NowPlaying::new(&p.window));
     }
 
     fn exiting(&mut self, _el: &ActiveEventLoop) {
@@ -2429,7 +2566,9 @@ impl ApplicationHandler for App {
             self.finish_dialog(el);
             self.popups.tick(el, now);
             self.check_menu_focus(now);
+            self.take_requests(el);
             self.sync_audio(el, now);
+            self.sync_now_playing(el, now);
             self.ui.tick(now);
             self.sync_title();
             if let Some(jump) = self.jump.as_mut() {

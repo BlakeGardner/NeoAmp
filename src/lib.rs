@@ -24,6 +24,8 @@
 //!   [`text_box`].
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
+//! - [`now_playing`]: the system's media keys and "now playing" display; [`instance`] hands
+//!   files opened while NeoAmp runs to the running copy.
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
 //!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
 //!   `info_window` and `url_window`), the platform's file dialogs (`file_dialog`) and the
@@ -44,6 +46,7 @@ pub mod font;
 pub mod http;
 pub mod info;
 mod info_window;
+pub mod instance;
 pub mod jump;
 mod jump_window;
 pub mod library;
@@ -51,6 +54,7 @@ pub mod m3u;
 mod main_window;
 pub mod menu;
 pub mod menus;
+pub mod now_playing;
 pub mod playlist;
 pub mod playlist_file;
 mod playlist_window;

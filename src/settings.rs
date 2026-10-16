@@ -30,7 +30,7 @@ use crate::audio::{BANDS, EQ_RANGE_DB};
 use crate::eqf::{self, AutoLoad};
 use crate::m3u;
 use crate::sprites::pl as p;
-use crate::ui::{DEFAULT_VOLUME, Track, Ui, WindowKind, db_slider, slider_db};
+use crate::ui::{DEFAULT_VOLUME, OutputChoice, Track, Ui, WindowKind, db_slider, slider_db};
 use crate::vis::{AnalyzerOptions, ScopeOptions, VisMode};
 use crate::zoom::Zoom;
 
@@ -88,6 +88,13 @@ pub struct Settings {
     pub eq: EqConfig,
     pub playlist: PlaylistConfig,
     pub windows: WindowLayout,
+    /// The output device chosen in the Options menu. `None` plays through the system's
+    /// default.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub output: Option<OutputConfig>,
 }
 
 impl Default for Settings {
@@ -108,8 +115,19 @@ impl Default for Settings {
             eq: EqConfig::default(),
             playlist: PlaylistConfig::default(),
             windows: WindowLayout::default(),
+            output: None,
         }
     }
+}
+
+/// An output device chosen by name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    /// The system's identifier for it, `host:device` (see [`crate::audio::OutputDevice::id`]).
+    pub device: String,
+    /// Its name, shown in the menu while it is not connected.
+    #[serde(default)]
+    pub name: String,
 }
 
 /// The equalizer, in decibels.
@@ -335,6 +353,10 @@ impl Settings {
                 },
                 ..WindowLayout::default()
             },
+            output: ui.output.as_ref().map(|o| OutputConfig {
+                device: o.id.clone(),
+                name: o.name.clone(),
+            }),
         }
     }
 
@@ -369,6 +391,14 @@ impl Settings {
             // Snaps to the resize grid and keeps the minimum size.
             ui.resize_playlist((w, h));
         }
+        ui.output = self
+            .output
+            .as_ref()
+            .filter(|o| !o.device.trim().is_empty())
+            .map(|o| OutputChoice {
+                id: o.device.clone(),
+                name: o.name.clone(),
+            });
     }
 }
 
@@ -674,6 +704,10 @@ mod tests {
                     size: Some([300, 145]),
                 },
             },
+            output: Some(OutputConfig {
+                device: "pulseaudio:bluez_output.E4_58_BC_32_2C_CE.1".into(),
+                name: "Bose QC Ultra Earbuds".into(),
+            }),
         }
     }
 
@@ -696,7 +730,7 @@ mod tests {
             .filter(|l| !l.starts_with('#'))
             .filter_map(|l| l.split_once(" = ").map(|(k, _)| k))
             .collect();
-        for unset in ["zoom", "skin", "main", "offset"] {
+        for unset in ["zoom", "skin", "main", "offset", "device"] {
             assert!(!keys.contains(&unset), "{unset} in {text}");
         }
         assert_eq!(Settings::from_toml(&text).unwrap(), Settings::default());
@@ -794,6 +828,28 @@ mod tests {
         let text = windows.to_toml().unwrap();
         assert!(text.contains(r"skin = 'C:\Skins\Classic.wsz'"), "{text}");
         assert_eq!(Settings::from_toml(&text).unwrap(), windows);
+    }
+
+    #[test]
+    fn an_output_device_needs_an_id_and_a_bad_one_costs_only_itself() {
+        let s =
+            Settings::from_toml("volume = 0.5\n[output]\ndevice = \"wasapi:{0.0.0}\"\n").unwrap();
+        assert_eq!(
+            s.output,
+            Some(OutputConfig {
+                device: "wasapi:{0.0.0}".into(),
+                name: String::new()
+            })
+        );
+        let s = Settings::from_toml("volume = 0.5\noutput = 3\n").unwrap();
+        assert_eq!((s.volume, s.output), (0.5, None));
+        let s = Settings::from_toml("[output]\nname = \"Speakers\"\n").unwrap();
+        assert_eq!(s.output, None, "a name alone names no device");
+        let mut ui = Ui::new();
+        Settings::from_toml("[output]\ndevice = \" \"\n")
+            .unwrap()
+            .apply(&mut ui);
+        assert_eq!(ui.output, None, "a blank id is the default device");
     }
 
     #[test]

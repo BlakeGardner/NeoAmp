@@ -116,6 +116,43 @@ All three platforms behave the same:
 - Resampling in the app means a 44.1 kHz file plays correctly on a 48 kHz
   device even where the system mixer would not convert it.
 
+**Gapless playback.** Tracks follow one another without a gap, as with
+Winamp's gapless output plugins. While a file plays, the interface tells the
+decoder which file comes next (the next entry, the next one shuffle has
+already picked, or the first again with repeat on). Once the current file is
+decoded to its end, the decoder opens the next one and queues its audio
+straight after, with a mark that tells the callback where it begins; as its
+first sample plays, the time display starts again from zero and the playlist
+moves on. MP3s with an encoder's gapless header (LAME's) and Ogg Vorbis files
+lose their encoder padding, so an album that was cut into tracks plays
+seamlessly. A seek, or a change of device, just before the end goes back to
+the file still playing. Internet streams, and a file that follows one, start
+the usual way, as does the next track during a fade-out (which stops at the
+end of the track). A file shorter than half a second ends the usual way too,
+with a short gap.
+
+**Output device.** Options > Output Device lists the system's default and
+every output device by name; the choice is saved. Where the platforms
+differ:
+
+- **Windows and macOS:** the list is the system's own (WASAPI, CoreAudio).
+  On the system's default, NeoAmp follows the system when it switches outputs
+  (Windows 10's automatic stream routing, macOS's default output unit), say
+  when headphones are plugged in.
+- **Linux:** the list is the sound server's outputs, Bluetooth ones included,
+  reached through cpal's PulseAudio host: a pure-Rust client of the
+  PulseAudio protocol, which PipeWire speaks too, so building needs nothing
+  more. Where no sound server runs, it lists ALSA's hardware devices
+  (`plughw:`, one per device). The system's default stays ALSA's `default`
+  device, which the sound server routes to the desktop's chosen output.
+
+When a chosen device goes away (headphones switched off, a USB DAC
+unplugged), playback moves to the system's default, and back to the chosen
+device when it returns; NeoAmp looks for it every two seconds. A device that
+fails, or none at all, is opened again as soon as one can be. Either way the
+track goes on from where it was: the decoder starts again at that point, at
+the new device's rate.
+
 A background thread reads tags ("Artist - Title") and lengths for the
 playlist as files are added.
 
@@ -124,9 +161,32 @@ fadeout lowers the volume evenly to nothing over 3 seconds, then stops, as
 Winamp's Shift+V did (how long Winamp's own fade took is not documented; 3
 seconds is NeoAmp's choice). The volume slider stays where it is. Playing,
 pausing, stopping or changing track cancels the fade, and a track that ends
-while fading stops there rather than starting the next. The output glides
+while fading stops there rather than starting the next (if the next was
+already queued to follow without a gap, the fade carries on over it and stops
+when it is done). The output glides
 from one volume to the next over each block of audio it plays, so the fade,
 like dragging the volume slider, never clicks.
+
+## Media keys and "now playing"
+
+NeoAmp joins the system's media controls through
+[souvlaki](https://crates.io/crates/souvlaki): the keyboard's media keys
+(play/pause, next, previous, stop) control it whichever window has the focus,
+and the system's "now playing" display shows the track's title, artist,
+album and length, from its tags, and offers the same buttons and seeking. An
+internet stream shows the song its station names, with the station as the
+artist. Play/pause never starts a playing track over, as Winamp's Play button
+(X) does.
+
+- **Linux:** MPRIS over D-Bus, which GNOME, KDE, COSMIC and most desktops use
+  for their media keys and media widgets. souvlaki talks to D-Bus through the
+  pure-Rust zbus, so building needs no `libdbus`. The volume can be set from
+  there too. Without a D-Bus session (a bare console, say), NeoAmp runs
+  without media controls. Each NeoAmp has its own MPRIS name,
+  `org.mpris.MediaPlayer2.neoamp.instance<process id>`.
+- **Windows:** the System Media Transport Controls, the media overlay that
+  the volume keys bring up, tied to the main window.
+- **macOS:** Now Playing in Control Center, and the media keys (F7 to F9).
 
 ## Scaling
 
@@ -199,7 +259,7 @@ Windows 2000 did, grey and bevelled, whatever skin is loaded:
   Playback and Visualization submenus, and Exit.
 - **Options**: the `O` in the clutter bar (also in the main menu). Time
   elapsed or remaining, always on top, double size, the zoom, repeat and
-  shuffle.
+  shuffle, and the output device (see [Audio](#audio)).
 - **Visualization**: the `V` in the clutter bar, or a right-click on the
   visualizer. The mode, and Winamp's analyzer and oscilloscope styles and
   falloff speeds.
@@ -292,6 +352,22 @@ PLS, and starts on `Playlist.m3u8`. The platforms differ a little:
 Saving goes by the extension of the name given: `.pls` writes PLS, anything
 else extended M3U. A name without an extension gets `.m3u8`, since not every
 platform's save dialog adds the chosen type's extension.
+
+**NeoAmp already running.** Only one NeoAmp runs at a time, as with Winamp:
+a file opened from the file manager, or `neoamp song.mp3` in a terminal,
+while NeoAmp runs goes to the running copy, where it replaces the playlist
+and plays, and the new start ends. With `--enqueue` (Winamp's `/ADD`) the
+files join the end of the playlist instead, without interrupting what plays,
+for an "Add to NeoAmp" action in a file manager. A skin is shown, and
+starting NeoAmp again with nothing to open brings the running one to the
+front. The running copy listens on a local socket named after its config
+folder, through [interprocess](https://crates.io/crates/interprocess): a
+Unix domain socket in `$XDG_RUNTIME_DIR` on Linux (the config folder without
+one), in the user's own temporary folder on macOS, and a named pipe on
+Windows. NeoAmps with different config folders (`NEOAMP_CONFIG_DIR`) run side
+by side. If the running copy does not answer within five seconds, the new one
+starts anyway. File names travel byte for byte, so names that are not valid
+Unicode arrive intact.
 
 ## Internet radio
 
@@ -565,7 +641,9 @@ controls, the values it takes and its default.
 `NEOAMP_CONFIG_DIR=<folder>` keeps all of it somewhere else. `--screenshot`
 neither reads nor writes any of it. Files, a skin or `--scale` given on the command
 line take precedence over what was saved and are remembered in turn, so files
-replace the saved playlist.
+replace the saved playlist (`--enqueue` adds them to it instead). The output
+device chosen in the Options menu is remembered too; one that is not connected
+when NeoAmp starts stays chosen, and plays once it is.
 
 The equalizer and playlist positions are kept relative to the main window, so
 docked windows stay docked, and they are converted when the zoom or the
@@ -601,7 +679,10 @@ sudo apt install libasound2-dev
 
 HTTPS for internet radio comes from rustls, whose cryptography (ring)
 compiles a little C and assembly with the C compiler Rust already uses on each
-platform; it needs no system library.
+platform; it needs no system library. The media controls, the list of output
+devices and handing files to a running NeoAmp are pure Rust on Linux and use
+only the system's own libraries on Windows and macOS, so they need nothing
+extra either.
 
 ```bash
 cargo run --release
@@ -634,6 +715,13 @@ the Skins menu goes back to the built-in skin:
 cargo run --release -- ~/Downloads/Classic.wsz
 ```
 
+With NeoAmp already running, this plays the album in it; `--enqueue` adds it to
+the end of its playlist instead:
+
+```bash
+cargo run --release -- --enqueue ~/Music/another-album
+```
+
 Pick the zoom yourself instead of letting the screen size decide:
 
 ```bash
@@ -652,6 +740,7 @@ cargo run --release -- --screenshot shot.png
 | Action | Mouse | Keyboard |
 | --- | --- | --- |
 | Previous / Play / Pause / Stop / Next | transport buttons | Z X C V B |
+| Play/pause, next, previous, stop from anywhere | the system's "now playing" display | the keyboard's media keys |
 | Fade out, then stop | Shift-click Stop; Playback > Stop w/ fadeout | Shift+V |
 | Open files (they replace the playlist) | either eject button | L |
 | Open a folder (it replaces the playlist) | Play Folder... in the main menu | Shift+L |
@@ -672,6 +761,7 @@ cargo run --release -- --screenshot shot.png
 | Windowshade (collapse a window to a bar, or open it out) | the shade button beside a window's close button, or double-click its title bar | Ctrl+W: the main window, or the playlist (playlist) |
 | Main menu | the options button at the left of the title bar, or right-click | Alt+F |
 | Options menu | the `O` in the clutter bar | |
+| Output device | Options > Output Device | |
 | Always on top | the `A` in the clutter bar | Ctrl+A (but in the playlist, select all) |
 | Double size (doubles the zoom) | the `D` in the clutter bar | Ctrl+D |
 | Zoom in / out / back to default | Options > Zoom | Ctrl+= / Ctrl+- / Ctrl+0 |
@@ -700,7 +790,8 @@ differences on macOS:
   labelled "delete" on a Mac is Backspace, which removes nothing.
 
 Cmd+W shades a window, as Ctrl+W does in Winamp, rather than closing it as in
-most Mac apps.
+most Mac apps. The media keys are F7 to F9 on a Mac keyboard, which has no
+Stop key.
 
 ## Scope and limitations
 
@@ -719,11 +810,16 @@ most Mac apps.
   copy, or select part of their text. The Jump to file dialog keeps its
   highlight by position, not by entry, if the playlist changes while it is
   open.
-- Tracks play back to back with a short gap, not gaplessly.
-- The output device is opened once, at startup, and never reopened. On Linux
-  that device is PipeWire's or PulseAudio's, which move the stream to another
-  output when one disappears. On Windows and macOS, losing the device (say,
-  unplugging headphones) silences playback until the app restarts.
+- Gapless playback leaves out streams and files shorter than half a second
+  (see [Audio](#audio)).
+- On macOS, a file opened from the Finder does not reach NeoAmp: macOS sends
+  it to the running application as an Apple Event, which winit does not pass
+  on, and NeoAmp is not built as an app bundle that the Finder could open
+  files with. Opening files from the command line works.
+- The "now playing" display shows no cover art.
+- Output devices, media controls and handing files to the running NeoAmp
+  have been tried on Linux only. On Windows and macOS they follow what cpal
+  and souvlaki document.
 - The playlist's font must be a TrueType or OpenType font the system has
   (see [Skin fonts and pointers](#skin-fonts-and-pointers)); Windows' bitmap
   fonts give way to the default. Skins' animated pointers stand still.

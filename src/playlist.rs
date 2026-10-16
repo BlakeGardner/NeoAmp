@@ -152,6 +152,20 @@ pub struct Shuffle {
     /// The entries played before the current one, most recent last, for Previous.
     history: Vec<usize>,
     rng: Rng,
+    /// The entry [`Shuffle::next`] will pick, drawn ahead by [`Shuffle::peek`] (so gapless
+    /// playback can open it early), until the playlist or what has played changes.
+    drawn: Option<Drawn>,
+}
+
+/// A pick drawn ahead, and what it was drawn for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Drawn {
+    len: usize,
+    current: Option<usize>,
+    wrap: bool,
+    pick: Option<usize>,
+    /// Every entry had played: the pick starts a new round.
+    new_round: bool,
 }
 
 /// How many entries Previous can retrace.
@@ -164,6 +178,7 @@ impl Shuffle {
             played: Vec::new(),
             history: Vec::new(),
             rng,
+            drawn: None,
         }
     }
 
@@ -176,10 +191,12 @@ impl Shuffle {
     pub fn reset(&mut self) {
         self.played.clear();
         self.history.clear();
+        self.drawn = None;
     }
 
     /// Note that entry `i` is playing.
     pub fn mark(&mut self, i: usize) {
+        self.drawn = None;
         if self.played.len() <= i {
             self.played.resize(i + 1, false);
         }
@@ -198,29 +215,60 @@ impl Shuffle {
         if len == 0 {
             return None;
         }
+        let pick = self.peek(len, current, wrap);
+        let Some(drawn) = self.drawn.take() else {
+            return pick;
+        };
         self.played.resize(len, false);
-        let fresh = |s: &Shuffle, i: usize| !s.is_played(i) && Some(i) != current;
-        let mut left = (0..len).filter(|&i| fresh(self, i)).count();
-        if left == 0 {
-            if !wrap {
-                return None;
-            }
+        if drawn.new_round {
             self.played.iter_mut().for_each(|p| *p = false);
-            left = (0..len).filter(|&i| fresh(self, i)).count();
-            if left == 0 {
-                // A single entry: it plays again.
-                return current.or(Some(0));
-            }
         }
-        let k = self.rng.below(left);
-        let pick = (0..len).filter(|&i| fresh(self, i)).nth(k)?;
-        if let Some(c) = current {
+        // A single entry plays again without going into the history.
+        if let (Some(p), Some(c)) = (pick, current)
+            && p != c
+        {
             self.history.push(c);
             if self.history.len() > HISTORY {
                 self.history.remove(0);
             }
         }
-        Some(pick)
+        pick
+    }
+
+    /// What [`Shuffle::next`] will pick with the same arguments, without moving on: the same
+    /// answer every time until the playlist or what has played changes.
+    pub fn peek(&mut self, len: usize, current: Option<usize>, wrap: bool) -> Option<usize> {
+        if let Some(d) = self.drawn
+            && (d.len, d.current, d.wrap) == (len, current, wrap)
+        {
+            return d.pick;
+        }
+        let mut new_round = false;
+        let fresh = |s: &Shuffle, new_round: bool, i: usize| {
+            (new_round || !s.is_played(i)) && Some(i) != current
+        };
+        let mut left = (0..len).filter(|&i| fresh(self, false, i)).count();
+        if left == 0 && wrap && len > 0 {
+            new_round = true;
+            left = (0..len).filter(|&i| fresh(self, true, i)).count();
+        }
+        let pick = if left > 0 {
+            let k = self.rng.below(left);
+            (0..len).filter(|&i| fresh(self, new_round, i)).nth(k)
+        } else if new_round {
+            // A single entry: it plays again.
+            current.or(Some(0))
+        } else {
+            None
+        };
+        self.drawn = Some(Drawn {
+            len,
+            current,
+            wrap,
+            pick,
+            new_round,
+        });
+        pick
     }
 
     /// The entry that played before the current one, if Previous can go back to one.
@@ -230,6 +278,22 @@ impl Shuffle {
 
     /// The playlist was rearranged: `new_index[old]` is where each entry went.
     pub fn reorder(&mut self, new_index: &[usize]) {
+        // The entry drawn to come next still comes next, wherever it went.
+        self.drawn = self.drawn.and_then(|d| {
+            let moved = |i: usize| new_index.get(i).copied();
+            Some(Drawn {
+                len: new_index.len(),
+                current: match d.current {
+                    Some(c) => Some(moved(c)?),
+                    None => None,
+                },
+                pick: match d.pick {
+                    Some(p) => Some(moved(p)?),
+                    None => None,
+                },
+                ..d
+            })
+        });
         let mut played = vec![false; new_index.len()];
         for (old, &new) in new_index.iter().enumerate() {
             if self.is_played(old)
@@ -248,8 +312,22 @@ impl Shuffle {
     /// Entries were removed from the playlist: `kept_at[old]` is where each kept entry went,
     /// and `None` for the removed ones.
     pub fn retain(&mut self, kept_at: &[Option<usize>]) {
-        let kept = kept_at.iter().flatten().count();
-        let mut played = vec![false; kept];
+        let kept_len = kept_at.iter().flatten().count();
+        let kept = |i: usize| kept_at.get(i).copied().flatten();
+        // The entry drawn to come next still comes next, unless it was removed: then another
+        // is drawn. A removed current entry has none in its place.
+        self.drawn = self.drawn.and_then(|d| {
+            Some(Drawn {
+                len: kept_len,
+                current: d.current.and_then(kept),
+                pick: match d.pick {
+                    Some(p) => Some(kept(p)?),
+                    None => None,
+                },
+                ..d
+            })
+        });
+        let mut played = vec![false; kept_len];
         for (old, new) in kept_at.iter().enumerate() {
             if let Some(new) = *new
                 && self.is_played(old)
@@ -370,6 +448,53 @@ mod tests {
             "a new round avoids repeating the last entry"
         );
         assert_eq!(s.next(1, Some(0), true), Some(0), "a single entry repeats");
+    }
+
+    #[test]
+    fn a_peeked_shuffle_pick_holds_until_it_is_taken() {
+        let mut s = Shuffle::new(Rng::with_seed(21));
+        s.mark(4);
+        let peeked = s.peek(30, Some(4), false);
+        for _ in 0..5 {
+            assert_eq!(
+                s.peek(30, Some(4), false),
+                peeked,
+                "the same answer every frame"
+            );
+        }
+        assert_eq!(s.next(30, Some(4), false), peeked);
+        assert_eq!(s.back(), Some(4));
+        // The playlist changing draws again.
+        let first = s.peek(30, peeked, false);
+        let mut s2 = s.clone();
+        assert_eq!(s2.peek(31, peeked, false).is_some(), first.is_some());
+        // Reordering keeps the same entry coming next; removing it draws another.
+        let mut s3 = Shuffle::new(Rng::with_seed(8));
+        let pick = s3.peek(4, Some(0), false).unwrap();
+        let reversed = new_indices(&reverse_order(4));
+        s3.reorder(&reversed);
+        assert_eq!(s3.peek(4, Some(3), false), Some(reversed[pick]));
+        let mut gone = vec![Some(0), Some(1), Some(2), Some(3)];
+        gone[reversed[pick]] = None;
+        let mut next = 0;
+        for k in &mut gone {
+            if k.is_some() {
+                *k = Some(next);
+                next += 1;
+            }
+        }
+        s3.retain(&gone);
+        assert!(s3.drawn.is_none(), "the drawn entry was removed");
+        // At the end of a round, a peek with wrap starts the next one only once taken.
+        let mut s = Shuffle::new(Rng::with_seed(2));
+        s.mark(0);
+        s.mark(1);
+        assert_eq!(s.peek(2, Some(1), false), None);
+        let pick = s.peek(2, Some(1), true);
+        assert_eq!(pick, Some(0));
+        assert!(s.is_played(0), "peeking did not start the new round");
+        assert_eq!(s.next(2, Some(1), true), Some(0));
+        assert!(!s.is_played(0), "taking it did");
     }
 
     #[test]

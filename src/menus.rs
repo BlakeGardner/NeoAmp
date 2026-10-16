@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use crate::audio::OutputDevice;
 use crate::eqf;
 use crate::library::Entry;
 use crate::menu::{Item, escape};
@@ -90,6 +91,12 @@ pub enum AppCommand {
     JumpToFile,
     /// Show the File info dialog.
     FileInfo(InfoOf),
+    /// Play through the system's default output device.
+    DefaultOutput,
+    /// Play through device `n` of [`Library::devices`].
+    Output(usize),
+    /// The chosen output device, which is not connected: it stays chosen.
+    KeepOutput,
 }
 
 /// What the menus list from disk, as it was when the menu opened.
@@ -101,6 +108,9 @@ pub struct Library<'a> {
     pub presets: &'a [Entry],
     /// The current file has an auto-load preset.
     pub has_auto_preset: bool,
+    /// The output devices that can be chosen by name; only listed for the menus that show
+    /// them.
+    pub devices: &'a [OutputDevice],
 }
 
 /// The items of menu `kind`.
@@ -108,7 +118,7 @@ pub struct Library<'a> {
 pub fn build(kind: MenuKind, ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
     match kind {
         MenuKind::Main => main_menu(ui, lib),
-        MenuKind::Options => options(ui),
+        MenuKind::Options => options(ui, lib),
         MenuKind::Vis => visualization(ui),
         MenuKind::EqPresets => presets(ui, lib),
         MenuKind::Skins => skins(lib),
@@ -183,7 +193,7 @@ fn main_menu(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
         key("E&qualizer", KeyCmd::ToggleEq, Shortcut::char('G').alt()).checked(ui.eq_open),
         Item::separator(),
         Item::submenu("&Skins", skins(lib)),
-        Item::submenu("&Options", options(ui)),
+        Item::submenu("&Options", options(ui, lib)),
         Item::submenu("Play&back", playback()),
         Item::submenu("&Visualization", visualization(ui)),
         Item::separator(),
@@ -191,7 +201,13 @@ fn main_menu(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
     ]
 }
 
-fn options(ui: &Ui) -> Vec<Item<Command>> {
+/// Whether menu `kind` lists the output devices, which takes a moment to ask the system.
+#[must_use]
+pub fn lists_devices(kind: MenuKind) -> bool {
+    matches!(kind, MenuKind::Main | MenuKind::Options)
+}
+
+fn options(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
     let toggles = format!("({} toggles)", Shortcut::char('T').ctrl());
     vec![
         Item::new("Time &elapsed", Command::TimeRemaining(false))
@@ -217,7 +233,39 @@ fn options(ui: &Ui) -> Vec<Item<Command>> {
         Item::separator(),
         key("&Repeat", KeyCmd::ToggleRepeat, Shortcut::char('R')).checked(ui.repeat),
         key("S&huffle", KeyCmd::ToggleShuffle, Shortcut::char('S')).checked(ui.shuffle),
+        Item::separator(),
+        Item::submenu("&Output Device", output_devices(ui, lib)),
     ]
+}
+
+/// The system's default, then every device by name. A chosen device that is not connected
+/// is listed too, so the menu shows that NeoAmp goes back to it when it is.
+fn output_devices(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
+    let chosen = ui.output.as_ref();
+    let mut items = vec![
+        Item::new("&System Default", Command::App(AppCommand::DefaultOutput))
+            .chosen(chosen.is_none()),
+        Item::separator(),
+    ];
+    items.extend(lib.devices.iter().enumerate().map(|(i, d)| {
+        Item::new(escape(&d.name), Command::App(AppCommand::Output(i)))
+            .chosen(chosen.is_some_and(|c| c.id == d.id))
+    }));
+    if let Some(c) = chosen.filter(|c| lib.devices.iter().all(|d| d.id != c.id)) {
+        let name = if c.name.is_empty() { &c.id } else { &c.name };
+        items.push(
+            Item::new(
+                format!("{} (not connected)", escape(name)),
+                Command::App(AppCommand::KeepOutput),
+            )
+            .chosen(true)
+            .enabled(false),
+        );
+    }
+    if lib.devices.is_empty() && chosen.is_none() {
+        items.pop();
+    }
+    items
 }
 
 fn zoom(ui: &Ui) -> Vec<Item<Command>> {
@@ -497,6 +545,52 @@ mod tests {
             find(playback, "&Jump to file...").kind(),
             &Kind::Command(Command::Key(KeyCmd::JumpToFile))
         );
+    }
+
+    #[test]
+    fn the_output_menu_lists_the_devices_and_a_chosen_one_gone() {
+        let devices = [
+            OutputDevice {
+                id: "pulseaudio:usb".into(),
+                name: "USB Audio & More".into(),
+            },
+            OutputDevice {
+                id: "pulseaudio:hdmi".into(),
+                name: "HDMI".into(),
+            },
+        ];
+        let lib = Library {
+            devices: &devices,
+            ..Library::default()
+        };
+        let mut ui = Ui::new();
+        let items = build(MenuKind::Options, &ui, &lib);
+        let output = submenu(&items, "&Output Device");
+        assert_eq!(find(output, "&System Default").mark(), Mark::Bullet);
+        assert_eq!(
+            find(output, "USB Audio && More").kind(),
+            &Kind::Command(Command::App(AppCommand::Output(0)))
+        );
+        ui.output = Some(crate::ui::OutputChoice {
+            id: "pulseaudio:hdmi".into(),
+            name: "HDMI".into(),
+        });
+        let items = build(MenuKind::Main, &ui, &lib);
+        let output = submenu(submenu(&items, "&Options"), "&Output Device");
+        assert_eq!(find(output, "&System Default").mark(), Mark::None);
+        assert_eq!(find(output, "HDMI").mark(), Mark::Bullet);
+        assert_eq!(output.len(), 4);
+        ui.output = Some(crate::ui::OutputChoice {
+            id: "pulseaudio:bluez".into(),
+            name: "Earbuds".into(),
+        });
+        let items = build(MenuKind::Options, &ui, &lib);
+        let gone = find(submenu(&items, "&Output Device"), "Earbuds (not connected)");
+        assert_eq!(gone.mark(), Mark::Bullet);
+        assert!(!gone.is_enabled());
+        let items = build(MenuKind::Options, &Ui::new(), &Library::default());
+        assert_eq!(submenu(&items, "&Output Device").len(), 1);
+        assert!(lists_devices(MenuKind::Main) && !lists_devices(MenuKind::Skins));
     }
 
     #[test]

@@ -1,7 +1,13 @@
 //! The decoder thread: turns [`Command`]s into stereo audio at the device rate and keeps the
 //! ring buffer to the device callback topped up.
+//!
+//! Gapless playback: once a file has been decoded to its end, the file preloaded to follow it
+//! is opened and its audio queued straight after, behind a [`Mark`] that tells the callback
+//! where it begins. The finished file stays open until the next one starts, so that a seek or
+//! a new device meant for it, while the UI has not yet seen the device reach the next file,
+//! goes back to it.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -11,6 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use symphonia::core::formats::probe::Hint;
 
+use super::output::{Mark, Queue};
 use super::resample::Resampler;
 use super::source::{Read, Source};
 use super::stream::{self, Next, PipeReader, SegmentInfo, StreamInput};
@@ -22,11 +29,11 @@ const POLL: Duration = Duration::from_millis(10);
 /// silence this long means the device has gone away.
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Start the decoder thread. It exits when `commands` is disconnected (the player was dropped).
-/// Streams connect with `network`'s settings.
+/// Start the decoder thread, filling `queue` at `rate`. It exits when `commands` is
+/// disconnected (the player was dropped). Streams connect with `network`'s settings.
 pub(super) fn spawn(
     shared: Arc<Shared>,
-    queue: rtrb::Producer<f32>,
+    queue: Queue,
     rate: u32,
     commands: Receiver<Command>,
     events: Sender<(u64, Event)>,
@@ -40,6 +47,12 @@ pub(super) fn spawn(
         network,
         generation: 0,
         track: None,
+        previous: None,
+        upcoming: None,
+        upcoming_sent: false,
+        written: 0,
+        flushed: 0,
+        mark_pending: false,
         waiting: false,
         pending: Vec::new(),
         pending_at: 0,
@@ -54,8 +67,10 @@ pub(super) fn spawn(
 
 /// The track being decoded.
 struct Track {
-    /// The generation of the `Open` that started it, which its events carry.
+    /// The generation of the `Open` or preload that started it, which its events carry.
     generation: u64,
+    /// The file, for a file.
+    path: Option<PathBuf>,
     /// `None` while a stream connects and buffers, until its audio has been recognised, and
     /// between one connection's audio and the next's.
     source: Option<Source>,
@@ -78,6 +93,7 @@ impl Track {
     ) -> Track {
         Track {
             generation,
+            path: None,
             source,
             resampler,
             ended: false,
@@ -87,22 +103,47 @@ impl Track {
     }
 }
 
+/// The file to play straight after the current track.
+struct Upcoming {
+    path: PathBuf,
+    generation: u64,
+}
+
 /// Tell the UI `event` about the track started by `generation`.
 fn send(events: &Sender<(u64, Event)>, generation: u64, event: Event) {
     // The receiver only goes away with the player, which also ends this thread.
     let _ = events.send((generation, event));
 }
 
+/// A resampler from `from` Hz to the device's `to`, unless they are the same.
+fn resampler(from: u32, to: u32) -> Result<Option<Resampler>> {
+    (from != to).then(|| Resampler::new(from, to)).transpose()
+}
+
 struct Worker {
     shared: Arc<Shared>,
-    queue: rtrb::Producer<f32>,
+    queue: Queue,
     events: Sender<(u64, Event)>,
     /// The device's sample rate.
     rate: u32,
     network: stream::Settings,
-    /// The generation of the last command handled.
+    /// The generation of the last command handled, or of the preloaded track since started.
     generation: u64,
     track: Option<Track>,
+    /// The track decoded before `track`, when `track` was preloaded: kept until the next one
+    /// starts, in case a seek or a new device is meant for it.
+    previous: Option<Track>,
+    /// The file to play when `track` ends.
+    upcoming: Option<Upcoming>,
+    /// A preload has been sent since `track` was started from one.
+    upcoming_sent: bool,
+    /// Frames pushed into the queue since the last flush, which is what marks count in.
+    written: u64,
+    /// The generation of the last flush asked of the callback. Until the callback has carried
+    /// it out nothing is queued, so nothing queued can be thrown away by it.
+    flushed: u64,
+    /// A mark has been queued that the callback has not reached yet.
+    mark_pending: bool,
     /// A stream is connecting or buffering: check back on it shortly.
     waiting: bool,
     /// Audio at the device rate waiting for room in the ring, read from `pending_at`.
@@ -147,9 +188,17 @@ impl Worker {
             .is_none_or(|t| t.ended && t.end_published)
     }
 
-    /// Audio is waiting but the ring has no room for it.
+    /// Audio is waiting but the ring has no room for it, or the callback has yet to carry out
+    /// the last flush.
     fn is_blocked(&self) -> bool {
-        self.pending_at < self.pending.len() && self.queue.slots() < 2
+        self.pending_at < self.pending.len() && (self.queue.audio.slots() < 2 || !self.flushed())
+    }
+
+    /// The callback has carried out the last flush, or there is no device to wait for (the
+    /// next device's callback starts from the latest flush).
+    fn flushed(&self) -> bool {
+        !self.shared.output_open.load(Ordering::Acquire)
+            || self.shared.flushed.load(Ordering::Acquire) == self.flushed
     }
 
     fn send(&self, generation: u64, event: Event) {
@@ -164,11 +213,13 @@ impl Worker {
             } => {
                 self.generation = generation;
                 self.track = None;
+                self.previous = None;
+                self.upcoming = None;
                 self.waiting = false;
                 self.flush(0);
                 self.shared.kbps.store(0, Ordering::Relaxed);
                 let opened = match location {
-                    Location::File(path) => self.open(&path, generation),
+                    Location::File(path) => self.open(path, generation),
                     Location::Url(url) => StreamInput::start(url, self.network)
                         .map(|input| Track::new(generation, None, None, Some(input))),
                 };
@@ -194,68 +245,141 @@ impl Worker {
             Command::Seek {
                 seconds,
                 generation,
+                track,
             } => {
                 self.generation = generation;
-                let Some(track) = self.track.as_mut() else {
-                    self.flush(0);
-                    return;
-                };
-                let Some(source) = track.source.as_mut().filter(|_| track.stream.is_none()) else {
-                    // Streams cannot seek (and the UI never asks): carry on from here.
-                    log::debug!("ignoring a seek in a stream");
-                    let here = self.shared.position.load(Ordering::Relaxed);
-                    self.flush(here);
-                    return;
-                };
-                match source.seek(seconds) {
-                    Ok(at) => {
-                        if let Some(r) = track.resampler.as_mut() {
-                            r.reset();
-                        }
-                        track.ended = false;
-                        track.end_published = false;
-                        // Positive and far below 2^63, so the cast cannot truncate.
-                        self.flush((at * f64::from(self.rate)).round() as u64);
-                    }
-                    Err(e) => {
-                        // Usually a seek past the end. Finish the track from where it is.
-                        log::warn!("seek to {seconds:.1}s failed: {e:#}");
-                        track.ended = true;
-                        track.end_published = false;
-                        let here = self.shared.position.load(Ordering::Relaxed);
-                        self.flush(here);
-                        self.publish_end();
-                    }
-                }
+                self.settle(track);
+                self.seek(seconds);
             }
             Command::Stop { generation } => {
                 self.generation = generation;
                 self.track = None;
+                self.previous = None;
+                self.upcoming = None;
                 self.waiting = false;
                 self.flush(0);
+            }
+            Command::Preload { path, generation } => {
+                self.upcoming = path.map(|path| Upcoming { path, generation });
+                self.upcoming_sent = true;
+            }
+            Command::Output {
+                queue,
+                rate,
+                seconds,
+                generation,
+                track,
+            } => {
+                self.generation = generation;
+                self.settle(track);
+                self.queue = queue;
+                self.rate = rate;
+                if let Some(track) = self.track.as_mut()
+                    && let Some(source) = track.source.as_ref()
+                {
+                    match resampler(source.rate, rate) {
+                        Ok(r) => track.resampler = r,
+                        Err(e) => {
+                            let generation = track.generation;
+                            self.track = None;
+                            self.send(generation, Event::Failed(format!("{e:#}")));
+                        }
+                    }
+                }
+                self.seek(seconds);
             }
         }
     }
 
-    fn open(&self, path: &Path, generation: u64) -> Result<Track> {
-        let source = Source::open(path)?;
-        let resampler = self.resampler_for(&source)?;
-        Ok(Track::new(generation, Some(source), resampler, None))
+    /// Go on from `seconds` into the current track, dropping what is queued. A stream cannot
+    /// seek, and goes on from where it is.
+    fn seek(&mut self, seconds: f64) {
+        let rate = f64::from(self.rate);
+        let Some(track) = self.track.as_mut() else {
+            self.flush(0);
+            return;
+        };
+        let Some(source) = track.source.as_mut().filter(|_| track.stream.is_none()) else {
+            // Positive and far below 2^63, so the cast cannot truncate.
+            self.flush((seconds.max(0.0) * rate).round() as u64);
+            return;
+        };
+        match source.seek(seconds) {
+            Ok(at) => {
+                if let Some(r) = track.resampler.as_mut() {
+                    r.reset();
+                }
+                track.ended = false;
+                track.end_published = false;
+                // Positive and far below 2^63, so the cast cannot truncate.
+                self.flush((at * rate).round() as u64);
+            }
+            Err(e) => {
+                // Usually a seek past the end. Finish the track from where it is.
+                log::warn!("seek to {seconds:.1}s failed: {e:#}");
+                track.ended = true;
+                track.end_published = false;
+                let here = self.shared.position.load(Ordering::Relaxed);
+                self.flush(here);
+                self.publish_end();
+            }
+        }
     }
 
-    /// A resampler from `source`'s rate to the device's, unless they are the same.
-    fn resampler_for(&self, source: &Source) -> Result<Option<Resampler>> {
-        (source.rate != self.rate)
-            .then(|| Resampler::new(source.rate, self.rate))
-            .transpose()
+    /// Note when the callback reaches the mark queued before the current track.
+    fn note_crossing(&mut self) {
+        if self.mark_pending
+            && self.track.as_ref().is_some_and(|t| {
+                self.shared.playing_generation.load(Ordering::Acquire) == t.generation
+            })
+        {
+            self.mark_pending = false;
+        }
+    }
+
+    /// Before a seek or a new device, which drop what is queued: go on with `track`, the
+    /// track the UI takes for the current one. When the UI has not seen the device reach the
+    /// preloaded track, that is the track before it, even if the device has just reached it:
+    /// the flush throws that away. The preloaded file is then preloaded again (unless the UI
+    /// has named another since).
+    fn settle(&mut self, track: u64) {
+        let current = self.track.as_ref().map(|t| t.generation);
+        if current == Some(track) || self.previous.as_ref().is_none_or(|p| p.generation != track) {
+            return;
+        }
+        let Some(previous) = self.previous.take() else {
+            return;
+        };
+        let ahead = self.track.replace(previous);
+        if !self.upcoming_sent
+            && let Some(Track {
+                path: Some(path),
+                generation,
+                ..
+            }) = ahead
+        {
+            self.upcoming = Some(Upcoming { path, generation });
+        }
+    }
+
+    fn open(&self, path: PathBuf, generation: u64) -> Result<Track> {
+        let source = Source::open(&path)?;
+        let resampler = resampler(source.rate, self.rate)?;
+        let mut track = Track::new(generation, Some(source), resampler, None);
+        track.path = Some(path);
+        Ok(track)
     }
 
     /// Have the callback drop everything queued and count the new generation's position from
-    /// `position` (device frames). Returns once the callback has confirmed, so nothing queued
-    /// afterwards can be thrown away.
+    /// `position` (device frames). Waits a moment for the callback to confirm; nothing is
+    /// queued until it has (see [`Worker::flushed`]), so nothing queued afterwards can be
+    /// thrown away. A device that does not answer holds up the queue, not this thread.
     fn flush(&mut self, position: u64) {
         self.pending.clear();
         self.pending_at = 0;
+        self.written = 0;
+        self.mark_pending = false;
+        self.flushed = self.generation;
         self.shared
             .flush_position
             .store(position, Ordering::Relaxed);
@@ -263,7 +387,7 @@ impl Worker {
             .flush_generation
             .store(self.generation, Ordering::Release);
         let deadline = Instant::now() + FLUSH_TIMEOUT;
-        while self.shared.playing_generation.load(Ordering::Acquire) != self.generation {
+        while !self.flushed() {
             if Instant::now() >= deadline {
                 log::warn!("the audio device stopped responding");
                 return;
@@ -273,9 +397,11 @@ impl Worker {
     }
 
     /// Queue what is pending, then decode the next packet if the ring has room for more (and,
-    /// for a stream, there is enough to decode).
+    /// for a stream, there is enough to decode). At the end of a file, go on into the next
+    /// one if there is one.
     fn step(&mut self) {
         self.waiting = false;
+        self.note_crossing();
         if self.push_pending() {
             if self.ready_to_decode() {
                 self.decode_next();
@@ -284,13 +410,56 @@ impl Worker {
                 self.waiting = true;
             }
         }
-        self.publish_end();
+        if !self.advance() {
+            self.publish_end();
+        }
+    }
+
+    /// Once the current file is decoded and queued to its end, start the preloaded one behind
+    /// a mark, and return true. Returns false when there is none, or it cannot be opened (it
+    /// is then left to the UI to move on, and to report it).
+    fn advance(&mut self) -> bool {
+        let Some(track) = self.track.as_ref() else {
+            return false;
+        };
+        let finished = track.ended && !track.end_published && track.stream.is_none();
+        // One mark in the queue at a time: a preloaded file shorter than the queue ends the
+        // usual way.
+        if !finished || !self.pending.is_empty() || self.mark_pending || !self.flushed() {
+            return false;
+        }
+        let Some(Upcoming { path, generation }) = self.upcoming.take() else {
+            return false;
+        };
+        let next = match self.open(path, generation) {
+            Ok(next) => next,
+            Err(e) => {
+                log::debug!("cannot open the next file ahead of time: {e:#}");
+                return false;
+            }
+        };
+        let mark = Mark {
+            at: self.written,
+            generation,
+        };
+        if self.queue.marks.push(mark).is_err() {
+            return false;
+        }
+        let info = next.source.as_ref().map(|s| s.info.clone());
+        self.previous = self.track.replace(next);
+        self.generation = generation;
+        self.upcoming_sent = false;
+        self.mark_pending = true;
+        if let Some(info) = info {
+            self.send(generation, Event::Started(info));
+        }
+        true
     }
 
     /// The device has less than an eighth of its queue left to play.
     fn queue_low(&self) -> bool {
-        let capacity = self.queue.buffer().capacity();
-        capacity - self.queue.slots() < capacity / 8
+        let capacity = self.queue.audio.buffer().capacity();
+        capacity - self.queue.audio.slots() < capacity / 8
     }
 
     /// Whether to decode a packet now. Files always may; a stream is told how the network is
@@ -358,7 +527,7 @@ impl Worker {
     /// stream started its next song. Tell the UI what it is, or why it cannot be played.
     fn start_source(&mut self, opened: Result<(Source, FileDetails)>, mut station: Station) {
         let opened = opened.and_then(|(source, details)| {
-            let resampler = self.resampler_for(&source)?;
+            let resampler = resampler(source.rate, self.rate)?;
             Ok((source, details, resampler))
         });
         let Some(track) = self.track.as_mut() else {
@@ -467,12 +636,17 @@ impl Worker {
 
     /// Move as much pending audio into the ring as fits. Returns true once nothing is pending.
     fn push_pending(&mut self) -> bool {
+        if !self.flushed() {
+            return self.pending_at >= self.pending.len();
+        }
         let waiting = &self.pending[self.pending_at..];
         // Whole stereo frames only, so the callback never sees half a frame.
-        let n = self.queue.slots().min(waiting.len()) & !1;
+        let n = self.queue.audio.slots().min(waiting.len()) & !1;
         if n > 0 {
-            let (pushed, _) = self.queue.push_partial_slice(&waiting[..n]);
+            let (pushed, _) = self.queue.audio.push_partial_slice(&waiting[..n]);
             self.pending_at += pushed.len();
+            // usize always fits in u64 on supported targets.
+            self.written += pushed.len() as u64 / 2;
         }
         if self.pending_at < self.pending.len() {
             return false;

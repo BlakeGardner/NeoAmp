@@ -46,6 +46,20 @@ webpki-roots = "1"
 # The clipboard, for pasting into the dialogs' text boxes: native on Windows and macOS, X11
 # (XWayland included) on Linux. Pure Rust.
 arboard = { version = "3", default-features = false }
+# The OS "now playing" display and media keys: MPRIS on Linux (over zbus, pure Rust, rather than
+# libdbus), the System Media Transport Controls on Windows, MPNowPlayingInfoCenter on macOS.
+souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
+# Hands a file opened while NeoAmp runs to the running copy: Unix domain sockets on Linux and
+# macOS, named pipes on Windows. Pure Rust.
+interprocess = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# souvlaki's own D-Bus library, used to check that a session bus answers before souvlaki's
+# MPRIS thread, which panics without one, is started.
+zbus = "3"
+# cpal's PulseAudio host, a pure-Rust client of the PulseAudio protocol (which PipeWire also
+# speaks), lists the sound server's outputs by name for the Output Device menu.
+cpal = { version = "0.18", features = ["pulseaudio"] }
 
 [profile.dev]
 opt-level = 1

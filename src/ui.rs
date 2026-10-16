@@ -39,6 +39,16 @@ const VOLUME_STEP: f32 = 0.02;
 /// How long Shift+V takes to fade the music out before it stops.
 pub const FADE_OUT: Duration = Duration::from_secs(3);
 
+/// An output device chosen by name, which plays even when other devices become the system's
+/// default.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OutputChoice {
+    /// What the system calls it internally (see [`crate::audio::OutputDevice::id`]).
+    pub id: String,
+    /// Its name, for the menu.
+    pub name: String,
+}
+
 /// The three classic windows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum WindowKind {
@@ -350,6 +360,9 @@ pub enum Action {
     App(AppCommand),
     /// Tell the audio engine.
     Audio(Transport),
+    /// Playback went on into playlist entry `n` by itself, straight after the track before:
+    /// what opening it would have done besides playing it (its auto-load preset).
+    Advanced(usize),
 }
 
 /// Which menu to open, and where.
@@ -373,6 +386,27 @@ pub enum InfoOf {
     /// The playlist's first selected entry, else the one at its keyboard cursor: MISC > FILE
     /// INFO, and Alt+3 in the playlist.
     Selection,
+}
+
+/// What the system's media controls ask for: the keyboard's media keys, and the buttons of
+/// its "now playing" display.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MediaRequest {
+    /// Play, or resume. Unlike Winamp's Play button, it does not start a playing track over.
+    Play,
+    /// Pause; nothing unless playing.
+    Pause,
+    /// Pause while playing, else play.
+    PlayPause,
+    Stop,
+    Next,
+    Previous,
+    /// Move this many seconds on, or back when negative.
+    SeekBy(f32),
+    /// Jump to this many seconds into the track.
+    SeekTo(f32),
+    /// The volume slider's position, `0..=1`.
+    Volume(f32),
 }
 
 /// Playback commands for the audio engine. The UI state has already changed to match.
@@ -618,6 +652,8 @@ pub struct Ui {
     pub double_size: bool,
     /// The windows stay above other applications' windows.
     pub always_on_top: bool,
+    /// The output device chosen in the Options menu; `None` is the system's default.
+    pub output: Option<OutputChoice>,
     /// How far the windows are enlarged; double size doubles it again (see [`Ui::scale`]).
     pub zoom: Zoom,
     /// The zoom the screen's height calls for, restored by [`KeyCmd::ZoomReset`]. While
@@ -716,6 +752,7 @@ impl Ui {
             vis: Vis::new(),
             double_size: false,
             always_on_top: false,
+            output: None,
             zoom: Zoom::MIN,
             default_zoom: Zoom::MIN,
             active: true,
@@ -984,6 +1021,12 @@ impl Ui {
         if self.track().is_none() {
             return;
         }
+        self.begin();
+        actions.push(Action::Audio(Transport::Open(self.current)));
+    }
+
+    /// What the current track starting changes in the interface.
+    fn begin(&mut self) {
         self.state = PlayState::Playing;
         self.elapsed = 0.0;
         self.seek_to = None;
@@ -997,7 +1040,6 @@ impl Ui {
             StreamStatus::Playing
         };
         self.refresh_title();
-        actions.push(Action::Audio(Transport::Open(self.current)));
     }
 
     pub fn play(&mut self, actions: &mut Vec<Action>) {
@@ -1158,6 +1200,54 @@ impl Ui {
         self.jump((self.current.min(len) + len - 1) % len, actions);
     }
 
+    /// The file the end of the current track moves on to, for the engine to open early and
+    /// play straight after it, without a gap. `None` when playback will stop there, while
+    /// stopped or fading out, and when this track or the next is an internet stream.
+    pub fn upcoming(&mut self) -> Option<&Path> {
+        if self.state == PlayState::Stopped || self.is_fading() || self.is_stream() {
+            return None;
+        }
+        let i = self.peek_following(self.repeat)?;
+        self.tracks.get(i)?.location.path()
+    }
+
+    /// The engine went on, without a gap, into `path`, which [`Ui::upcoming`] named: make its
+    /// entry current, as the end of a track does. A pause or a fade-out begun just before
+    /// carries on: the engine had queued the next track already.
+    fn advanced(&mut self, path: &Path, actions: &mut Vec<Action>) {
+        let (state, fade) = (self.state, self.fade);
+        let is_path = |t: &Track| t.location.path() == Some(path);
+        let expected = self
+            .peek_following(self.repeat)
+            .filter(|&i| self.tracks.get(i).is_some_and(is_path));
+        // The playlist may have changed in the moment since the file was opened.
+        let row = expected.or_else(|| self.tracks.iter().position(is_path));
+        let _ = self.following(self.repeat);
+        match row {
+            Some(row) => {
+                self.select(row);
+                actions.push(Action::Advanced(row));
+            }
+            None => {
+                // Its entry was removed just as it was opened: it plays on without one, like
+                // a playing track whose entry is removed, and the entry after the last one
+                // plays next.
+                let next = if self.orphan.is_some() {
+                    self.current
+                } else {
+                    self.current + 1
+                };
+                self.current = next.min(self.tracks.len());
+                self.orphan = Some(Track::from_path(path.to_path_buf()));
+            }
+        }
+        self.begin();
+        if state == PlayState::Paused {
+            self.state = state;
+        }
+        self.fade = fade;
+    }
+
     /// After a track: the next one, or stop at the end of the playlist (or of a shuffled
     /// round) unless repeating.
     fn advance(&mut self, actions: &mut Vec<Action>) {
@@ -1170,13 +1260,26 @@ impl Ui {
     /// The entry after the current one: the following entry, or with shuffle on, one that has
     /// not played in this round. At the end it starts over if `wrap` is set.
     fn following(&mut self, wrap: bool) -> Option<usize> {
+        self.next_entry(wrap, true)
+    }
+
+    /// What [`Ui::following`] will answer, without moving shuffle on.
+    fn peek_following(&mut self, wrap: bool) -> Option<usize> {
+        self.next_entry(wrap, false)
+    }
+
+    fn next_entry(&mut self, wrap: bool, take: bool) -> Option<usize> {
         let len = self.tracks.len();
         if len == 0 {
             return None;
         }
         if self.shuffle {
             let current = self.current_row();
-            return self.shuffler.next(len, current, wrap);
+            return if take {
+                self.shuffler.next(len, current, wrap)
+            } else {
+                self.shuffler.peek(len, current, wrap)
+            };
         }
         // While the playing track's entry is removed, the entry after it is `current`.
         let next = if self.orphan.is_some() {
@@ -1278,6 +1381,7 @@ impl Ui {
                     self.refresh_title();
                 }
             }
+            Event::Advanced(path) => self.advanced(&path, actions),
         }
     }
 
@@ -2490,6 +2594,26 @@ impl Ui {
             Command::ResetEq => self.apply_preset(&Preset::flat("")),
             Command::Exit => actions.push(Action::Close),
             Command::App(c) => actions.push(Action::App(c)),
+        }
+        actions
+    }
+
+    /// Carry out a request from the system's media controls.
+    #[must_use = "the returned actions must be performed by the window layer"]
+    pub fn media(&mut self, request: MediaRequest) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let playing = self.state == PlayState::Playing;
+        match request {
+            MediaRequest::Play | MediaRequest::PlayPause if !playing => self.play(&mut actions),
+            MediaRequest::Pause | MediaRequest::PlayPause if playing => self.pause(&mut actions),
+            MediaRequest::Play | MediaRequest::Pause | MediaRequest::PlayPause => {}
+            MediaRequest::Stop => self.stop(&mut actions),
+            MediaRequest::Next => self.next(&mut actions),
+            MediaRequest::Previous => self.prev(&mut actions),
+            MediaRequest::SeekBy(secs) => self.seek(self.elapsed + secs, &mut actions),
+            MediaRequest::SeekTo(secs) => self.seek(secs, &mut actions),
+            MediaRequest::Volume(v) if v.is_finite() => self.volume = v.clamp(0.0, 1.0),
+            MediaRequest::Volume(_) => {}
         }
         actions
     }
@@ -3866,6 +3990,138 @@ mod tests {
         actions.clear();
         ui.next(&mut actions);
         assert_eq!(actions.len(), 1);
+    }
+
+    fn demo_path(n: usize) -> PathBuf {
+        PathBuf::from(format!("demo/{n:02}.mp3"))
+    }
+
+    #[test]
+    fn the_upcoming_file_is_what_the_end_of_the_track_moves_on_to() {
+        let mut ui = Ui::demo();
+        assert_eq!(ui.upcoming(), Some(demo_path(2).as_path()));
+        ui.current = 6;
+        assert_eq!(ui.upcoming(), None, "the end of the playlist stops");
+        ui.repeat = true;
+        assert_eq!(ui.upcoming(), Some(demo_path(1).as_path()));
+        ui.state = PlayState::Stopped;
+        assert_eq!(ui.upcoming(), None);
+        ui.state = PlayState::Paused;
+        assert!(ui.upcoming().is_some(), "paused, it is still coming");
+        let _ = ui.key(KeyCmd::FadeOut);
+        assert_eq!(ui.upcoming(), None, "a fade-out stops at the end");
+        // Streams are never preloaded, nor is a file after one.
+        let mut ui = Ui::demo();
+        ui.tracks[1].location = Location::Url("http://radio.example/".into());
+        assert_eq!(ui.upcoming(), None);
+        ui.current = 1;
+        assert_eq!(ui.upcoming(), None);
+    }
+
+    #[test]
+    fn a_gapless_advance_makes_the_entry_current_without_opening_it() {
+        let mut ui = Ui::demo();
+        ui.eq_auto = true;
+        ui.elapsed = 4.0;
+        let mut actions = Vec::new();
+        ui.audio_event(Event::Advanced(demo_path(2)), &mut actions);
+        assert_eq!(actions, vec![Action::Advanced(1)]);
+        assert_eq!(
+            (ui.current, ui.state, ui.elapsed),
+            (1, PlayState::Playing, 0.0)
+        );
+        // An entry moved meanwhile is found where it went; one removed plays on without one.
+        ui.tracks.swap(4, 5);
+        actions.clear();
+        ui.audio_event(Event::Advanced(demo_path(5)), &mut actions);
+        assert_eq!(actions, vec![Action::Advanced(5)]);
+        actions.clear();
+        ui.audio_event(Event::Advanced(PathBuf::from("gone.mp3")), &mut actions);
+        assert!(actions.is_empty());
+        assert_eq!(ui.track().map(|t| t.title.as_str()), Some("gone"));
+        assert_eq!(ui.current_row(), None);
+        ui.audio_event(Event::Finished, &mut actions);
+        assert_eq!(
+            actions,
+            vec![audio(Transport::Open(6))],
+            "the entry after the last"
+        );
+    }
+
+    #[test]
+    fn a_gapless_advance_keeps_a_pause_or_a_fade_out() {
+        let mut ui = Ui::demo();
+        let mut actions = Vec::new();
+        ui.pause(&mut actions);
+        ui.audio_event(Event::Advanced(demo_path(2)), &mut actions);
+        assert_eq!((ui.current, ui.state), (1, PlayState::Paused));
+        let mut ui = Ui::demo();
+        let _ = ui.key(KeyCmd::FadeOut);
+        let start = Instant::now();
+        let _ = ui.advance_fade(start);
+        ui.audio_event(Event::Advanced(demo_path(2)), &mut actions);
+        assert!(ui.is_fading());
+        assert_eq!(
+            ui.advance_fade(start + FADE_OUT),
+            vec![audio(Transport::Stop)]
+        );
+    }
+
+    #[test]
+    fn shuffle_preloads_the_entry_it_then_plays() {
+        let mut ui = Ui::demo();
+        ui.shuffler = Shuffle::new(Rng::with_seed(4));
+        let _ = ui.key(KeyCmd::ToggleShuffle);
+        let mut played = vec![ui.current];
+        let mut actions = Vec::new();
+        for _ in 1..7 {
+            let next = ui.upcoming().map(Path::to_path_buf).unwrap();
+            assert_eq!(
+                ui.upcoming(),
+                Some(next.as_path()),
+                "the same pick every frame"
+            );
+            ui.audio_event(Event::Advanced(next.clone()), &mut actions);
+            assert_eq!(ui.track().map(|t| &t.location), Some(&Location::File(next)));
+            played.push(ui.current);
+        }
+        played.sort_unstable();
+        assert_eq!(played, (0..7).collect::<Vec<_>>(), "each entry once");
+        assert_eq!(ui.upcoming(), None, "the round is over");
+    }
+
+    #[test]
+    fn media_keys_play_and_pause_without_starting_over() {
+        let mut ui = Ui::demo();
+        ui.select(1);
+        ui.elapsed = 30.0;
+        assert!(ui.media(MediaRequest::Play).is_empty(), "already playing");
+        assert_eq!(
+            ui.media(MediaRequest::PlayPause),
+            vec![audio(Transport::Pause)]
+        );
+        assert_eq!(ui.media(MediaRequest::Pause), Vec::<Action>::new());
+        assert_eq!(ui.media(MediaRequest::Play), vec![audio(Transport::Resume)]);
+        let seek = |secs| vec![audio(Transport::Seek(secs))];
+        assert_eq!(ui.media(MediaRequest::SeekBy(-10.0)), seek(20.0));
+        assert_eq!(ui.media(MediaRequest::SeekTo(4.5)), seek(4.5));
+        assert_eq!(
+            ui.media(MediaRequest::Next),
+            vec![audio(Transport::Open(2))]
+        );
+        assert_eq!(
+            ui.media(MediaRequest::Previous),
+            vec![audio(Transport::Open(1))]
+        );
+        assert_eq!(ui.media(MediaRequest::Stop), vec![audio(Transport::Stop)]);
+        assert_eq!(
+            ui.media(MediaRequest::PlayPause),
+            vec![audio(Transport::Open(1))]
+        );
+        let _ = ui.media(MediaRequest::Volume(1.5));
+        assert_eq!(ui.volume, 1.0);
+        let _ = ui.media(MediaRequest::Volume(f32::NAN));
+        assert_eq!(ui.volume, 1.0);
     }
 
     #[test]

@@ -69,6 +69,25 @@ These work in whichever of the three windows has the focus. The playlist has
 | Alt+F | ⌥F | Open the main menu |
 | Alt+S | ⌥S | Open the Skins menu |
 
+## Media keys
+
+The keyboard's media keys reach NeoAmp through the system's media controls
+([src/now_playing.rs](../src/now_playing.rs)), so they work whichever
+application has the focus, as do the buttons of the system's "now playing"
+display: MPRIS on Linux (GNOME, KDE, COSMIC and most desktops pass the keys
+on), the media overlay on Windows, Now Playing on macOS. With several players
+running, the system decides which one the keys go to.
+
+| Key | macOS | Action |
+| --- | --- | --- |
+| Play/Pause | ⏯ (F8) | Pause while playing, else play; unlike X, never starts a playing track over |
+| Next track | ⏭ (F9) | Next track |
+| Previous track | ⏮ (F7) | Previous track |
+| Stop | (none on Mac keyboards) | Stop |
+
+The display can also seek (by 5 seconds, by any amount, or to a spot) and, on
+Linux, set the volume.
+
 ## Playlist window
 
 While the playlist has the focus, these come before the keys above. The other

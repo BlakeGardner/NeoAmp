@@ -103,7 +103,8 @@ offset = [0, 232]
 size = [275, 116]
 ```
 
-`zoom` and `skin` are written only once they differ from the defaults.
+`zoom`, `skin` and the `[output]` table are written only once they differ
+from the defaults.
 
 ## Top-level settings
 
@@ -213,7 +214,8 @@ NeoAmp starts stopped on this entry, scrolled to it in the playlist window.
 It counts entries in `playlist.m3u8`, so `current = 2` is the third track.
 Past the end of the playlist, the last entry is used. Files given on the
 command line replace the playlist and start playing from their first file, so
-this key does not apply then.
+this key does not apply then (it does with `--enqueue`, which adds them to the
+end).
 
 ## `[windows]`: where the windows are
 
@@ -277,6 +279,40 @@ docked to it stay docked when it moves between runs.
 - **Minimized windows:** while a window is minimized, its position is not
   saved (Windows reports one far off the screen), and the last position from
   before is kept.
+
+## `[output]`: the output device
+
+Written once a device is chosen in Options > Output Device. Without it,
+NeoAmp plays through the system's default device and follows the system when
+the default changes.
+
+```toml
+[output]
+device = "pulseaudio:bluez_output.E4_58_BC_32_2C_CE.1"
+name = "Bose QC Ultra Earbuds"
+```
+
+| Key | Values | Default | What it controls |
+| --- | --- | --- | --- |
+| `device` | the system's identifier for a device | none | The device NeoAmp plays through. |
+| `name` | text | `""` | The device's name, which the menu shows while it is not connected. |
+
+- **`device`** is `host:device`, as the system names the device internally:
+  `pulseaudio:alsa_output.…` or `pulseaudio:bluez_output.…` for the sound
+  server's outputs on Linux (`alsa:plughw:CARD=…,DEV=…` where no sound server
+  runs), `wasapi:{0.0.0.00000000}.{…}` on Windows, and `coreaudio:` and the
+  device's UID on macOS. Pick devices from the menu rather than typing these.
+- **A device that is not connected**, when NeoAmp starts or later (headphones
+  switched off, a USB DAC unplugged), stays chosen: NeoAmp plays through the
+  system's default meanwhile, looks for it every two seconds, and goes back
+  to it when it is there again. The menu lists it as "*name* (not
+  connected)". An identifier that names no device at all is treated the same
+  way.
+- **To go back to the default**, choose Options > Output Device > System
+  Default, or delete the table.
+- **Unusable values:** a `device` that is missing or blank means the system's
+  default; an `[output]` that is not a table (`output = 3`) is ignored, with a
+  warning in the log.
 
 ## `playlist.m3u8`
 
@@ -359,7 +395,6 @@ NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
   entry's title. The Open URL dialog keeps no list of recent addresses.
 - Which playlist rows were selected, and how far the playlist was scrolled
   (it scrolls to the current entry).
-- The output device. NeoAmp uses the system's default device.
 
 ## The command line and the settings
 
@@ -369,7 +404,16 @@ remembered like any other change:
 - Audio files, folders, playlist files or stream URLs replace the saved
   playlist, and the first one plays. Without any, the saved playlist comes
   back.
+- With `--enqueue`, they join the end of the saved playlist instead, and
+  nothing starts playing.
 - A `.wsz` file (or `--skin`) replaces the saved skin, and is copied into the
   skins folder.
 - `--scale` replaces the saved zoom.
 - `--screenshot` neither reads nor writes any of these files.
+
+While NeoAmp runs, starting it again with the same config folder hands the
+files and skin to the running copy, which takes them in the same way (files
+replace its playlist and play, or join it with `--enqueue`) and saves them as
+usual; the new start then ends. `--scale` is not handed over. A config folder
+of its own (`NEOAMP_CONFIG_DIR`) makes a NeoAmp of its own, which runs beside
+the others.
