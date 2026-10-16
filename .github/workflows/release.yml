@@ -1,0 +1,132 @@
+# Builds NeoAmp for each platform when a GitHub release is published, and attaches the
+# archives to that release.
+#
+# To make a release:
+#   1. Set `version` in Cargo.toml (say 0.2.0), commit it and push it.
+#   2. Publish a release on GitHub whose tag is that version with a leading "v" (v0.2.0),
+#      from the web page or with `gh release create v0.2.0 --generate-notes`.
+#
+# The binaries are attached only once every platform has built, so a release never ends up
+# with some of them missing. A failed run can be re-run from the Actions tab; the archives
+# replace any already attached.
+
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Rust that releases are built with: the same as in ci.yml, so a release is built by the
+  # compiler its code was checked with. Move the two up together.
+  RUST_VERSION: "1.95"
+  # Passed through the environment rather than written into the scripts, so the tag's text
+  # can never be run as part of a command.
+  TAG: ${{ github.event.release.tag_name }}
+
+jobs:
+  version:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: The tag must be Cargo.toml's version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::The tag is $TAG, but Cargo.toml's version is $version: tag the release v$version, or change the version first."
+            exit 1
+          fi
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Ubuntu runner, so the binary needs only that glibc (2.35) or newer.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          # The C runtime is linked in, so the .exe runs without the Visual C++
+          # Redistributable installed.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+            rustflags: -C target-feature=+crt-static
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          # Cross-compiled for Intel Macs on the Apple silicon runner.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: macos-x86_64
+    env:
+      ARCHIVE: neoamp-${{ github.event.release.tag_name }}-${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install the ALSA development files
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Package (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir "$ARCHIVE"
+          cp "target/${{ matrix.target }}/release/neoamp" README.md "$ARCHIVE/"
+          tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory $env:ARCHIVE | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/neoamp.exe", README.md $env:ARCHIVE
+          Compress-Archive -Path $env:ARCHIVE -DestinationPath "$env:ARCHIVE.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ARCHIVE }}.*
+          if-no-files-found: error
+          # Already compressed.
+          compression-level: 0
+
+  attach:
+    name: Attach to the release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job can change the release; the builds above, which run every crate's build
+    # script, get a read-only token.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload the archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" dist/* --clobber

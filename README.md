@@ -665,6 +665,27 @@ Where the platforms differ:
   path that is not valid Unicode (an unpaired surrogate) is written with
   replacement characters, and that entry will not play after a restart.
 
+## Prebuilt binaries
+
+Each [GitHub release](https://github.com/BlakeGardner/NeoAmp/releases) has
+NeoAmp built for Linux (x86-64), Windows (x86-64) and macOS (Apple silicon and
+Intel): an archive holding the program and this README. The base skin is built
+into the program, so nothing else needs installing alongside it.
+
+- **Linux** needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and anything
+  later) and ALSA's library, `libasound2`, which desktop systems already have.
+- **Windows** needs nothing else; the C runtime is built in.
+- **macOS** refuses to open the program at first, because it is not signed or
+  notarized by Apple. After unpacking it, clear the quarantine flag the browser
+  set on it:
+
+```bash
+xattr -d com.apple.quarantine neoamp
+```
+
+Publishing a release on GitHub builds these and attaches them to it; the steps
+are at the top of `.github/workflows/release.yml`.
+
 ## Building and running
 
 The stock `base-2.91.wsz` skin must be present at `skins/base-2.91.wsz`; it is

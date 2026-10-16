@@ -97,7 +97,6 @@ fn parse_extinf(text: &[u8]) -> (Option<u32>, String) {
 mod tests {
     use super::*;
     use crate::audio::Location;
-    use std::path::PathBuf;
 
     fn track(title: &str, seconds: Option<u32>, path: &str) -> Track {
         Track {
@@ -203,6 +202,7 @@ mod tests {
     #[test]
     fn file_names_that_are_not_utf8_round_trip() {
         use std::os::unix::ffi::OsStrExt;
+        use std::path::PathBuf;
         let path = PathBuf::from(std::ffi::OsStr::from_bytes(b"/music/caf\xE9.mp3"));
         let tracks = [Track::from_path(path.clone())];
         let got = parse(&write(&tracks, None), Path::new("/"));

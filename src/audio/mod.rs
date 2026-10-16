@@ -1420,7 +1420,7 @@ mod tests {
 
     #[test]
     fn a_stream_plays_names_its_songs_reconnects_and_finally_fails() {
-        use crate::http::tests::serve;
+        use crate::http::tests::{listen, serve_on};
         use std::time::Duration;
         // One second of a quiet square wave at 22.05 kHz, sent as a SHOUTcast station would,
         // with the song's title after the first 4000 bytes. The server drops the connection
@@ -1438,7 +1438,12 @@ mod tests {
             4000,
             &[Some("Band - Song")],
         ));
-        let (address, _server) = serve(vec![vec![reply.clone()], vec![reply]], Duration::ZERO);
+        let (listener, address) = listen();
+        // The second visit is answered only once the player says it is reconnecting. Answered
+        // at once, it can arrive while the first is still playing out on a slow machine, and
+        // then the player goes straight on with no gap to report.
+        let mut held = Some((listener.try_clone().unwrap(), reply.clone()));
+        serve_on(listener, vec![vec![reply]], Duration::ZERO);
         let rig = Rig::with(stream::Settings {
             retry: stream::Retry {
                 attempts: 1,
@@ -1456,6 +1461,11 @@ mod tests {
         loop {
             let (generation, event) = rig.event();
             assert_eq!(generation, 1);
+            if event == Event::Status(StreamStatus::Reconnecting)
+                && let Some((listener, reply)) = held.take()
+            {
+                serve_on(listener, vec![vec![reply]], Duration::ZERO);
+            }
             let failed = matches!(event, Event::Failed(_));
             events.push(event);
             if failed {
