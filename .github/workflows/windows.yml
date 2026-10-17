@@ -1,0 +1,104 @@
+# Builds NeoAmp for Windows with windows/package.ps1: the installer (Inno Setup, from
+# windows/neoamp.iss) and a zip of the program. It then tries the installer: installs it
+# silently, starts NeoAmp, takes a screenshot of the desktop, and uninstalls it again.
+#
+# It runs only for releases: release.yml calls it for every GitHub release and attaches the
+# installer and the zip to the release with the other builds.
+
+name: Windows
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Rust that releases are built with, as in ci.yml, release.yml and macos.yml: move the
+  # four up together.
+  RUST_VERSION: "1.95"
+
+jobs:
+  build:
+    name: Build (windows-x86_64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+      # Inno Setup 6 comes with GitHub's Windows image.
+      - name: Build the installer and the zip
+        run: windows/package.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x86_64
+          path: |
+            target/windows/*-setup.exe
+            target/windows/*.zip
+          if-no-files-found: error
+          # Already compressed.
+          compression-level: 0
+
+      - name: Try the installer
+        run: |
+          $setup = (Get-Item target/windows/*-setup.exe).FullName
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\NeoAmp'
+          $exe = Join-Path $app 'neoamp.exe'
+          $shots = (New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'try') -Force).FullName
+          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{092209C5-E961-48D1-BC1C-68D0CCBB01DD}_is1'
+
+          # Install for the current user, as most people will.
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/LOG=$shots\install.log" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "the installer failed with code $($p.ExitCode)" }
+          foreach ($path in $exe, $uninstallKey, 'HKCU:\Software\Classes\NeoAmp.wsz\shell\open\command',
+                   (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\NeoAmp.lnk')) {
+            if (-not (Test-Path $path)) { throw "the installer did not make $path" }
+          }
+          Write-Output "Installed $((Get-ItemProperty $uninstallKey).DisplayName) $((Get-ItemProperty $uninstallKey).DisplayVersion)"
+
+          # A frame drawn without opening a window.
+          $p = Start-Process $exe -ArgumentList '--screenshot', "$shots\frame.png" -RedirectStandardError "$shots\screenshot.log" -PassThru
+          # Holding the handle keeps the exit code readable once it ends.
+          $null = $p.Handle
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw 'neoamp.exe --screenshot did not finish' }
+          if ($p.ExitCode -ne 0 -or -not (Test-Path "$shots\frame.png")) { throw "neoamp.exe --screenshot failed with code $($p.ExitCode)" }
+
+          # NeoAmp itself, with its log kept, since a windowed program has no console. GitHub's
+          # Windows machines have no sound card, so it runs silently.
+          $p = Start-Process $exe -RedirectStandardError "$shots\neoamp.log" -PassThru
+          $null = $p.Handle
+          Start-Sleep -Seconds 15
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+          [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
+          $bitmap.Save("$shots\desktop.png")
+          $running = -not $p.HasExited
+          if ($running) { Stop-Process -Id $p.Id -Force; $p.WaitForExit() }
+          Get-Content "$shots\neoamp.log"
+          if (-not $running) { throw "NeoAmp quit by itself, with code $($p.ExitCode)" }
+          if (Select-String -Path "$shots\neoamp.log" -Pattern '^Error:' -Quiet) { throw 'NeoAmp could not start' }
+
+          # The uninstaller hands over to a copy of itself and returns at once: wait for that.
+          Start-Process (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path $app); $i++) { Start-Sleep -Seconds 1 }
+          foreach ($path in $app, $uninstallKey, 'HKCU:\Software\Classes\NeoAmp.wsz') {
+            if (Test-Path $path) { throw "the uninstaller left $path" }
+          }
+          Write-Output 'Installed, ran and uninstalled NeoAmp'
+      - name: Keep the screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-try
+          path: ${{ runner.temp }}/try
+          if-no-files-found: ignore

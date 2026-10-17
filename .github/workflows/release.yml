@@ -1,6 +1,6 @@
-# Builds NeoAmp for each platform when a GitHub release is published, and attaches the
-# archives, the Linux Flatpak bundle (flatpak.yml) and the macOS disk image (macos.yml) to
-# that release.
+# Builds NeoAmp for each platform when a GitHub release is published, and attaches the Linux
+# archive, the Linux Flatpak bundle (flatpak.yml), the macOS disk images (macos.yml) and the
+# Windows installer and zip (windows.yml) to that release.
 #
 # To make a release:
 #   1. Set `version` in Cargo.toml (say 0.2.0), add a <release> line for it at the top of
@@ -25,7 +25,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # The Rust that releases are built with: the same as in ci.yml, so a release is built by the
-  # compiler its code was checked with. Move it up together with ci.yml's and macos.yml's.
+  # compiler its code was checked with. Move it up together with ci.yml's, macos.yml's and
+  # windows.yml's.
   RUST_VERSION: "1.95"
   # Passed through the environment rather than written into the scripts, so the tag's text
   # can never be run as part of a command.
@@ -68,12 +69,6 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
-          # The C runtime is linked in, so the .exe runs without the Visual C++
-          # Redistributable installed.
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            name: windows-x86_64
-            rustflags: -C target-feature=+crt-static
     env:
       ARCHIVE: neoamp-${{ github.event.release.tag_name }}-${{ matrix.name }}
     steps:
@@ -89,8 +84,6 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -98,13 +91,6 @@ jobs:
           mkdir "$ARCHIVE"
           cp "target/${{ matrix.target }}/release/neoamp" README.md "$ARCHIVE/"
           tar -czf "$ARCHIVE.tar.gz" "$ARCHIVE"
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory $env:ARCHIVE | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/neoamp.exe", README.md $env:ARCHIVE
-          Compress-Archive -Path $env:ARCHIVE -DestinationPath "$env:ARCHIVE.zip"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -126,9 +112,14 @@ jobs:
     needs: version
     uses: ./.github/workflows/macos.yml
 
+  windows:
+    name: Windows
+    needs: version
+    uses: ./.github/workflows/windows.yml
+
   attach:
     name: Attach to the release
-    needs: [build, flatpak, macos]
+    needs: [build, flatpak, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only this job can change the release; the builds above, which run every crate's build
@@ -140,9 +131,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # Named one by one: the run's other artifacts (the Flatpak's crate list) stay behind.
+      # Named one by one: the run's other artifacts (the Flatpak's crate list, the Windows
+      # installer's screenshots and logs) stay behind.
       - name: Upload the archives
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.flatpak dist/*.dmg --clobber
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.flatpak dist/*.dmg dist/*.exe --clobber

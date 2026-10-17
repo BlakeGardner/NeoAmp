@@ -24,6 +24,12 @@ Flatpak can write only below its own folder, so there the folder must be
 inside `~/.var/app/io.github.BlakeGardner.NeoAmp/`, given with
 `flatpak run --env=NEOAMP_CONFIG_DIR=<folder> io.github.BlakeGardner.NeoAmp`.
 
+Uninstalling NeoAmp leaves the folder, so a later install starts the way the
+last one was left: Windows' uninstaller removes only the program, as does
+dragging the macOS app to the Bin, and `flatpak uninstall` keeps it unless
+given `--delete-data`. Delete the folder to remove your settings, skins and
+presets too.
+
 ## Editing the file
 
 NeoAmp writes `settings.toml` within a couple of seconds of any change and

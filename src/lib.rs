@@ -28,8 +28,8 @@
 //!   files opened while NeoAmp runs to the running copy.
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
 //!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
-//!   `info_window` and `url_window`), the platform's file dialogs (`file_dialog`) and the
-//!   clipboard (`clipboard`).
+//!   `info_window` and `url_window`), the platform's file dialogs (`file_dialog`), the
+//!   clipboard (`clipboard`) and the windows' icon on Windows (`window_icon`).
 
 pub mod app;
 pub mod audio;
@@ -70,4 +70,5 @@ mod upscale;
 pub mod url_dialog;
 mod url_window;
 pub mod vis;
+mod window_icon;
 pub mod zoom;

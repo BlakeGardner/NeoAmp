@@ -1,7 +1,12 @@
 //! Command-line entry point. All logic lives in the `neoamp` library crate.
 
+// On Windows a release build is a windowed program, so that starting it from Explorer or the
+// Start menu opens no console window beside it. Debug builds keep the console for their log.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use anyhow::{Result, bail};
 use neoamp::app::{self, Options};
@@ -79,17 +84,46 @@ fn parse_args(args: &[OsString]) -> Result<Option<Options>> {
     Ok(Some(opts))
 }
 
-fn main() -> Result<()> {
+/// Whether this build has no console to write to: a windowed program on Windows (see the top
+/// of this file), which a terminal neither waits for nor shows the output of.
+const WINDOWED: bool = cfg!(all(windows, not(debug_assertions)));
+
+/// Show `text` in a message box, for a build that has no console.
+fn message_box(level: rfd::MessageLevel, title: &str, text: &str) {
+    rfd::MessageDialog::new()
+        .set_level(level)
+        .set_title(title)
+        .set_description(text)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+fn main() -> ExitCode {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,sctk_adwaita=error"),
     )
     .init();
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    match parse_args(&args)? {
-        Some(opts) => app::run(opts),
-        None => {
+    let result = match parse_args(&args) {
+        Ok(Some(opts)) => app::run(opts),
+        Ok(None) => {
             println!("{USAGE}");
+            if WINDOWED {
+                message_box(rfd::MessageLevel::Info, "NeoAmp", USAGE);
+            }
             Ok(())
+        }
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            // Printed even without a console, for when the output goes to a file.
+            eprintln!("Error: {e:?}");
+            if WINDOWED {
+                message_box(rfd::MessageLevel::Error, "NeoAmp", &format!("{e:#}"));
+            }
+            ExitCode::FAILURE
         }
     }
 }

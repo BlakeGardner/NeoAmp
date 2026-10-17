@@ -57,6 +57,7 @@ use crate::upscale::{Upscaler, window_to_canvas};
 use crate::url_dialog::{Outcome as UrlOutcome, Purpose as UrlPurpose};
 use crate::url_window::UrlWindow;
 use crate::vis;
+use crate::window_icon;
 use crate::zoom::Zoom;
 
 /// The stock Winamp 2.91 skin, embedded as the fallback for every missing sheet.
@@ -1574,6 +1575,7 @@ impl App {
             el.create_window(attrs)
                 .with_context(|| format!("creating the {title} window"))?,
         );
+        window_icon::set(&window);
         if let Some(p) = at {
             window.set_outer_position(p);
         }

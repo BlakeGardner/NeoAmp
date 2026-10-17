@@ -68,6 +68,7 @@ impl DialogWindow {
             el.create_window(attrs)
                 .context("creating the dialog window")?,
         );
+        crate::window_icon::set(&window);
         let context = Context::new(el.owned_display_handle())
             .map_err(|e| anyhow!("drawing the dialog: {e}"))?;
         let mut surface =
