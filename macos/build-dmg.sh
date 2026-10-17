@@ -12,7 +12,7 @@
 #   cargo install --locked resvg
 #
 # The app is signed ad hoc, not with an Apple Developer ID, so macOS asks before opening it
-# the first time (see "macOS app" in README.md). The Release workflow runs this for each
+# the first time (see "macOS" in docs/GUIDE.md). The Release workflow runs this for each
 # GitHub release (.github/workflows/macos.yml).
 
 set -euo pipefail

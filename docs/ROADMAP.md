@@ -6,7 +6,7 @@ The phases are in the suggested order of work. Tick items off as they land.
 ## Phase 1: Saved settings
 
 Done: `settings.toml` and `playlist.m3u8` in the platform's config folder
-([src/settings.rs](../src/settings.rs)). See "Saved settings" in the README,
+([src/settings.rs](../src/settings.rs)). See [Saved settings](GUIDE.md#saved-settings) in the user guide,
 and [SETTINGS.md](SETTINGS.md) for every key.
 
 - [x] Save and restore volume, balance, EQ (on, preamp, bands), shuffle,
@@ -18,7 +18,7 @@ and [SETTINGS.md](SETTINGS.md) for every key.
 
 Done: menus drawn like Windows 2000's in windows of their own
 ([src/menu.rs](../src/menu.rs), [src/menus.rs](../src/menus.rs),
-[src/popup.rs](../src/popup.rs)). See "Menus" in the README.
+[src/popup.rs](../src/popup.rs)). See [Menus](GUIDE.md#menus) in the user guide.
 
 - [x] Decide: native menus or menus drawn in the skin canvas. Drawn, in the
       classic Windows grey, each in its own borderless window: native menus
@@ -42,7 +42,7 @@ Done: menus drawn like Windows 2000's in windows of their own
 
 ## Phase 3: Playlist
 
-Done (ADD > URL came with Phase 6): see "Playlist" in the README.
+Done (ADD > URL came with Phase 6): see [Playlist](GUIDE.md#playlist) in the user guide.
 Editing is in [src/ui.rs](../src/ui.rs) and [src/playlist.rs](../src/playlist.rs),
 playlist files in [src/playlist_file.rs](../src/playlist_file.rs) and
 [src/pls.rs](../src/pls.rs), and the Jump to file dialog in
@@ -75,7 +75,7 @@ playlist files in [src/playlist_file.rs](../src/playlist_file.rs) and
 
 ## Phase 4: Windowshade mode
 
-Done: see "Windowshade" in the README. The bars are drawn by `draw_shade` in
+Done: see [Windowshade](GUIDE.md#windowshade) in the user guide. The bars are drawn by `draw_shade` in
 [src/main_window.rs](../src/main_window.rs),
 [src/eq_window.rs](../src/eq_window.rs) and
 [src/playlist_window.rs](../src/playlist_window.rs), from the sprites in
@@ -91,8 +91,9 @@ Done: see "Windowshade" in the README. The bars are drawn by `draw_shade` in
 ## Phase 5: Smaller items
 
 Done except Ctrl+P, which waits for a Preferences dialog (see Optional);
-Ctrl+L came with Phase 6. See "File info", "Skin fonts and
-pointers" and "Stop with fadeout" in the README.
+Ctrl+L came with Phase 6. See [File info](GUIDE.md#file-info), [Skin fonts and
+pointers](GUIDE.md#skin-fonts-and-pointers) and
+[Stop with fadeout](GUIDE.md#stop-with-fadeout) in the user guide.
 
 - [x] More formats: symphonia's `aac`, `alac`, `isomp4` (M4A), `aiff` and
       `mpa` (MP1, MP2, MP3) features, listed in `FORMATS` in
@@ -114,7 +115,7 @@ pointers" and "Stop with fadeout" in the README.
 
 ## Phase 6: Internet radio
 
-Done: see "Internet radio" in the README. Winamp's signature feature,
+Done: see [Internet radio](GUIDE.md#internet-radio) in the user guide. Winamp's signature feature,
 SHOUTcast and Icecast streams. The user chose, before any code: an HTTP client
 of NeoAmp's own on rustls (SHOUTcast 1.x answers `ICY 200 OK`, which
 ureq and hyper reject), the station's name as the entry's title with the song
@@ -137,8 +138,10 @@ streams, a station directory, and recording streams.
 
 ## Phase 7: Playback and platform integration
 
-Done: see "Gapless playback" and "Output device" under Audio, "Media keys and
-'now playing'" and "NeoAmp already running" in the README. Before any code,
+Done: see [Gapless playback](GUIDE.md#gapless-playback),
+[Output device](GUIDE.md#output-device), [Media keys and "now
+playing"](GUIDE.md#media-keys-and-now-playing) and [NeoAmp already
+running](GUIDE.md#neoamp-already-running) in the user guide. Before any code,
 the claim that Windows and macOS go silent until a restart when the device
 changes was checked against cpal 0.18's code and its issue tracker
 (RustAudio/cpal#1183, #1339): a stream on the default device follows the

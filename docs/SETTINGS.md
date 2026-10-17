@@ -147,7 +147,8 @@ from the defaults.
 - **`double_size`** doubles whatever the zoom is, as in Winamp: 1.5x becomes 3x.
 - **`always_on_top`** keeps NeoAmp's windows above other applications'. It has
   no effect on pure Wayland, which does not let applications ask for that, or
-  where NeoAmp uses override-redirect windows (see the README), which stay on
+  where NeoAmp uses override-redirect windows (see [Windows, docking and
+  zoom](GUIDE.md#windows-docking-and-zoom) in the user guide), which stay on
   top anyway.
 - **`zoom`** is how far the windows are enlarged, before double size and the
   desktop's own scale factor. Without it, NeoAmp picks a zoom from the
@@ -271,8 +272,8 @@ docked to it stay docked when it moves between runs.
   shaded main window at 1x is `[0, 14]`. At startup, an offset that would put
   the window's title bar off every screen is ignored.
 - **`shade`**: a window collapsed to its bar keeps its width. The windows
-  docked below it follow when it is shaded or opened out (see "Windowshade"
-  in the README), so the offsets saved are those of the windows as they are.
+  docked below it follow when it is shaded or opened out (see
+  [Windowshade](GUIDE.md#windowshade) in the user guide), so the offsets saved are those of the windows as they are.
 - **`size`** is in skin pixels, so it does not change with the zoom. The
   playlist grows in steps of 25 by 29 pixels from its smallest size, 275 by
   116, as when resized from its grip. Other values are moved to the nearest

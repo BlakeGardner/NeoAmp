@@ -1,7 +1,7 @@
 # Keyboard shortcuts
 
 Every key NeoAmp responds to, by where it works. The mouse controls are in
-[Controls](../README.md#controls) in the README.
+[Controls](GUIDE.md#controls) in the user guide.
 
 The keys are Winamp 2.x's. On macOS, Cmd takes Ctrl's place and Option is Alt,
 as in Mac apps. The macOS column writes them the way the menus do there:
