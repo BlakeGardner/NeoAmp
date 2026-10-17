@@ -9,10 +9,6 @@ name: Windows
 
 on:
   workflow_call:
-  # Temporary: builds and tries the installer for the pull request that adds it, so it can be
-  # tried before it merges. Removed before merging.
-  pull_request:
-    branches: [master]
 
 permissions:
   contents: read
