@@ -1,6 +1,6 @@
 /target
 .claude
-# Flatpak builds (see "Flatpak" in README.md)
+# Flatpak builds (see "Flatpak" in docs/DEVELOPMENT.md)
 /flatpak/cargo-sources.json
 /.flatpak-builder
 /flatpak_app

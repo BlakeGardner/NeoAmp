@@ -13,7 +13,7 @@
 # Inno Setup installs it, or at the path in $env:ISCC.
 #
 # The installer and the program are not signed, so Windows' SmartScreen warns before the
-# installer runs the first time (see "Windows" in README.md). The Release workflow runs this
+# installer runs the first time (see "Windows" in docs/GUIDE.md). The Release workflow runs this
 # for each GitHub release (.github/workflows/windows.yml).
 
 $ErrorActionPreference = 'Stop'

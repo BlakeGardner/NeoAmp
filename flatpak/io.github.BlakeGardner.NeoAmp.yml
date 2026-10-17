@@ -1,5 +1,5 @@
 # NeoAmp's Flatpak. The release workflow builds it for every GitHub release
-# (.github/workflows/flatpak.yml); to build it yourself, see "Flatpak" in README.md.
+# (.github/workflows/flatpak.yml); to build it yourself, see "Flatpak" in docs/DEVELOPMENT.md.
 #
 # flatpak-builder builds offline, so cargo-sources.json lists every crate in Cargo.lock for it
 # to download first. It is not kept in the repository: it is generated from Cargo.lock before
@@ -49,7 +49,7 @@ modules:
       - install -Dm644 resources/${FLATPAK_ID}.metainfo.xml -t /app/share/metainfo
     sources:
       # This checkout, without its history or what builds leave in it (the build folders are
-      # the ones the Flatpak GitHub action and README.md's commands use).
+      # the ones the Flatpak GitHub action and docs/DEVELOPMENT.md's commands use).
       - type: dir
         path: ..
         skip:
