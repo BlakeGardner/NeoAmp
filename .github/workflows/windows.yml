@@ -101,17 +101,21 @@ jobs:
               [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
               [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
               [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+              [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd, int index);
               [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
               [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
               const uint WM_GETICON = 0x7F;
-              // The process's visible top-level windows: each one's title, and whether it has a
+              const int GWL_EXSTYLE = -20, WS_EX_TOOLWINDOW = 0x80;
+              // The process's windows that the taskbar can show (visible, top-level, not tool
+              // windows such as winit's hidden one): each one's title, and whether it has a
               // large and a small icon.
               public static List<string> Describe(int pid) {
                   var found = new List<string>();
                   EnumWindows((hwnd, lParam) => {
                       uint owner;
                       GetWindowThreadProcessId(hwnd, out owner);
-                      if (owner == (uint)pid && IsWindowVisible(hwnd)) {
+                      if (owner == (uint)pid && IsWindowVisible(hwnd)
+                          && (GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0) {
                           var title = new StringBuilder(256);
                           GetWindowText(hwnd, title, title.Capacity);
                           bool large = SendMessage(hwnd, WM_GETICON, (IntPtr)1, IntPtr.Zero) != IntPtr.Zero;
