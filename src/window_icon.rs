@@ -10,8 +10,11 @@ use winit::window::WindowAttributes;
 #[cfg(target_os = "windows")]
 const RESOURCE: u16 = 1;
 
-/// `attrs` with NeoAmp's icon. It goes on with the window's other attributes, so the window
-/// has it before it is shown: set afterwards, the taskbar button kept Windows' generic icon.
+/// `attrs` with NeoAmp's icon, which the window then has from the moment it is shown.
+///
+/// On GitHub's Windows machine the windows get the icon, but the taskbar button still shows
+/// Windows' generic one, whether the icon is set before the window is shown or after. Not yet
+/// tried on a Windows PC.
 #[cfg(target_os = "windows")]
 pub(crate) fn with_icon(attrs: WindowAttributes, el: &ActiveEventLoop) -> WindowAttributes {
     use winit::dpi::PhysicalSize;
