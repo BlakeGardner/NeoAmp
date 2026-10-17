@@ -78,6 +78,7 @@ jobs:
 
           # NeoAmp itself, with its log kept, since a windowed program has no console. GitHub's
           # Windows machines have no sound card, so it runs silently.
+          $env:RUST_LOG = 'info,neoamp::window_icon=debug'
           $p = Start-Process $exe -RedirectStandardError "$shots\neoamp.log" -PassThru
           $null = $p.Handle
           Start-Sleep -Seconds 15
@@ -86,11 +87,53 @@ jobs:
           $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
           [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
           $bitmap.Save("$shots\desktop.png")
+
+          # The icon as Explorer finds it in neoamp.exe (build.rs), and on each of NeoAmp's
+          # windows, where the taskbar and Alt+Tab look for it (src/window_icon.rs).
+          [System.Drawing.Icon]::ExtractAssociatedIcon($exe).ToBitmap().Save("$shots\exe-icon.png")
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class NeoAmpWindows {
+              delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+              [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+              [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+              [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+              [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+              const uint WM_GETICON = 0x7F;
+              // The process's visible top-level windows: each one's title, and whether it has a
+              // large and a small icon.
+              public static List<string> Describe(int pid) {
+                  var found = new List<string>();
+                  EnumWindows((hwnd, lParam) => {
+                      uint owner;
+                      GetWindowThreadProcessId(hwnd, out owner);
+                      if (owner == (uint)pid && IsWindowVisible(hwnd)) {
+                          var title = new StringBuilder(256);
+                          GetWindowText(hwnd, title, title.Capacity);
+                          bool large = SendMessage(hwnd, WM_GETICON, (IntPtr)1, IntPtr.Zero) != IntPtr.Zero;
+                          bool small = SendMessage(hwnd, WM_GETICON, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
+                          found.Add(string.Format("{0}: large icon {1}, small icon {2}", title, large, small));
+                      }
+                      return true;
+                  }, IntPtr.Zero);
+                  return found;
+              }
+          }
+          '@
+          $windows = @([NeoAmpWindows]::Describe($p.Id))
+
           $running = -not $p.HasExited
           if ($running) { Stop-Process -Id $p.Id -Force; $p.WaitForExit() }
           Get-Content "$shots\neoamp.log"
+          $windows | ForEach-Object { Write-Output "Window $_" }
           if (-not $running) { throw "NeoAmp quit by itself, with code $($p.ExitCode)" }
           if (Select-String -Path "$shots\neoamp.log" -Pattern '^Error:' -Quiet) { throw 'NeoAmp could not start' }
+          if ($windows.Count -eq 0) { throw 'NeoAmp showed no windows' }
+          if ($windows -match 'False') { throw 'a NeoAmp window has no icon' }
 
           # The uninstaller hands over to a copy of itself and returns at once: wait for that.
           Start-Process (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
