@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  NeoAmp.app's Info.plist. macos/build-dmg.sh copies it into the app and fills in the two
+  version strings from Cargo.toml; it also builds the program for LSMinimumSystemVersion.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>NeoAmp</string>
+	<!-- Named NeoAmp rather than neoamp because the app menu's About, Hide and Quit items
+	     take their name from the program's file name. -->
+	<key>CFBundleExecutable</key>
+	<string>NeoAmp</string>
+	<key>CFBundleIconFile</key>
+	<string>NeoAmp</string>
+	<!-- The Flatpak's app ID too. -->
+	<key>CFBundleIdentifier</key>
+	<string>io.github.BlakeGardner.NeoAmp</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>NeoAmp</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.music</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- What macOS's permission prompts say when NeoAmp first opens a file in one of these
+	     places, or connects to a server on the local network. -->
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>NeoAmp plays the music and playlists you open from your Desktop.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>NeoAmp plays the music and playlists you open from your Documents folder.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>NeoAmp plays the music and playlists you open from your Downloads folder.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>NeoAmp plays the music and playlists you open from removable drives.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>NeoAmp plays the music and playlists you open from network drives.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>NeoAmp plays radio streams and music files from servers on your network.</string>
+</dict>
+</plist>

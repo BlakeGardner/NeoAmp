@@ -166,8 +166,8 @@ add them.
       ([src/instance.rs](../src/instance.rs)).
 
 Left out: cover art in the "now playing" display, and files opened from the
-macOS Finder (they arrive as an Apple Event that winit does not pass on, and
-NeoAmp has no app bundle yet). Output devices, media controls and the single
+macOS Finder (they arrive as an Apple Event that winit does not pass on, so
+the app claims no file types). Output devices, media controls and the single
 instance were tried on Linux only.
 
 ## Optional

@@ -67,6 +67,9 @@ fn parse_args(args: &[OsString]) -> Result<Option<Options>> {
                 None => bail!("--skin needs a path to a .wsz file"),
             },
             Some("--enqueue") => opts.enqueue = true,
+            // The process serial number macOS may add when the Finder opens the app for the
+            // first time after it was downloaded. Refusing it would quit on that first launch.
+            Some(psn) if cfg!(target_os = "macos") && psn.starts_with("-psn_") => {}
             Some(flag) if flag.starts_with('-') => bail!("unknown option {flag}\n\n{USAGE}"),
             Some(url) if audio::is_web_url(url) => opts.files.push(Location::from_arg(url)),
             _ if is_skin(arg) => opts.skin = Some(PathBuf::from(arg)),
@@ -143,6 +146,17 @@ mod tests {
         let opts = parse_args(&args(&["--enqueue", "a.mp3"])).unwrap().unwrap();
         assert!(opts.enqueue);
         assert!(!parse_args(&args(&["a.mp3"])).unwrap().unwrap().enqueue);
+    }
+
+    #[test]
+    fn the_finders_process_serial_number_is_ignored_on_macos_only() {
+        let parsed = parse_args(&args(&["-psn_0_1234567", "a.mp3"]));
+        if cfg!(target_os = "macos") {
+            let opts = parsed.unwrap().unwrap();
+            assert_eq!(opts.files, [Location::File(PathBuf::from("a.mp3"))]);
+        } else {
+            assert!(parsed.is_err());
+        }
     }
 
     #[cfg(unix)]
