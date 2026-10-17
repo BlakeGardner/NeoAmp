@@ -8,10 +8,6 @@ name: macOS
 
 on:
   workflow_call:
-  # Temporary: builds the disk images for the pull request that adds them, so they can be
-  # tried before it merges. Removed before merging.
-  pull_request:
-    branches: [master]
 
 permissions:
   contents: read
