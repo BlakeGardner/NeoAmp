@@ -5,7 +5,11 @@
 <h1 align="center">NeoAmp</h1>
 
 <p align="center">
-  <strong>A modern and complete recreation of Winamp, with some added modern conveniences.</strong>
+  <strong>A complete recreation of Winamp, with some added modern conveniences.</strong>
+</p>
+
+<p align="center">
+  Runs on <strong>Windows</strong>, <strong>Linux</strong> and <strong>macOS</strong>.
 </p>
 
 <p align="center">
@@ -22,9 +26,9 @@ equalizer and the playlist editor, drawn pixel for pixel from classic `.wsz`
 skins, docked together and snapping to each other's edges. The buttons,
 sliders, menus and shortcuts work the way Winamp's did.
 
-Underneath, it's a new player written in Rust that runs natively on Linux,
-Windows and macOS, and knows a few things Winamp never had to: media keys,
-high-resolution screens, and Bluetooth headphones that come and go.
+Underneath, it's a new native player written in Rust, and it knows a few
+things Winamp never had to: media keys, high-resolution screens, and
+Bluetooth headphones that come and go.
 
 ## The goal
 
