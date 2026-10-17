@@ -14,8 +14,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # The Rust that releases are built with, as in ci.yml and release.yml: move the three up
-  # together.
+  # The Rust that releases are built with, as in ci.yml, release.yml and windows.yml: move the
+  # four up together.
   RUST_VERSION: "1.95"
   # resvg draws the app's icon from its SVG; pinned, so each release draws it the same way.
   RESVG_VERSION: "0.48.1"

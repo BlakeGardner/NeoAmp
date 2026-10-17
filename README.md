@@ -674,15 +674,17 @@ Where the platforms differ:
 ## Prebuilt binaries
 
 Each [GitHub release](https://github.com/BlakeGardner/NeoAmp/releases) has
-NeoAmp built for Linux (x86-64) and Windows (x86-64), as an archive holding
-the program and this README, and for macOS (Apple silicon and Intel) as an
-app on a disk image (see [macOS app](#macos-app)). The base skin is built into the program, so nothing
-else needs installing alongside it. Linux also gets a Flatpak bundle (see
-[Flatpak](#flatpak)).
+NeoAmp built for Linux (x86-64) as an archive holding the program and this
+README, and as a Flatpak bundle (see [Flatpak](#flatpak)); for macOS (Apple
+silicon and Intel) as an app on a disk image (see [macOS app](#macos-app));
+and for Windows (x86-64) as an installer, or as a zip of the program and this
+README to run without installing (see [Windows](#windows)). The base skin is
+built into the program, so nothing else needs installing alongside it.
 
 - **Linux** needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and anything
   later) and ALSA's library, `libasound2`, which desktop systems already have.
-- **Windows** needs nothing else; the C runtime is built in.
+- **Windows** needs Windows 10 or 11 and nothing else; the C runtime is built
+  in.
 
 Publishing a release on GitHub builds these and attaches them to it; the steps
 are at the top of `.github/workflows/release.yml`.
@@ -826,6 +828,71 @@ the app itself in `target/macos/arm64/stage/`. The `macOS` workflow
 (`.github/workflows/macos.yml`) builds both on GitHub for each release, and
 only then.
 
+## Windows
+
+Each release has NeoAmp for 64-bit Windows 10 and 11 (Windows 11 on Arm runs
+it too), two ways:
+
+- `neoamp-v<version>-windows-x86_64-setup.exe`, an installer;
+- `neoamp-v<version>-windows-x86_64.zip`, the program and this README, to
+  unzip anywhere and run without installing. Its settings are still kept in
+  `%APPDATA%\NeoAmp\`.
+
+Neither is signed with a code-signing certificate, so the first time the
+installer (or `neoamp.exe` from the zip) runs, Microsoft Defender SmartScreen
+says "Windows protected your PC". Click **More info**, then **Run anyway**.
+The browser may first warn that the file is not commonly downloaded; choose to
+keep it.
+
+The installer asks whether to install for you alone, which needs no
+administrator and puts NeoAmp in `%LOCALAPPDATA%\Programs\NeoAmp\`, or for
+everyone using the computer, in `C:\Program Files\NeoAmp\`. It then:
+
+- adds NeoAmp to the Start menu, and to the desktop if asked;
+- opens classic skins (`.wsz`) in NeoAmp when they are double-clicked, unless
+  another program (Winamp, say) opens them already, and lists NeoAmp under
+  Open with for them;
+- adds NeoAmp to Settings > Apps > Installed apps, to uninstall it from.
+
+A later release's installer installs over it, closing NeoAmp if it is
+running. Uninstalling leaves the settings, skins and presets in
+`%APPDATA%\NeoAmp\`; delete that folder to remove them too.
+
+NeoAmp works on Windows as it does otherwise, with these differences:
+
+- **Audio files and folders from Explorer** are not offered to NeoAmp yet.
+  Explorer starts the program once for each file opened together, and NeoAmp
+  would keep only the last of them. Drop them onto one of its windows, pick
+  them with Eject, or name them on the command line.
+- **The command line.** `neoamp.exe` is a windowed program, so it opens no
+  console window, and a terminal neither waits for it nor shows what it
+  writes. `--help`, and any error that stops it starting, show in a message
+  box instead. Its log goes where Command Prompt redirects it,
+  `neoamp.exe 2> neoamp.log`. It takes the same options as on other platforms
+  (see [Building and running](#building-and-running)):
+
+```bat
+"%LOCALAPPDATA%\Programs\NeoAmp\neoamp.exe" "%USERPROFILE%\Music\some-album"
+```
+
+The installer is made with [Inno Setup](https://jrsoftware.org/isinfo.php)
+from `windows/neoamp.iss`. `build.rs` builds the icon,
+`resources/icons/neoamp.ico`, and the program's version details into
+`neoamp.exe`; `windows/make-icon.py` draws the icon from
+`resources/icons/neoamp.svg`, and is run again whenever the SVG changes. To
+build both yourself on Windows, install Rust's MSVC toolchain and Inno Setup
+6 (`winget install JRSoftware.InnoSetup`), then, from the top of this
+repository:
+
+```bat
+powershell -ExecutionPolicy Bypass -File windows\package.ps1
+```
+
+It writes both to `target\windows\`. The `Windows` workflow
+(`.github/workflows/windows.yml`) builds them on GitHub for each release, and
+only then. It also tries the installer there: installs it, starts NeoAmp,
+takes a screenshot, and uninstalls it.
+
 ## Building and running
 
 The stock `base-2.91.wsz` skin must be present at `skins/base-2.91.wsz`; it is
@@ -843,11 +910,17 @@ compiles a little C and assembly with the C compiler Rust already uses on each
 platform; it needs no system library. The media controls, the list of output
 devices and handing files to a running NeoAmp are pure Rust on Linux and use
 only the system's own libraries on Windows and macOS, so they need nothing
-extra either.
+extra either. On Windows, `build.rs` builds the icon into `neoamp.exe` with
+the Windows SDK's resource compiler, which comes with the Visual Studio Build
+Tools that Rust's MSVC toolchain needs anyway.
 
 ```bash
 cargo run --release
 ```
+
+On Windows a release build is a windowed program (see [Windows](#windows)),
+so it prints nothing to the terminal; a debug build, `cargo run`, keeps the
+console and its log.
 
 Play files, whole folders or playlist files (folders add their MP3, MP2,
 AAC, M4A, WAV, AIFF, FLAC and Ogg Vorbis files, sorted by name; `.m3u`,
@@ -978,6 +1051,10 @@ Stop key.
   running app as an Apple Event, which winit does not pass on, so the app
   offers to open no file types (see [macOS app](#macos-app)). Dropping files
   onto its windows and opening them from the command line work.
+- On Windows, the installer does not offer NeoAmp for audio files and
+  folders in Explorer, only for skins: Explorer starts the program once for
+  each file opened together, and NeoAmp would keep only the last (see
+  [Windows](#windows)).
 - The "now playing" display shows no cover art.
 - Output devices, media controls and handing files to the running NeoAmp
   have been tried on Linux only. On Windows and macOS they follow what cpal

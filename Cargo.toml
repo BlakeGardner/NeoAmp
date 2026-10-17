@@ -50,6 +50,11 @@ souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] 
 # macOS, named pipes on Windows. Pure Rust.
 interprocess = "2"
 
+[build-dependencies]
+# Builds the icon and version details into neoamp.exe on Windows (build.rs), with the Windows
+# SDK's resource compiler; unused elsewhere.
+winresource = { version = "0.1", default-features = false }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # souvlaki's own D-Bus library, used to check that a session bus answers before souvlaki's
 # MPRIS thread, which panics without one, is started.
