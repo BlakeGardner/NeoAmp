@@ -1,0 +1,55 @@
+# Builds NeoAmp for macOS: NeoAmp.app in a disk image, made by macos/build-dmg.sh, once for
+# Apple silicon and once for Intel Macs.
+#
+# It runs only for releases: release.yml calls it for every GitHub release and attaches the
+# disk images to the release with the other builds.
+
+name: macOS
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The Rust that releases are built with, as in ci.yml and release.yml: move the three up
+  # together.
+  RUST_VERSION: "1.95"
+  # resvg draws the app's icon from its SVG; pinned, so each release draws it the same way.
+  RESVG_VERSION: "0.48.1"
+
+jobs:
+  build:
+    name: Build (macos-${{ matrix.arch }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+          # Cross-compiled for Intel Macs on the Apple silicon runner.
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+      - name: Install resvg
+        run: cargo install --locked "resvg@$RESVG_VERSION"
+      - name: Build the disk image
+        run: macos/build-dmg.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: target/macos/${{ matrix.arch }}/*.dmg
+          if-no-files-found: error
+          # Already compressed.
+          compression-level: 0

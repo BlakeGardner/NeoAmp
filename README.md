@@ -674,21 +674,15 @@ Where the platforms differ:
 ## Prebuilt binaries
 
 Each [GitHub release](https://github.com/BlakeGardner/NeoAmp/releases) has
-NeoAmp built for Linux (x86-64), Windows (x86-64) and macOS (Apple silicon and
-Intel): an archive holding the program and this README. The base skin is built
-into the program, so nothing else needs installing alongside it. Linux also
-gets a Flatpak bundle (see [Flatpak](#flatpak)).
+NeoAmp built for Linux (x86-64) and Windows (x86-64), as an archive holding
+the program and this README, and for macOS (Apple silicon and Intel) as an
+app on a disk image (see [macOS app](#macos-app)). The base skin is built into the program, so nothing
+else needs installing alongside it. Linux also gets a Flatpak bundle (see
+[Flatpak](#flatpak)).
 
 - **Linux** needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and anything
   later) and ALSA's library, `libasound2`, which desktop systems already have.
 - **Windows** needs nothing else; the C runtime is built in.
-- **macOS** refuses to open the program at first, because it is not signed or
-  notarized by Apple. After unpacking it, clear the quarantine flag the browser
-  set on it:
-
-```bash
-xattr -d com.apple.quarantine neoamp
-```
 
 Publishing a release on GitHub builds these and attaches them to it; the steps
 are at the top of `.github/workflows/release.yml`.
@@ -759,6 +753,78 @@ flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub --f
 
 The `Flatpak` workflow (`.github/workflows/flatpak.yml`) does the same on
 GitHub for each release, and only then.
+
+## macOS app
+
+Each release has NeoAmp for macOS 11 (Big Sur) or newer as a disk image
+holding `NeoAmp.app`, one for each kind of Mac (Apple menu > About This Mac
+says which, under Chip or Processor):
+
+- **Apple silicon** (M1 and later): `neoamp-v<version>-macos-arm64.dmg`
+- **Intel:** `neoamp-v<version>-macos-x86_64.dmg`
+
+Open the disk image and drag NeoAmp onto the Applications folder beside it.
+It then opens from Launchpad, Spotlight or the Applications folder, with its
+icon in the Dock. A later release's app replaces it the same way.
+
+The app is not signed with an Apple Developer ID or notarized by Apple, so
+macOS will not open it the first time, saying it could not verify that
+NeoAmp is free of malware. To open it anyway:
+
+- **macOS 15 (Sequoia) and later:** click Done, then in System Settings >
+  Privacy & Security click Open Anyway beside the note about NeoAmp, and
+  Open.
+- **macOS 14 (Sonoma) and earlier:** Control-click NeoAmp in Applications,
+  choose Open, and click Open.
+
+Or clear the quarantine flag the browser set on it, in a terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/NeoAmp.app
+```
+
+macOS remembers the choice until the next release's app replaces it.
+
+The app works as NeoAmp does otherwise, with these differences:
+
+- **Files from the Finder** (double-clicked, Open With, or dropped onto the
+  Dock icon) do not reach NeoAmp, so the app offers to open no file types
+  (see [Scope and limitations](#scope-and-limitations)). Drop them onto one of
+  its windows, pick them with Eject, or name them on the command line.
+- **Permission prompts.** macOS asks once before NeoAmp reads files on the
+  Desktop, in Documents or Downloads, or on a removable or network drive, and
+  before it first connects to a server on the local network.
+- **The command line.** The program inside the app takes the same options as
+  `neoamp` (see [Building and running](#building-and-running)):
+
+```bash
+/Applications/NeoAmp.app/Contents/MacOS/NeoAmp ~/Music/some-album
+```
+
+The disk image is built by `macos/build-dmg.sh`, from `macos/Info.plist` and
+the icon `resources/icons/neoamp-macos.svg`. To build it yourself on a Mac,
+add Rust's target for the kind of Mac to build for (`x86_64-apple-darwin`
+for Intel), and resvg, which draws the icon:
+
+```bash
+rustup target add aarch64-apple-darwin
+```
+
+```bash
+cargo install --locked resvg
+```
+
+Then, from the top of this repository, build for `arm64` or `x86_64`
+(without either, it builds for the Mac it runs on):
+
+```bash
+macos/build-dmg.sh arm64
+```
+
+It writes `target/macos/arm64/neoamp-v<version>-macos-arm64.dmg`, and leaves
+the app itself in `target/macos/arm64/stage/`. The `macOS` workflow
+(`.github/workflows/macos.yml`) builds both on GitHub for each release, and
+only then.
 
 ## Building and running
 
@@ -907,10 +973,11 @@ Stop key.
   open.
 - Gapless playback leaves out streams and files shorter than half a second
   (see [Audio](#audio)).
-- On macOS, a file opened from the Finder does not reach NeoAmp: macOS sends
-  it to the running application as an Apple Event, which winit does not pass
-  on, and NeoAmp is not built as an app bundle that the Finder could open
-  files with. Opening files from the command line works.
+- On macOS, files opened from the Finder (double-clicked, Open With, or
+  dropped onto the Dock icon) do not reach NeoAmp: macOS sends them to the
+  running app as an Apple Event, which winit does not pass on, so the app
+  offers to open no file types (see [macOS app](#macos-app)). Dropping files
+  onto its windows and opening them from the command line work.
 - The "now playing" display shows no cover art.
 - Output devices, media controls and handing files to the running NeoAmp
   have been tried on Linux only. On Windows and macOS they follow what cpal

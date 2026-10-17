@@ -26,7 +26,8 @@ env:
   CARGO_TERM_COLOR: always
   # The Rust that CI checks with: the version used for development, so Clippy here
   # agrees with the checks run before each commit. Newer releases add Clippy lints, so move
-  # this up deliberately, together with any fixes they ask for, and change release.yml's too.
+  # this up deliberately, together with any fixes they ask for, and change release.yml's and
+  # macos.yml's too.
   RUST_VERSION: "1.95"
 
 jobs:

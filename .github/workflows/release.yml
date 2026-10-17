@@ -1,5 +1,6 @@
 # Builds NeoAmp for each platform when a GitHub release is published, and attaches the
-# archives, and the Linux Flatpak bundle (flatpak.yml), to that release.
+# archives, the Linux Flatpak bundle (flatpak.yml) and the macOS disk image (macos.yml) to
+# that release.
 #
 # To make a release:
 #   1. Set `version` in Cargo.toml (say 0.2.0), add a <release> line for it at the top of
@@ -24,7 +25,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   # The Rust that releases are built with: the same as in ci.yml, so a release is built by the
-  # compiler its code was checked with. Move the two up together.
+  # compiler its code was checked with. Move it up together with ci.yml's and macos.yml's.
   RUST_VERSION: "1.95"
   # Passed through the environment rather than written into the scripts, so the tag's text
   # can never be run as part of a command.
@@ -73,13 +74,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
             rustflags: -C target-feature=+crt-static
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            name: macos-arm64
-          # Cross-compiled for Intel Macs on the Apple silicon runner.
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            name: macos-x86_64
     env:
       ARCHIVE: neoamp-${{ github.event.release.tag_name }}-${{ matrix.name }}
     steps:
@@ -98,8 +92,8 @@ jobs:
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
-      - name: Package (Linux and macOS)
-        if: runner.os != 'Windows'
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         run: |
           mkdir "$ARCHIVE"
           cp "target/${{ matrix.target }}/release/neoamp" README.md "$ARCHIVE/"
@@ -127,9 +121,14 @@ jobs:
     with:
       bundle: neoamp-${{ github.event.release.tag_name }}-linux-x86_64.flatpak
 
+  macos:
+    name: macOS
+    needs: version
+    uses: ./.github/workflows/macos.yml
+
   attach:
     name: Attach to the release
-    needs: [build, flatpak]
+    needs: [build, flatpak, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only this job can change the release; the builds above, which run every crate's build
@@ -146,4 +145,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.flatpak --clobber
+        run: gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.flatpak dist/*.dmg --clobber
