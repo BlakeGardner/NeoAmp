@@ -1561,6 +1561,7 @@ impl App {
             attrs = attrs.with_position(p);
         }
         attrs = attrs.with_window_level(self.window_level());
+        attrs = window_icon::with_icon(attrs, el);
         #[cfg(any(
             target_os = "linux",
             target_os = "freebsd",
@@ -1575,7 +1576,6 @@ impl App {
             el.create_window(attrs)
                 .with_context(|| format!("creating the {title} window"))?,
         );
-        window_icon::set(&window);
         if let Some(p) = at {
             window.set_outer_position(p);
         }
