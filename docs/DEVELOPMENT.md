@@ -86,6 +86,10 @@ files. Winamp itself just blitted rectangles out of those sheets, so this
 program does the same:
 
 - `src/canvas.rs` is a small RGBA software framebuffer with clipped blits.
+  The windows and the skin sheets are `Canvas`es, which take every position
+  and size in skin pixels and draw each skin pixel as a `Density` × `Density`
+  block of image pixels. Everything is drawn at density 1 for now; denser
+  canvases are groundwork for skins with higher-resolution artwork.
 - `src/sprites.rs` holds the sprite coordinates and window layout, which are
   identical for every classic skin.
 - `src/skin.rs` reads a `.wsz` (zip + BMP/PNG), `viscolor.txt`,

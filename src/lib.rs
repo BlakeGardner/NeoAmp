@@ -7,7 +7,8 @@
 //! - [`audio`]: decoding (symphonia), resampling, the equalizer and the output device (cpal),
 //!   and internet radio streams, fetched by [`http`].
 //! - [`vis`]: the spectrum analyser and oscilloscope.
-//! - [`canvas`]: the RGBA framebuffer and clipped blits.
+//! - [`canvas`]: the RGBA framebuffer and clipped blits, and canvases addressed in skin pixels
+//!   at any pixel density.
 //! - [`sprites`]: sprite coordinates and window layout shared by every classic skin.
 //! - [`dock`]: the magnetic snapping and window-attachment geometry.
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`, and

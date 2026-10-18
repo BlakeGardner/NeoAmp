@@ -10,7 +10,7 @@ use realfft::num_complex::Complex;
 use realfft::{RealFftPlanner, RealToComplex};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Rect};
 use crate::settings::{lenient, or_default};
 use crate::skin::Skin;
 
@@ -457,7 +457,7 @@ impl Vis {
     }
 
     /// Draw into `r` (76x16) using the skin's viscolor palette.
-    pub fn draw(&self, c: &mut Image, skin: &Skin, r: Rect) {
+    pub fn draw(&self, c: &mut Canvas, skin: &Skin, r: Rect) {
         if self.mode == VisMode::Off {
             return;
         }
@@ -475,7 +475,7 @@ impl Vis {
         }
     }
 
-    fn draw_analyzer(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+    fn draw_analyzer(&self, c: &mut Canvas, colors: &[[u8; 4]; 24], r: Rect) {
         let (width, pitch) = match self.analyzer.bands {
             Bands::Thick => (THICK_W, THICK_W + 1),
             Bands::Thin => (1, 1),
@@ -508,7 +508,7 @@ impl Vis {
     /// Draw the small version for the windowshade bar into `r` (38x5). Each pair of the
     /// analyser's bars makes one, so the whole spectrum still fits; the oscilloscope shows the
     /// start of its trace, unsqueezed, as Winamp's did. Neither draws peaks or a dot grid.
-    pub fn draw_small(&self, c: &mut Image, skin: &Skin, r: Rect) {
+    pub fn draw_small(&self, c: &mut Canvas, skin: &Skin, r: Rect) {
         let colors = &skin.vis_colors;
         match self.mode {
             VisMode::Analyzer => {
@@ -523,7 +523,7 @@ impl Vis {
         }
     }
 
-    fn draw_small_analyzer(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+    fn draw_small_analyzer(&self, c: &mut Canvas, colors: &[[u8; 4]; 24], r: Rect) {
         let (width, pitch) = match self.analyzer.bands {
             Bands::Thick => (THICK_W, THICK_W + 1),
             Bands::Thin => (1, 1),
@@ -549,7 +549,7 @@ impl Vis {
         }
     }
 
-    fn draw_small_scope(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+    fn draw_small_scope(&self, c: &mut Canvas, colors: &[[u8; 4]; 24], r: Rect) {
         let mid = SMALL_H / 2;
         let mut prev: Option<i32> = None;
         for (x, v) in (0..r.w).zip(self.scope) {
@@ -571,7 +571,7 @@ impl Vis {
         }
     }
 
-    fn draw_scope(&self, c: &mut Image, colors: &[[u8; 4]; 24], r: Rect) {
+    fn draw_scope(&self, c: &mut Canvas, colors: &[[u8; 4]; 24], r: Rect) {
         let mut prev: Option<i32> = None;
         for (x, v) in (0..r.w).zip(self.scope) {
             // Clamped to the 16 rows, so the cast cannot truncate.
@@ -626,6 +626,7 @@ pub fn demo_signal(t: f64, rate: u32, out: &mut [f32]) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::canvas::Density;
 
     fn tone(freq: f32, rate: u32, n: usize) -> Vec<f32> {
         (0..n)
@@ -755,9 +756,9 @@ mod tests {
         }
     }
 
-    fn drawn(v: &Vis) -> Image {
+    fn drawn(v: &Vis) -> Canvas {
         let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
-        let mut c = Image::new(W as i32, H);
+        let mut c = Canvas::new(W as i32, H, Density::ONE);
         v.draw(&mut c, &skin, Rect::new(0, 0, W as i32, H));
         c
     }
@@ -803,7 +804,7 @@ mod tests {
         let skin = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
         let small = |v: &Vis| {
             // Drawn one pixel in, to see that nothing spills out of its rectangle.
-            let mut c = Image::new(40, 7);
+            let mut c = Canvas::new(40, 7, Density::ONE);
             v.draw_small(&mut c, &skin, Rect::new(1, 1, 38, 5));
             c
         };
@@ -832,7 +833,7 @@ mod tests {
         );
         assert_eq!(c.get(1, 1), colors[0]);
         v.mode = VisMode::Off;
-        assert!(small(&v).data.iter().all(|b| *b == 0));
+        assert!(small(&v).image().data.iter().all(|b| *b == 0));
     }
 
     #[test]

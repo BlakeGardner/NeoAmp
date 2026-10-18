@@ -27,7 +27,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
 use winit::window::{Cursor, CursorIcon, CustomCursor, Window, WindowId, WindowLevel};
 
 use crate::audio::{self, Location, OutputDevice, Player, Scanner};
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Density, Rect};
 use crate::cursor::SkinCursor;
 use crate::dock::{self, SNAP_DISTANCE};
 use crate::eqf::{self, AutoLoad};
@@ -133,6 +133,18 @@ fn round_px(v: f64) -> i32 {
     } else {
         r.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
     }
+}
+
+/// The canvas of a window `(w, h)` skin pixels in size. Windows are drawn at one image pixel
+/// per skin pixel, and the GPU enlarges them to the window.
+fn window_canvas((w, h): (i32, i32)) -> Canvas {
+    Canvas::new(w, h, Density::ONE)
+}
+
+/// The size of `canvas`'s pixels, as the GPU buffer that shows them is sized.
+fn buffer_size(canvas: &Canvas) -> Result<(u32, u32)> {
+    let image = canvas.image();
+    Ok((u32::try_from(image.w)?, u32::try_from(image.h)?))
 }
 
 /// Window size in physical pixels for a `(w, h)` skin-pixel canvas at `scale`.
@@ -395,8 +407,7 @@ pub fn render_screenshot(
 ) -> Result<()> {
     const RATE: u32 = 44_100;
     let start = Instant::now();
-    let (w, h) = ui.layout().size;
-    let mut canvas = Image::new(w, h);
+    let mut canvas = window_canvas(ui.layout().size);
     ui.vis.set_sample_rate(RATE);
     let mut signal = vec![0.0; usize::try_from(u128::from(RATE) * FRAME.as_millis() / 1000)?];
     for k in 0..70 {
@@ -404,10 +415,10 @@ pub fn render_screenshot(
         ui.vis.push_samples(&signal);
         ui.draw_stacked(&mut canvas, skin, font, start + FRAME * k);
     }
-    let (pw, ph) = (u32::try_from(w)?, u32::try_from(h)?);
-    image::save_buffer(out, &canvas.data, pw, ph, image::ColorType::Rgba8)
+    let (pw, ph) = buffer_size(&canvas)?;
+    image::save_buffer(out, &canvas.image().data, pw, ph, image::ColorType::Rgba8)
         .with_context(|| format!("writing {}", out.display()))?;
-    println!("wrote {} ({w}x{h})", out.display());
+    println!("wrote {} ({pw}x{ph})", out.display());
     Ok(())
 }
 
@@ -525,7 +536,7 @@ struct Pane {
     /// Declared before `window` so the GPU surface is dropped first.
     pixels: Pixels<'static>,
     window: Arc<Window>,
-    canvas: Image,
+    canvas: Canvas,
     cursor: PhysicalPosition<f64>,
     /// The pointer the window shows; `None` until one is set, or once the skin changes.
     pointer: Option<Pointer>,
@@ -567,7 +578,7 @@ impl Pane {
         window_to_canvas(
             (self.cursor.x, self.cursor.y),
             (size.width, size.height),
-            (self.canvas.w, self.canvas.h),
+            self.canvas.size(),
         )
     }
 
@@ -1579,7 +1590,8 @@ impl App {
         if let Some(p) = at {
             window.set_outer_position(p);
         }
-        let (bw, bh) = (u32::try_from(w)?, u32::try_from(h)?);
+        let canvas = window_canvas((w, h));
+        let (bw, bh) = buffer_size(&canvas)?;
         let size = window.inner_size();
         let make_surface =
             || SurfaceTexture::new(size.width.max(1), size.height.max(1), window.clone());
@@ -1599,7 +1611,7 @@ impl App {
             upscaler: Upscaler::new(&pixels),
             pixels,
             window,
-            canvas: Image::new(w, h),
+            canvas,
             cursor: PhysicalPosition::new(0.0, 0.0),
             pointer: None,
             focused: false,
@@ -1798,9 +1810,9 @@ impl App {
             let Some(pane) = self.pane_mut(kind) else {
                 continue;
             };
-            if pane.canvas.w != w || pane.canvas.h != h {
-                pane.canvas = Image::new(w, h);
-                if let (Ok(bw), Ok(bh)) = (u32::try_from(w), u32::try_from(h)) {
+            if pane.canvas.size() != (w, h) {
+                pane.canvas = window_canvas((w, h));
+                if let Ok((bw, bh)) = buffer_size(&pane.canvas) {
                     match pane.pixels.resize_buffer(bw, bh) {
                         Ok(()) => pane.upscaler.rebind(&pane.pixels),
                         Err(e) => log::error!("resize_buffer: {e}"),
@@ -2356,14 +2368,15 @@ impl App {
         let Some(pane) = self.panes.iter_mut().find(|p| p.kind == kind) else {
             return;
         };
-        let (w, h) = ui.window_size(kind);
-        if pane.canvas.w != w || pane.canvas.h != h {
-            pane.canvas = Image::new(w, h);
+        let size = ui.window_size(kind);
+        if pane.canvas.size() != size {
+            pane.canvas = window_canvas(size);
         }
         ui.draw_window(kind, &mut pane.canvas, skin, font, now);
         let frame = pane.pixels.frame_mut();
-        if frame.len() == pane.canvas.data.len() {
-            frame.copy_from_slice(&pane.canvas.data);
+        let drawn = &pane.canvas.image().data;
+        if frame.len() == drawn.len() {
+            frame.copy_from_slice(drawn);
         }
         let started = Instant::now();
         if let Err(e) = pane.upscaler.render(&pane.pixels) {

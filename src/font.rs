@@ -3,7 +3,7 @@
 //! so the text looks the same everywhere: the font a skin's `pledit.txt` names gets the
 //! built-in one made to stand in for it.
 
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Image, Rect};
 use crate::shortcut::Style;
 use crate::skin::Skin;
 use crate::sprites::font as f;
@@ -47,7 +47,7 @@ pub fn glyph_pos(ch: char) -> (i32, i32) {
 }
 
 /// Draw a sequence of characters with the skin bitmap font at (x, y), clipped to `clip`.
-pub fn draw_bitmap_chars<I>(c: &mut Image, skin: &Skin, chars: I, x: i32, y: i32, clip: Rect)
+pub fn draw_bitmap_chars<I>(c: &mut Canvas, skin: &Skin, chars: I, x: i32, y: i32, clip: Rect)
 where
     I: IntoIterator<Item = char>,
 {
@@ -63,7 +63,7 @@ where
 }
 
 /// Draw `text` with the skin bitmap font at (x, y), clipped to `clip`.
-pub fn draw_bitmap_text(c: &mut Image, skin: &Skin, text: &str, x: i32, y: i32, clip: Rect) {
+pub fn draw_bitmap_text(c: &mut Canvas, skin: &Skin, text: &str, x: i32, y: i32, clip: Rect) {
     draw_bitmap_chars(c, skin, text.chars(), x, y, clip);
 }
 
@@ -281,6 +281,37 @@ impl TtfFont {
         color: [u8; 4],
         clip: Rect,
     ) -> i32 {
+        self.cover(text, x, top, clip, |px, py, cov| {
+            c.put(px, py, blend(c.get(px, py), color, cov));
+        })
+    }
+
+    /// Like [`TtfFont::draw`], on a skin canvas: positions, sizes and the advance are in skin
+    /// pixels.
+    pub fn draw_canvas(
+        &self,
+        c: &mut Canvas,
+        text: &str,
+        x: i32,
+        top: i32,
+        color: [u8; 4],
+        clip: Rect,
+    ) -> i32 {
+        self.cover(text, x, top, clip, |px, py, cov| {
+            c.put(px, py, blend(c.get(px, py), color, cov));
+        })
+    }
+
+    /// Lay out and rasterise `text` with its top at `top`, calling `plot` with the position and
+    /// coverage of every touched pixel inside `clip`; returns the advance in pixels.
+    fn cover(
+        &self,
+        text: &str,
+        x: i32,
+        top: i32,
+        clip: Rect,
+        mut plot: impl FnMut(i32, i32, u8),
+    ) -> i32 {
         let baseline = top + self.ascent;
         let mut pen = x as f32;
         for ch in text.chars() {
@@ -296,7 +327,7 @@ impl TtfFont {
                     let px = gx + xx as i32;
                     let py = gy + yy as i32;
                     if clip.contains(px, py) {
-                        c.put(px, py, blend(c.get(px, py), color, cov));
+                        plot(px, py, cov);
                     }
                 }
             }

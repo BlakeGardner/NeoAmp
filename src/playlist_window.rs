@@ -2,13 +2,13 @@
 
 use std::time::Instant;
 
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Rect};
 use crate::font::{TtfFont, bitmap_text_width, draw_bitmap_chars, draw_bitmap_text};
 use crate::skin::Skin;
 use crate::sprites::{font as f, pl as p, pl_shade as ps};
 use crate::ui::{Control, PlayState, Ui, push_fmt, write_time};
 
-pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect, now: Instant) {
+pub fn draw(ui: &Ui, c: &mut Canvas, skin: &Skin, font: Option<&TtfFont>, r: Rect, now: Instant) {
     let (ox, oy, w, h) = (r.x, r.y, r.w, r.h);
     let bounds = c.bounds();
     let active = ui.active;
@@ -102,10 +102,10 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
         match font {
             Some(f) => {
                 let tw = f.width(&time);
-                f.draw(c, &time, list.right() - 3 - tw, ry + 1, color, list);
+                f.draw_canvas(c, &time, list.right() - 3 - tw, ry + 1, color, list);
                 let label_clip =
                     Rect::new(list.x, ry, list.w - tw - 6, p::TRACK_H).intersect(&list);
-                f.draw(c, &text, list.x, ry + 1, color, label_clip);
+                f.draw_canvas(c, &text, list.x, ry + 1, color, label_clip);
             }
             None => {
                 let tw = bitmap_text_width(&time);
@@ -192,7 +192,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, font: Option<&TtfFont>, r: Rect
 
 /// Draw the playlist in windowshade mode: a bar as wide as the playlist showing the current
 /// track's number, title and length.
-pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
+pub fn draw_shade(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect) {
     let (ox, oy, w) = (r.x, r.y, r.w);
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
     let clip = r.intersect(&c.bounds());
