@@ -13,7 +13,7 @@ pub fn draw(ui: &Ui, c: &mut Canvas, skin: &Skin, font: Option<&TtfFont>, r: Rec
     let bounds = c.bounds();
     let active = ui.active;
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
-    let sheet = skin.sheet(p::LEFT.sheet);
+    let sheet = skin.sheet_at(p::LEFT.sheet, c.density());
     // One scratch string reused for every piece of text drawn this frame.
     let mut text = String::with_capacity(96);
 
@@ -197,7 +197,7 @@ pub fn draw_shade(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect) {
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
     let clip = r.intersect(&c.bounds());
 
-    let sheet = skin.sheet(ps::FILL.sheet);
+    let sheet = skin.sheet_at(ps::FILL.sheet, c.density());
     c.tile_h(sheet, ps::FILL.rect(), Rect::new(ox, oy, w, ps::H));
     skin.blit(c, ps::LEFT, ox, oy);
     skin.blit(c, ps::right(ui.active), ox + w - ps::RIGHT_W, oy);

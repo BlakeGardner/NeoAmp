@@ -303,6 +303,14 @@ impl Canvas {
         }
     }
 
+    /// `image` as a canvas of `density`; `None` unless its size is a whole number of skin
+    /// pixels at that density.
+    #[must_use]
+    pub fn from_image(image: Image, density: Density) -> Option<Self> {
+        let k = density.get();
+        (image.w % k == 0 && image.h % k == 0).then_some(Self { image, density })
+    }
+
     #[must_use]
     pub const fn density(&self) -> Density {
         self.density
@@ -555,6 +563,12 @@ mod tests {
         assert_eq!((c.image().w, c.image().h), (15, 12));
         assert_eq!(Canvas::new(-2, 4, density(2)).size(), (0, 4));
         assert_eq!(Canvas::from(pattern(3, 2)).size(), (3, 2));
+        let dense = Canvas::from_image(pattern(6, 4), density(2)).unwrap();
+        assert_eq!((dense.size(), dense.density()), ((3, 2), density(2)));
+        assert!(
+            Canvas::from_image(pattern(5, 4), density(2)).is_none(),
+            "half a skin pixel"
+        );
     }
 
     #[test]

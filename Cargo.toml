@@ -15,6 +15,10 @@ winit = "0.30"
 pixels = "0.17"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "png", "ico"] }
+# SVG sheets in skins (src/skin.rs), rasterised at the windows' density. Pure Rust (usvg parses,
+# tiny-skia draws); without default features it reads no fonts, decodes no embedded raster
+# images and loads no files an SVG names.
+resvg = { version = "0.48", default-features = false }
 fontdue = "0.9"
 anyhow = "1"
 log = "0.4"

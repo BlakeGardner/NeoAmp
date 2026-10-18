@@ -99,7 +99,12 @@ program does the same:
 - `src/skin.rs` reads a `.wsz` (zip + BMP/PNG), `viscolor.txt`,
   `pledit.txt`, `region.txt` and the mouse pointers (`src/cursor.rs`), and
   falls back per file to the embedded base skin for anything a skin leaves
-  out (see [Skin fonts and pointers](GUIDE.md#skin-fonts-and-pointers)).
+  out (see [Skin fonts and pointers](GUIDE.md#skin-fonts-and-pointers)). A
+  sheet can also come as SVG ([SVG_SKINS.md](SVG_SKINS.md)): `src/svg.rs`
+  parses it with usvg and rasterises it with resvg at each density a window
+  asks for, caching each raster. resvg is built without its default features,
+  so it reads no fonts, decodes no embedded bitmaps, and `svg.rs` keeps it
+  from loading files an SVG names.
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
   three windows and their windowshade bars; `src/ui.rs` holds state, hit
   testing and input.

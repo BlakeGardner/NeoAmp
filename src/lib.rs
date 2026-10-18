@@ -12,7 +12,8 @@
 //! - [`sprites`]: sprite coordinates and window layout shared by every classic skin.
 //! - [`dock`]: the magnetic snapping and window-attachment geometry.
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`, and
-//!   the mouse pointers in [`cursor`]).
+//!   the mouse pointers in [`cursor`]), with sheets that come as SVG parsed and rasterised by
+//!   `svg`.
 //! - [`ui`]: state, layout, hit testing and input; the window modules draw.
 //! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own, and
 //!   [`shortcut`] writes their keyboard shortcuts the platform's way (⌘ on macOS).
@@ -65,6 +66,7 @@ pub mod settings;
 pub mod shortcut;
 pub mod skin;
 pub mod sprites;
+mod svg;
 pub mod text_box;
 pub mod ui;
 mod upscale;

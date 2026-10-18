@@ -76,7 +76,8 @@ conveniences, like media key controls.
   controls: MPRIS on Linux, the media overlay on Windows, Control Center on
   macOS.
 - **Sharp on any screen.** The windows zoom from 1x to 3x to suit your
-  monitor, and the pixels stay crisp.
+  monitor, the playlist text stays crisp, and skins can bring SVG artwork that
+  stays sharp at any size.
 - **Follows your headphones.** Pick any output device. When it goes away,
   playback moves to the default and comes back when it returns, without
   losing its place.
