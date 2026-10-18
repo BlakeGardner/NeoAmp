@@ -3,7 +3,8 @@
 Everything NeoAmp does, and where it behaves differently on Linux, Windows
 and macOS. [SHORTCUTS.md](SHORTCUTS.md) lists every key, and
 [SETTINGS.md](SETTINGS.md) every setting it saves. Building NeoAmp, and how
-it works inside, are in [DEVELOPMENT.md](DEVELOPMENT.md).
+it works inside, are in [DEVELOPMENT.md](DEVELOPMENT.md), and making skins
+with SVG pictures in [SVG_SKINS.md](SVG_SKINS.md).
 
 - [Installing](#installing)
 - [Opening music](#opening-music)
@@ -16,6 +17,7 @@ it works inside, are in [DEVELOPMENT.md](DEVELOPMENT.md).
 - [File info](#file-info)
 - [Playback](#playback)
 - [Media keys and "now playing"](#media-keys-and-now-playing)
+- [SVG skins](#svg-skins)
 - [Skin fonts and pointers](#skin-fonts-and-pointers)
 - [Saved settings](#saved-settings)
 - [Limitations](#limitations)
@@ -388,12 +390,13 @@ some a pixel wider than others, which garbles the bitmap fonts. Beyond 8x
 and the graphics card enlarges them the rest of the way, keeping each skin
 pixel's colour flat.
 
-The skin's bitmaps are enlarged pixel for pixel and keep their classic look,
-but the playlist text is drawn as sharply as the screen allows, and window
-shapes whose `region.txt` has slanted edges get smooth outlines (most skins
-build their shapes from rectangles, which look the same). Windows are sized to
-whole screen pixels and the image is stretched to fill them exactly, so docked
-windows meet without gaps.
+The skin's bitmaps are enlarged pixel for pixel and keep their classic look
+(a skin that brings its pictures as SVG is drawn sharp throughout; see [SVG
+skins](#svg-skins)), but the playlist text is drawn as sharply as the screen
+allows, and window shapes whose `region.txt` has slanted edges get smooth
+outlines (most skins build their shapes from rectangles, which look the same).
+Windows are sized to whole screen pixels and the image is stretched to fill
+them exactly, so docked windows meet without gaps.
 
 ## Windowshade
 
@@ -743,6 +746,15 @@ artist. Play/pause never starts a playing track over, as Winamp's Play button
 - **Windows:** the System Media Transport Controls, the media overlay that
   the volume keys bring up, tied to the main window.
 - **macOS:** Now Playing in Control Center, and the media keys (F7 to F9).
+
+## SVG skins
+
+A skin can carry any of its pictures as SVG as well as, or instead of, a
+bitmap: `cbuttons.svg` beside `cbuttons.bmp`, say. NeoAmp draws each picture
+from its SVG when the skin has one, so it stays sharp at every zoom, and from
+the bitmap otherwise. Winamp and Webamp ignore the SVG files, so such a skin
+still works there. [SVG_SKINS.md](SVG_SKINS.md) describes the format for skin
+makers.
 
 ## Skin fonts and pointers
 

@@ -1,15 +1,17 @@
 //! Classic Winamp skin (.wsz) loading: sprite sheets, viscolor.txt, pledit.txt, region.txt and
-//! the mouse pointers (`.cur` files, see [`crate::cursor`]).
+//! the mouse pointers (`.cur` files, see [`crate::cursor`]). A sheet may also come as SVG
+//! (`cbuttons.svg`), which NeoAmp draws in place of the bitmap at the windows' density.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::canvas::{Canvas, Image, Rect};
+use crate::canvas::{Canvas, Density, Image, Rect};
 use crate::cursor::{self, CursorImage, SkinCursor};
 use crate::sprites::{Sheet, Sprite};
+use crate::svg::SvgSheet;
 
 /// Largest sheet dimension we accept from an untrusted archive (real sheets are under 400px).
 const MAX_SHEET_SIDE: u32 = 4096;
@@ -101,6 +103,8 @@ const SHEET_FILES: &[(Sheet, &str)] = &[
 pub struct Skin {
     pub name: String,
     sheets: HashMap<Sheet, Canvas>,
+    /// Sheets drawn as SVG, in place of the bitmaps of the same name.
+    vectors: HashMap<Sheet, SvgSheet>,
     /// Sheets taken from the base skin because this one has none of its own.
     borrowed: Vec<Sheet>,
     empty: Canvas,
@@ -118,6 +122,7 @@ impl std::fmt::Debug for Skin {
         f.debug_struct("Skin")
             .field("name", &self.name)
             .field("sheets", &self.sheets.keys().collect::<Vec<_>>())
+            .field("svg", &self.vectors.keys().collect::<Vec<_>>())
             .field("borrowed", &self.borrowed)
             .field("pledit", &self.pledit)
             .field("has_regions", &has_regions)
@@ -194,8 +199,20 @@ impl Skin {
                 }
             }
         }
-        if sheets.is_empty() {
-            bail!("{name}: no skin bitmaps found in archive");
+        let mut vectors = HashMap::new();
+        for (sheet, base) in SHEET_FILES {
+            let Some(bytes) = files.get(&format!("{base}.svg")) else {
+                continue;
+            };
+            match SvgSheet::parse(bytes) {
+                Ok(svg) => {
+                    vectors.insert(*sheet, svg);
+                }
+                Err(e) => log::warn!("{name}: cannot read {base}.svg: {e:#}"),
+            }
+        }
+        if sheets.is_empty() && vectors.is_empty() {
+            bail!("{name}: no skin bitmaps or SVG sheets found in archive");
         }
         let text = |key: &str| files.get(key).map(|b| String::from_utf8_lossy(b));
         let vis_colors = text("viscolor.txt").map_or(DEFAULT_VIS_COLORS, |t| parse_viscolor(&t));
@@ -220,6 +237,7 @@ impl Skin {
         Ok(Skin {
             name: name.to_string(),
             sheets,
+            vectors,
             borrowed: Vec::new(),
             empty: Canvas::from(Image::new(0, 0)),
             vis_colors,
@@ -236,17 +254,31 @@ impl Skin {
             self.cursors.entry(*which).or_insert_with(|| image.clone());
         }
         // Skins without balance.bmp reuse the volume slider graphics.
-        if !self.sheets.contains_key(&Sheet::Balance)
-            && let Some(v) = self.sheets.get(&Sheet::Volume)
-        {
-            self.sheets.insert(Sheet::Balance, v.clone());
-        }
-        for (k, v) in &base.sheets {
-            if *k == Sheet::NumsEx || self.sheets.contains_key(k) {
-                continue; // nums_ex is optional; its absence selects the numbers.bmp path
+        if !self.has_sheet(Sheet::Balance) {
+            if let Some(v) = self.sheets.get(&Sheet::Volume).cloned() {
+                self.sheets.insert(Sheet::Balance, v);
             }
-            self.sheets.insert(*k, v.clone());
-            self.borrowed.push(*k);
+            if let Some(v) = self.vectors.get(&Sheet::Volume).cloned() {
+                self.vectors.insert(Sheet::Balance, v);
+            }
+        }
+        // A sheet the skin has in neither form comes from the base skin, in both.
+        let missing: HashSet<Sheet> = base
+            .sheets
+            .keys()
+            .chain(base.vectors.keys())
+            // nums_ex is optional; its absence selects the numbers.bmp path.
+            .filter(|k| **k != Sheet::NumsEx && !self.has_sheet(**k))
+            .copied()
+            .collect();
+        for k in missing {
+            if let Some(v) = base.sheets.get(&k) {
+                self.sheets.insert(k, v.clone());
+            }
+            if let Some(v) = base.vectors.get(&k) {
+                self.vectors.insert(k, v.clone());
+            }
+            self.borrowed.push(k);
         }
     }
 
@@ -256,9 +288,16 @@ impl Skin {
         self.cursors.get(&which)
     }
 
+    /// Whether the skin has the sheet, as a bitmap or as SVG.
     #[must_use]
     pub fn has_sheet(&self, s: Sheet) -> bool {
-        self.sheets.contains_key(&s)
+        self.sheets.contains_key(&s) || self.vectors.contains_key(&s)
+    }
+
+    /// Whether the sheet is drawn from SVG.
+    #[must_use]
+    pub fn has_svg(&self, s: Sheet) -> bool {
+        self.vectors.contains_key(&s)
     }
 
     /// Whether the skin brought this sheet itself, rather than borrowing the base skin's.
@@ -267,18 +306,31 @@ impl Skin {
         self.has_sheet(s) && !self.borrowed.contains(&s)
     }
 
-    /// The decoded sheet, or an empty image (so blits draw nothing) when it is missing.
+    /// The sheet to draw on a canvas of `density`: the SVG sheet rasterised for it, else the
+    /// bitmap, else an empty canvas (so blits draw nothing).
+    #[must_use]
+    pub fn sheet_at(&self, s: Sheet, density: Density) -> &Canvas {
+        self.vectors
+            .get(&s)
+            .and_then(|v| v.raster(density))
+            .or_else(|| self.sheets.get(&s))
+            .unwrap_or(&self.empty)
+    }
+
+    /// The sheet at one image pixel per skin pixel, for reading its colours.
     #[must_use]
     pub fn sheet(&self, s: Sheet) -> &Canvas {
-        self.sheets.get(&s).unwrap_or(&self.empty)
+        self.sheet_at(s, Density::ONE)
     }
 
     pub fn blit(&self, dst: &mut Canvas, s: Sprite, x: i32, y: i32) {
-        dst.blit(self.sheet(s.sheet), s.rect(), x, y);
+        let sheet = self.sheet_at(s.sheet, dst.density());
+        dst.blit(sheet, s.rect(), x, y);
     }
 
     pub fn blit_clipped(&self, dst: &mut Canvas, s: Sprite, x: i32, y: i32, clip: Rect) {
-        dst.blit_clipped(self.sheet(s.sheet), s.rect(), x, y, clip);
+        let sheet = self.sheet_at(s.sheet, dst.density());
+        dst.blit_clipped(sheet, s.rect(), x, y, clip);
     }
 }
 
@@ -605,6 +657,77 @@ mod tests {
         let mut out = Cursor::new(Vec::new());
         img.write_to(&mut out, image::ImageFormat::Bmp).unwrap();
         out.into_inner()
+    }
+
+    /// A `w` x `h` SVG sheet: black, with its left half red.
+    fn half_red_svg(w: i32, h: i32) -> Vec<u8> {
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}"><rect width="{w}" height="{h}"/><rect width="{}" height="{h}" fill="#f00"/></svg>"##,
+            w / 2
+        )
+        .into_bytes()
+    }
+
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const BLACK: [u8; 4] = [0, 0, 0, 255];
+
+    #[test]
+    fn svg_sheets_take_the_place_of_bitmaps_at_every_density() {
+        let files = HashMap::from([
+            ("main.bmp".to_string(), image_bmp(main::W, main::H)),
+            ("cbuttons.bmp".to_string(), image_bmp(136, 36)),
+            ("cbuttons.svg".to_string(), half_red_svg(136, 36)),
+            ("titlebar.svg".to_string(), half_red_svg(344, 87)),
+        ]);
+        let mut skin = Skin::from_files(&files, "neo").unwrap();
+        assert!(skin.has_svg(Sheet::CButtons) && skin.has_svg(Sheet::TitleBar));
+        assert!(!skin.has_svg(Sheet::Main));
+        assert_eq!(skin.sheet(Sheet::CButtons).get(10, 10), RED, "the SVG wins");
+        let dense = skin.sheet_at(Sheet::CButtons, Density::new(3).unwrap());
+        assert_eq!((dense.size(), dense.image().w), ((136, 36), 408));
+        assert_eq!(dense.get(100, 10), BLACK);
+        // Bitmaps keep being drawn at any density, enlarged as they are blitted.
+        let main_sheet = skin.sheet_at(Sheet::Main, Density::new(3).unwrap());
+        assert_eq!(main_sheet.density(), Density::ONE);
+        // The base skin fills in only what the skin has in neither form.
+        let base = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        skin.fill_missing_from(&base);
+        assert!(
+            skin.has_own_sheet(Sheet::TitleBar),
+            "an SVG-only sheet is the skin's own"
+        );
+        assert!(skin.has_own_sheet(Sheet::CButtons));
+        assert!(skin.has_sheet(Sheet::EqMain) && !skin.has_own_sheet(Sheet::EqMain));
+        assert_eq!(skin.sheet(Sheet::TitleBar).get(300, 10), BLACK);
+    }
+
+    #[test]
+    fn a_skin_of_svg_sheets_alone_loads_and_shares_its_volume_with_balance() {
+        let files = HashMap::from([("volume.svg".to_string(), half_red_svg(68, 433))]);
+        let mut skin = Skin::from_files(&files, "vector").unwrap();
+        let base = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        skin.fill_missing_from(&base);
+        assert!(skin.has_svg(Sheet::Balance) && skin.has_own_sheet(Sheet::Balance));
+        assert_eq!(skin.sheet(Sheet::Balance).get(5, 5), RED);
+    }
+
+    #[test]
+    fn a_broken_svg_sheet_falls_back_to_its_bitmap() {
+        let files = HashMap::from([
+            ("cbuttons.bmp".to_string(), image_bmp(136, 36)),
+            ("cbuttons.svg".to_string(), b"<svg oops".to_vec()),
+            ("shufrep.svg".to_string(), half_red_svg(5000, 85)),
+        ]);
+        let skin = Skin::from_files(&files, "broken").unwrap();
+        assert!(!skin.has_svg(Sheet::CButtons) && !skin.has_svg(Sheet::ShufRep));
+        assert_eq!(skin.sheet(Sheet::CButtons).get(10, 10), BLACK);
+        assert!(
+            Skin::from_files(
+                &HashMap::from([("main.svg".to_string(), b"x".to_vec())]),
+                "none"
+            )
+            .is_err()
+        );
     }
 
     #[test]
