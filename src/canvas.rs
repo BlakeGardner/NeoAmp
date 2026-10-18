@@ -1,4 +1,5 @@
-//! A tiny software framebuffer: RGBA8 images with clipped rectangle blits.
+//! A tiny software framebuffer: RGBA8 images with clipped rectangle blits, and canvases that
+//! address an image in skin pixels so the same layout can be drawn at any pixel density.
 
 /// An axis-aligned pixel rectangle. `w` and `h` may be zero or negative, meaning empty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +56,17 @@ impl Rect {
     #[must_use]
     pub const fn bottom(&self) -> i32 {
         self.y + self.h
+    }
+
+    /// Every coordinate multiplied by `k`, saturating rather than overflowing.
+    #[must_use]
+    pub const fn scaled(&self, k: i32) -> Rect {
+        Rect::new(
+            self.x.saturating_mul(k),
+            self.y.saturating_mul(k),
+            self.w.saturating_mul(k),
+            self.h.saturating_mul(k),
+        )
     }
 }
 
@@ -212,6 +224,184 @@ impl Image {
     }
 }
 
+/// How many image pixels wide and tall each skin pixel is drawn. Skins lay everything out in
+/// their own pixels; a denser canvas draws the same layout with finer pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Density(u8);
+
+impl Density {
+    /// One image pixel per skin pixel, as classic skins were drawn.
+    pub const ONE: Density = Density(1);
+    /// The densest canvas NeoAmp draws.
+    pub const MAX: Density = Density(8);
+
+    /// `k` image pixels per skin pixel, or `None` outside 1 to [`Density::MAX`].
+    #[must_use]
+    pub const fn new(k: u8) -> Option<Density> {
+        if k >= Self::ONE.0 && k <= Self::MAX.0 {
+            Some(Density(k))
+        } else {
+            None
+        }
+    }
+
+    /// Image pixels per skin pixel along each axis.
+    #[must_use]
+    pub const fn get(self) -> i32 {
+        self.0 as i32
+    }
+}
+
+/// An image addressed in skin pixels. Every position, size and clip rectangle is in the skin's
+/// own pixels, and each skin pixel covers `density` × `density` pixels of the image
+/// underneath. Windows draw into one, and skin sheets are held as one, so a blit between two
+/// of the same density copies whole blocks.
+#[derive(Clone, Debug)]
+pub struct Canvas {
+    image: Image,
+    density: Density,
+}
+
+impl From<Image> for Canvas {
+    /// The image as a canvas of [`Density::ONE`]: one image pixel per skin pixel.
+    fn from(image: Image) -> Self {
+        Self {
+            image,
+            density: Density::ONE,
+        }
+    }
+}
+
+impl Canvas {
+    /// A transparent canvas `w` × `h` skin pixels in size. Negative sizes are treated as zero.
+    #[must_use]
+    pub fn new(w: i32, h: i32, density: Density) -> Self {
+        let k = density.get();
+        Self {
+            image: Image::new(w.max(0).saturating_mul(k), h.max(0).saturating_mul(k)),
+            density,
+        }
+    }
+
+    #[must_use]
+    pub const fn density(&self) -> Density {
+        self.density
+    }
+
+    /// The pixels underneath: `density` times the canvas size along each axis.
+    #[must_use]
+    pub const fn image(&self) -> &Image {
+        &self.image
+    }
+
+    /// Width and height in skin pixels.
+    #[must_use]
+    pub const fn size(&self) -> (i32, i32) {
+        let k = self.density.get();
+        (self.image.w / k, self.image.h / k)
+    }
+
+    /// The whole canvas, in skin pixels.
+    #[must_use]
+    pub const fn bounds(&self) -> Rect {
+        let (w, h) = self.size();
+        Rect::new(0, 0, w, h)
+    }
+
+    /// The colour of skin pixel (`x`, `y`), read from its top-left image pixel; transparent
+    /// black when out of bounds.
+    #[must_use]
+    pub fn get(&self, x: i32, y: i32) -> [u8; 4] {
+        let k = self.density.get();
+        self.image.get(x.saturating_mul(k), y.saturating_mul(k))
+    }
+
+    /// Paint skin pixel (`x`, `y`); ignored when out of bounds.
+    pub fn put(&mut self, x: i32, y: i32, c: [u8; 4]) {
+        self.fill_rect(Rect::new(x, y, 1, 1), c);
+    }
+
+    pub fn clear(&mut self, c: [u8; 4]) {
+        self.image.clear(c);
+    }
+
+    pub fn fill_rect(&mut self, r: Rect, c: [u8; 4]) {
+        self.image.fill_rect(r.scaled(self.density.get()), c);
+    }
+
+    pub fn fill_rect_clipped(&mut self, r: Rect, c: [u8; 4], clip: Rect) {
+        self.fill_rect(r.intersect(&clip), c);
+    }
+
+    /// Copy the `src_rect` block of `src` to (`dx`, `dy`), clipped to both canvases.
+    pub fn blit(&mut self, src: &Canvas, src_rect: Rect, dx: i32, dy: i32) {
+        let clip = self.bounds();
+        self.blit_clipped(src, src_rect, dx, dy, clip);
+    }
+
+    /// Like [`Canvas::blit`], additionally clipped to `clip`. A source of another density is
+    /// resampled to the nearest pixel.
+    pub fn blit_clipped(&mut self, src: &Canvas, src_rect: Rect, dx: i32, dy: i32, clip: Rect) {
+        let k = self.density.get();
+        if src.density == self.density {
+            self.image.blit_clipped(
+                &src.image,
+                src_rect.scaled(k),
+                dx.saturating_mul(k),
+                dy.saturating_mul(k),
+                clip.scaled(k),
+            );
+        } else {
+            self.blit_resampled(src, src_rect, dx, dy, clip);
+        }
+    }
+
+    /// [`Canvas::blit_clipped`] between densities: each image pixel of the destination takes
+    /// the source image pixel at the same place within the skin pixel block.
+    fn blit_resampled(&mut self, src: &Canvas, src_rect: Rect, dx: i32, dy: i32, clip: Rect) {
+        let (kd, ks) = (self.density.get(), src.density.get());
+        let origin = (dx.saturating_mul(kd), dy.saturating_mul(kd));
+        let dest = Rect::new(dx, dy, src_rect.w, src_rect.h)
+            .scaled(kd)
+            .intersect(&clip.scaled(kd))
+            .intersect(&self.image.bounds());
+        let from = src_rect.scaled(ks);
+        for y in dest.y..dest.bottom() {
+            let sy = from.y + (y - origin.1) * ks / kd;
+            for x in dest.x..dest.right() {
+                let sx = from.x + (x - origin.0) * ks / kd;
+                if src.image.bounds().contains(sx, sy) {
+                    self.image.put(x, y, src.image.get(sx, sy));
+                }
+            }
+        }
+    }
+
+    /// Repeat `src_rect` horizontally across `dest` (clipped to it).
+    pub fn tile_h(&mut self, src: &Canvas, src_rect: Rect, dest: Rect) {
+        if src_rect.w <= 0 {
+            return;
+        }
+        let mut x = dest.x;
+        while x < dest.right() {
+            self.blit_clipped(src, src_rect, x, dest.y, dest);
+            x += src_rect.w;
+        }
+    }
+
+    /// Repeat `src_rect` vertically down `dest` (clipped to it).
+    pub fn tile_v(&mut self, src: &Canvas, src_rect: Rect, dest: Rect) {
+        if src_rect.h <= 0 {
+            return;
+        }
+        let mut y = dest.y;
+        while y < dest.bottom() {
+            self.blit_clipped(src, src_rect, dest.x, y, dest);
+            y += src_rect.h;
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -273,5 +463,139 @@ mod tests {
         img.put(-1, 0, RED);
         assert_eq!(img.get(5, 5), [0, 0, 0, 0]);
         assert!(img.data.iter().all(|b| *b == 0));
+    }
+
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const CLEAR: [u8; 4] = [0, 0, 0, 0];
+
+    fn density(k: u8) -> Density {
+        Density::new(k).unwrap()
+    }
+
+    /// A `w` × `h` image where every pixel has its own colour.
+    fn pattern(w: i32, h: i32) -> Image {
+        let mut img = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                img.put(x, y, [x as u8, y as u8, 7, 255]);
+            }
+        }
+        img
+    }
+
+    /// The image of `img`, each pixel enlarged to a `k` × `k` block.
+    fn enlarged(img: &Image, k: i32) -> Image {
+        let mut out = Image::new(img.w * k, img.h * k);
+        for y in 0..out.h {
+            for x in 0..out.w {
+                out.put(x, y, img.get(x / k, y / k));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn density_accepts_one_to_max_only() {
+        assert_eq!(Density::new(0), None);
+        assert_eq!(Density::new(1), Some(Density::ONE));
+        assert_eq!(Density::new(8), Some(Density::MAX));
+        assert_eq!(Density::new(9), None);
+        assert_eq!(density(3).get(), 3);
+    }
+
+    #[test]
+    fn a_canvas_is_measured_in_skin_pixels_at_any_density() {
+        let c = Canvas::new(5, 4, density(3));
+        assert_eq!(c.size(), (5, 4));
+        assert_eq!(c.bounds(), Rect::new(0, 0, 5, 4));
+        assert_eq!((c.image().w, c.image().h), (15, 12));
+        assert_eq!(Canvas::new(-2, 4, density(2)).size(), (0, 4));
+        assert_eq!(Canvas::from(pattern(3, 2)).size(), (3, 2));
+    }
+
+    #[test]
+    fn at_density_one_a_canvas_draws_exactly_like_its_image() {
+        let src = pattern(9, 7);
+        let mut img = Image::new(12, 10);
+        let mut c = Canvas::from(Image::new(12, 10));
+        let sheet = Canvas::from(src.clone());
+        let clip = Rect::new(1, 1, 9, 7);
+        img.fill_rect(Rect::new(-2, 3, 6, 3), GREEN);
+        c.fill_rect(Rect::new(-2, 3, 6, 3), GREEN);
+        img.blit_clipped(&src, Rect::new(2, 1, 8, 8), 3, -1, clip);
+        c.blit_clipped(&sheet, Rect::new(2, 1, 8, 8), 3, -1, clip);
+        img.tile_h(&src, Rect::new(0, 0, 4, 2), Rect::new(0, 8, 11, 2));
+        c.tile_h(&sheet, Rect::new(0, 0, 4, 2), Rect::new(0, 8, 11, 2));
+        img.tile_v(&src, Rect::new(5, 0, 1, 3), Rect::new(11, 0, 1, 10));
+        c.tile_v(&sheet, Rect::new(5, 0, 1, 3), Rect::new(11, 0, 1, 10));
+        img.put(0, 0, RED);
+        c.put(0, 0, RED);
+        assert_eq!(c.image().data, img.data);
+        assert_eq!(c.get(4, 2), img.get(4, 2));
+    }
+
+    #[test]
+    fn a_dense_canvas_paints_and_reads_whole_skin_pixels() {
+        let mut c = Canvas::new(4, 3, density(2));
+        c.put(1, 2, RED);
+        c.fill_rect_clipped(Rect::new(2, 0, 5, 1), GREEN, c.bounds());
+        assert_eq!(c.get(1, 2), RED);
+        let img = c.image();
+        assert_eq!([img.get(2, 4), img.get(3, 5)], [RED, RED]);
+        assert_eq!([img.get(1, 4), img.get(4, 4)], [CLEAR, CLEAR]);
+        assert_eq!([img.get(4, 0), img.get(7, 1)], [GREEN, GREEN]);
+        assert_eq!(img.get(4, 2), CLEAR);
+        c.put(4, 0, RED);
+        c.put(-1, 0, RED);
+        assert_eq!(c.get(4, 0), CLEAR, "out of bounds");
+    }
+
+    #[test]
+    fn blits_of_equal_density_copy_blocks_clipped_in_skin_pixels() {
+        let src = pattern(6, 5);
+        let k = 3;
+        let sheet = Canvas {
+            image: enlarged(&src, k),
+            density: density(3),
+        };
+        let mut c = Canvas::new(8, 8, density(3));
+        // Hanging off the left edge and clipped at the bottom.
+        c.blit_clipped(&sheet, Rect::new(1, 1, 4, 4), -1, 2, Rect::new(0, 0, 8, 5));
+        let mut expected = Image::new(8, 8);
+        expected.blit_clipped(&src, Rect::new(1, 1, 4, 4), -1, 2, Rect::new(0, 0, 8, 5));
+        assert_eq!(c.image().data, enlarged(&expected, k).data);
+    }
+
+    #[test]
+    fn blits_between_densities_take_the_nearest_source_pixel() {
+        let src = pattern(4, 4);
+        // From one pixel per skin pixel to three: each source pixel becomes a 3x3 block.
+        let mut dense = Canvas::new(4, 4, density(3));
+        dense.blit(&Canvas::from(src.clone()), Rect::new(0, 0, 4, 4), 0, 0);
+        assert_eq!(dense.image().data, enlarged(&src, 3).data);
+        // And back: the top-left image pixel of each block.
+        let mut sparse = Canvas::new(4, 4, Density::ONE);
+        sparse.blit_clipped(&dense, Rect::new(1, 0, 3, 4), 1, 1, Rect::new(0, 0, 3, 4));
+        assert_eq!(sparse.get(1, 1), src.get(1, 0));
+        assert_eq!(sparse.get(2, 3), src.get(2, 2));
+        assert_eq!(sparse.get(3, 1), CLEAR, "clipped");
+        assert_eq!(sparse.get(0, 0), CLEAR, "outside the destination");
+    }
+
+    #[test]
+    fn dense_tiling_covers_exactly_the_destination() {
+        let mut c = Canvas::new(10, 2, density(2));
+        let mut sheet = Canvas::new(3, 2, density(2));
+        sheet.clear(RED);
+        c.tile_h(&sheet, sheet.bounds(), Rect::new(1, 0, 7, 2));
+        assert_eq!(
+            [c.get(0, 0), c.get(1, 0), c.get(7, 1), c.get(8, 0)],
+            [CLEAR, RED, RED, CLEAR]
+        );
+        let img = c.image();
+        assert_eq!(
+            [img.get(1, 0), img.get(2, 0), img.get(15, 3), img.get(16, 3)],
+            [CLEAR, RED, RED, CLEAR]
+        );
     }
 }

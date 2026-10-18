@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::audio::{EQ_RANGE_DB, EqSettings, Event, Location, Station, StreamStatus, TrackInfo};
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Rect};
 use crate::cursor::SkinCursor;
 use crate::eqf::{self, Preset};
 use crate::font::TtfFont;
@@ -1821,7 +1821,7 @@ impl Ui {
     pub fn draw_window(
         &self,
         kind: WindowKind,
-        c: &mut Image,
+        c: &mut Canvas,
         skin: &Skin,
         font: Option<&TtfFont>,
         now: Instant,
@@ -1834,7 +1834,7 @@ impl Ui {
     /// Advance one frame and draw every open window stacked into a single canvas.
     pub fn draw_stacked(
         &mut self,
-        c: &mut Image,
+        c: &mut Canvas,
         skin: &Skin,
         font: Option<&TtfFont>,
         now: Instant,
@@ -1855,7 +1855,7 @@ impl Ui {
     fn draw_at(
         &self,
         kind: WindowKind,
-        c: &mut Image,
+        c: &mut Canvas,
         skin: &Skin,
         font: Option<&TtfFont>,
         r: Rect,
@@ -2680,7 +2680,7 @@ impl Ui {
 }
 
 /// Make every pixel of `r` outside `mask` fully transparent.
-fn apply_mask(c: &mut Image, r: Rect, mask: &Mask) {
+fn apply_mask(c: &mut Canvas, r: Rect, mask: &Mask) {
     let w = usize::try_from(r.w).unwrap_or(0);
     if w == 0 {
         return;
@@ -2697,6 +2697,7 @@ fn apply_mask(c: &mut Image, r: Rect, mask: &Mask) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::canvas::Density;
     use crate::vis::{Bands, VisMode};
     use WindowKind::{Eq, Main, Playlist};
     use std::time::Duration;
@@ -3244,12 +3245,12 @@ mod tests {
         let mut singles = Vec::new();
         for kind in WindowKind::ALL {
             let (w, h) = ui.window_size(kind);
-            let mut c = Image::new(w, h);
+            let mut c = Canvas::new(w, h, Density::ONE);
             ui.draw_window(kind, &mut c, &skin, None, now);
             singles.push(c);
         }
         let lay = ui.layout();
-        let mut stacked = Image::new(lay.size.0, lay.size.1);
+        let mut stacked = Canvas::new(lay.size.0, lay.size.1, Density::ONE);
         ui.draw_stacked(&mut stacked, &skin, None, now);
         let vis = m::VIS; // time-seeded, so excluded from the comparison
         for (i, origin) in [lay.main, lay.eq.unwrap(), lay.pl.unwrap()]
@@ -3257,8 +3258,9 @@ mod tests {
             .enumerate()
         {
             let single = &singles[i];
-            for y in 0..single.h {
-                for x in 0..single.w {
+            let (w, h) = single.size();
+            for y in 0..h {
+                for x in 0..w {
                     if i == 0 && vis.contains(x, y) {
                         continue;
                     }
@@ -3379,7 +3381,7 @@ mod tests {
         let mut ui = Ui::new();
         let now = Instant::now();
         let draw = |ui: &Ui| {
-            let mut c = Image::new(m::W, m::H);
+            let mut c = Canvas::new(m::W, m::H, Density::ONE);
             ui.draw_window(Main, &mut c, &skin, None, now);
             c
         };
@@ -3557,15 +3559,15 @@ mod tests {
         let now = Instant::now();
         let draw = |ui: &Ui, skin: &Skin, kind| {
             let (w, h) = ui.window_size(kind);
-            let mut c = Image::new(w, h);
+            let mut c = Canvas::new(w, h, Density::ONE);
             ui.draw_window(kind, &mut c, skin, None, now);
             c
         };
         for kind in WindowKind::ALL {
             let c = draw(&ui, &skin, kind);
-            assert_eq!(c.h, 14);
+            assert_eq!(c.size().1, 14);
             assert!(
-                c.data.chunks_exact(4).all(|px| px[3] == 255),
+                c.image().data.chunks_exact(4).all(|px| px[3] == 255),
                 "{kind:?} opaque"
             );
         }
@@ -3607,7 +3609,7 @@ mod tests {
         let now = Instant::now();
         ui.tick(now);
         let lay = ui.layout();
-        let mut stacked = Image::new(lay.size.0, lay.size.1);
+        let mut stacked = Canvas::new(lay.size.0, lay.size.1, Density::ONE);
         ui.draw_stacked(&mut stacked, &skin, None, now);
         for (kind, origin) in [
             (Main, lay.main),
@@ -3615,7 +3617,7 @@ mod tests {
             (Playlist, lay.pl.unwrap()),
         ] {
             let (w, h) = ui.window_size(kind);
-            let mut c = Image::new(w, h);
+            let mut c = Canvas::new(w, h, Density::ONE);
             ui.draw_window(kind, &mut c, &skin, None, now);
             for y in 0..h {
                 for x in 0..w {

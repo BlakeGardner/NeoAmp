@@ -2,13 +2,13 @@
 
 use std::time::Instant;
 
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Rect};
 use crate::font::{draw_bitmap_chars, draw_bitmap_text};
 use crate::skin::Skin;
 use crate::sprites::{Sheet, Third, digits, main as m, main_shade as ms};
 use crate::ui::{Control, PlayState, Ui, push_fmt};
 
-pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
+pub fn draw(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect, now: Instant) {
     let (ox, oy) = (r.x, r.y);
     let bounds = c.bounds();
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
@@ -282,7 +282,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
 
 /// Draw the main window in windowshade mode: the title bar's buttons, a small visualizer,
 /// the time in the text font, transport buttons and a position bar, all in one bar.
-pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
+pub fn draw_shade(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect, now: Instant) {
     let (ox, oy) = (r.x, r.y);
     let bounds = c.bounds();
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
@@ -343,7 +343,7 @@ pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, now: Instant) {
 }
 
 /// Skins without nums_ex.bmp have no minus glyph: draw a bar in the digit colour.
-fn draw_minus(c: &mut Image, skin: &Skin, x: i32, y: i32) {
+fn draw_minus(c: &mut Canvas, skin: &Skin, x: i32, y: i32) {
     skin.blit(c, digits::BLANK, x, y);
     let sheet = skin.sheet(Sheet::Numbers);
     // Borrow the colour of the horizontal segment of "0" (top row of the glyph).

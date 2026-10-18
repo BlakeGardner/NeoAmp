@@ -2,12 +2,12 @@
 
 use std::time::Instant;
 
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Rect};
 use crate::skin::Skin;
 use crate::sprites::{Sheet, Third, eq as e, eq_shade as es};
 use crate::ui::{Control, Ui};
 
-pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
+pub fn draw(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect, _now: Instant) {
     let (ox, oy) = (r.x, r.y);
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
 
@@ -71,7 +71,7 @@ pub fn draw(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect, _now: Instant) {
 }
 
 /// Draw the equalizer in windowshade mode: a bar with the volume and balance sliders.
-pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
+pub fn draw_shade(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect) {
     let (ox, oy) = (r.x, r.y);
     let pressed = |ctl: Control| ui.pressed == Some(ctl);
 
@@ -108,7 +108,7 @@ pub fn draw_shade(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
     );
 }
 
-fn draw_slider(c: &mut Image, skin: &Skin, r: Rect, value: f32, pressed: bool) {
+fn draw_slider(c: &mut Canvas, skin: &Skin, r: Rect, value: f32, pressed: bool) {
     // `value` is clamped to 0..=1, so these casts stay in range.
     let frame = (value * (e::SLIDER_FRAMES - 1) as f32).round() as i32;
     skin.blit(c, e::slider_frame(frame), r.x, r.y);
@@ -122,7 +122,7 @@ fn draw_slider(c: &mut Image, skin: &Skin, r: Rect, value: f32, pressed: bool) {
 }
 
 /// The 113x19 response curve: a spline through the ten band values, coloured by height.
-fn draw_graph(ui: &Ui, c: &mut Image, skin: &Skin, r: Rect) {
+fn draw_graph(ui: &Ui, c: &mut Canvas, skin: &Skin, r: Rect) {
     const ROWS: usize = 19;
     skin.blit(c, e::GRAPH_BG, r.x, r.y);
     let gradient = skin.sheet(e::GRAPH_GRADIENT.sheet);

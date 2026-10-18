@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::canvas::{Image, Rect};
+use crate::canvas::{Canvas, Image, Rect};
 use crate::cursor::{self, CursorImage, SkinCursor};
 use crate::sprites::{Sheet, Sprite, eq, eq_shade, main, main_shade};
 
@@ -103,10 +103,10 @@ const SHEET_FILES: &[(Sheet, &str)] = &[
 #[derive(Clone)]
 pub struct Skin {
     pub name: String,
-    sheets: HashMap<Sheet, Image>,
+    sheets: HashMap<Sheet, Canvas>,
     /// Sheets taken from the base skin because this one has none of its own.
     borrowed: Vec<Sheet>,
-    empty: Image,
+    empty: Canvas,
     pub vis_colors: [[u8; 4]; 24],
     pub pledit: PleditColors,
     pub regions: Regions,
@@ -236,7 +236,7 @@ impl Skin {
             name: name.to_string(),
             sheets,
             borrowed: Vec::new(),
-            empty: Image::new(0, 0),
+            empty: Canvas::from(Image::new(0, 0)),
             vis_colors,
             pledit,
             main_mask: mask(regions.normal.as_ref(), main::W, main::H),
@@ -288,20 +288,20 @@ impl Skin {
 
     /// The decoded sheet, or an empty image (so blits draw nothing) when it is missing.
     #[must_use]
-    pub fn sheet(&self, s: Sheet) -> &Image {
+    pub fn sheet(&self, s: Sheet) -> &Canvas {
         self.sheets.get(&s).unwrap_or(&self.empty)
     }
 
-    pub fn blit(&self, dst: &mut Image, s: Sprite, x: i32, y: i32) {
+    pub fn blit(&self, dst: &mut Canvas, s: Sprite, x: i32, y: i32) {
         dst.blit(self.sheet(s.sheet), s.rect(), x, y);
     }
 
-    pub fn blit_clipped(&self, dst: &mut Image, s: Sprite, x: i32, y: i32, clip: Rect) {
+    pub fn blit_clipped(&self, dst: &mut Canvas, s: Sprite, x: i32, y: i32, clip: Rect) {
         dst.blit_clipped(self.sheet(s.sheet), s.rect(), x, y, clip);
     }
 }
 
-fn decode_image(bytes: &[u8]) -> Result<Image> {
+fn decode_image(bytes: &[u8]) -> Result<Canvas> {
     let img = image::load_from_memory(bytes)?;
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || w > MAX_SHEET_SIDE || h > MAX_SHEET_SIDE {
@@ -313,6 +313,7 @@ fn decode_image(bytes: &[u8]) -> Result<Image> {
         px[3] = 255;
     }
     Image::from_rgba(i32::try_from(w)?, i32::try_from(h)?, data)
+        .map(Canvas::from)
         .context("pixel buffer size mismatch")
 }
 
@@ -564,8 +565,7 @@ mod tests {
                 assert!(skin.has_sheet(*sheet), "missing {sheet:?}");
             }
         }
-        assert_eq!(skin.sheet(Sheet::Main).w, main::W);
-        assert_eq!(skin.sheet(Sheet::Main).h, main::H);
+        assert_eq!(skin.sheet(Sheet::Main).size(), (main::W, main::H));
         assert!(skin.main_mask.is_none() && skin.main_shade_mask.is_none());
         assert!(skin.has_own_sheet(Sheet::EqEx));
         // Winamp 2.91's own pointers, and only those.
