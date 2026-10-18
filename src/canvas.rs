@@ -250,7 +250,27 @@ impl Density {
     pub const fn get(self) -> i32 {
         self.0 as i32
     }
+
+    /// The least density whose pixels are no larger than the screen's when the skin is shown
+    /// at `scale` screen pixels per skin pixel, so the GPU only ever shrinks the canvas a
+    /// little. Capped at [`Density::MAX`]; past it the GPU enlarges instead.
+    #[must_use]
+    pub fn covering(scale: f64) -> Density {
+        let k = (scale - SCALE_TOLERANCE).ceil();
+        if k.is_nan() || k <= 1.0 {
+            Self::ONE
+        } else if k >= f64::from(Self::MAX.0) {
+            Self::MAX
+        } else {
+            // A whole number between 2 and MAX - 1, so the cast is exact.
+            Density(k as u8)
+        }
+    }
 }
+
+/// How far a scale may sit above a whole number and still count as it, absorbing float noise
+/// such as `1.5 * 2.0 * 1.000_000_1`.
+const SCALE_TOLERANCE: f64 = 1e-6;
 
 /// An image addressed in skin pixels. Every position, size and clip rectangle is in the skin's
 /// own pixels, and each skin pixel covers `density` × `density` pixels of the image
@@ -292,6 +312,11 @@ impl Canvas {
     #[must_use]
     pub const fn image(&self) -> &Image {
         &self.image
+    }
+
+    /// The pixels underneath, for drawing finer than whole skin pixels.
+    pub fn image_mut(&mut self) -> &mut Image {
+        &mut self.image
     }
 
     /// Width and height in skin pixels.
@@ -360,20 +385,39 @@ impl Canvas {
     /// the source image pixel at the same place within the skin pixel block.
     fn blit_resampled(&mut self, src: &Canvas, src_rect: Rect, dx: i32, dy: i32, clip: Rect) {
         let (kd, ks) = (self.density.get(), src.density.get());
+        // Clipped to the source first, so every destination pixel has a source pixel.
+        let s = src_rect.intersect(&src.bounds());
+        let (dx, dy) = (dx + (s.x - src_rect.x), dy + (s.y - src_rect.y));
         let origin = (dx.saturating_mul(kd), dy.saturating_mul(kd));
-        let dest = Rect::new(dx, dy, src_rect.w, src_rect.h)
+        let dest = Rect::new(dx, dy, s.w, s.h)
             .scaled(kd)
             .intersect(&clip.scaled(kd))
             .intersect(&self.image.bounds());
-        let from = src_rect.scaled(ks);
+        let from = s.scaled(ks);
+        let row_len = dest.w.unsigned_abs() as usize * 4;
+        // The source row the last destination row came from, and where that row starts.
+        let mut previous: Option<(i32, usize)> = None;
         for y in dest.y..dest.bottom() {
+            let Some(row) = self.image.index(dest.x, y) else {
+                continue;
+            };
             let sy = from.y + (y - origin.1) * ks / kd;
+            if let Some((above, start)) = previous
+                && above == sy
+            {
+                // Enlarging: the row above came from the same source row.
+                self.image.data.copy_within(start..start + row_len, row);
+                continue;
+            }
             for x in dest.x..dest.right() {
                 let sx = from.x + (x - origin.0) * ks / kd;
-                if src.image.bounds().contains(sx, sy) {
-                    self.image.put(x, y, src.image.get(sx, sy));
-                }
+                let Some(si) = src.image.index(sx, sy) else {
+                    continue;
+                };
+                let di = row + (x - dest.x).unsigned_abs() as usize * 4;
+                self.image.data[di..di + 4].copy_from_slice(&src.image.data[si..si + 4]);
             }
+            previous = Some((sy, row));
         }
     }
 
@@ -580,6 +624,30 @@ mod tests {
         assert_eq!(sparse.get(2, 3), src.get(2, 2));
         assert_eq!(sparse.get(3, 1), CLEAR, "clipped");
         assert_eq!(sparse.get(0, 0), CLEAR, "outside the destination");
+    }
+
+    #[test]
+    fn a_blit_between_densities_copies_only_what_the_source_has() {
+        let src = Canvas::from(pattern(3, 3));
+        let mut dense = Canvas::new(4, 4, density(2));
+        dense.clear(GREEN);
+        // The source rectangle hangs off the source's top-left corner by one skin pixel.
+        dense.blit(&src, Rect::new(-1, -1, 3, 3), 1, 1);
+        assert_eq!(dense.get(1, 1), GREEN, "nothing to copy");
+        assert_eq!(dense.get(2, 2), src.get(0, 0));
+        assert_eq!(dense.get(3, 3), src.get(1, 1));
+        assert_eq!(dense.image().get(7, 6), src.get(1, 1));
+        assert_eq!(dense.get(3, 1), GREEN);
+    }
+
+    #[test]
+    fn the_covering_density_rounds_the_scale_up_within_one_to_max() {
+        let k = |scale: f64| Density::covering(scale).get();
+        assert_eq!([k(0.5), k(1.0), k(1.5), k(2.0), k(2.5)], [1, 1, 2, 2, 3]);
+        assert_eq!(k(1.5 * 2.0 * 1.000_000_1), 3, "float noise is not a step");
+        assert_eq!(k(2.000_1), 3);
+        assert_eq!([k(7.5), k(8.0), k(24.0)], [8, 8, 8]);
+        assert_eq!([k(f64::NAN), k(-3.0), k(f64::INFINITY)], [1, 1, 8]);
     }
 
     #[test]

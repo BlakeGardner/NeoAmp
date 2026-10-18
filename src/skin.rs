@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::canvas::{Canvas, Image, Rect};
 use crate::cursor::{self, CursorImage, SkinCursor};
-use crate::sprites::{Sheet, Sprite, eq, eq_shade, main, main_shade};
+use crate::sprites::{Sheet, Sprite};
 
 /// Largest sheet dimension we accept from an untrusted archive (real sheets are under 400px).
 const MAX_SHEET_SIDE: u32 = 4096;
@@ -50,9 +50,6 @@ pub struct Regions {
     /// `[EqualizerWS]`: the equalizer in windowshade mode.
     pub equalizer_ws: Option<Polygons>,
 }
-
-/// A visibility mask the size of a window: `true` where the window is drawn.
-pub type Mask = Box<[bool]>;
 
 pub const DEFAULT_VIS_COLORS: [[u8; 4]; 24] = [
     [0, 0, 0, 255],
@@ -109,26 +106,15 @@ pub struct Skin {
     empty: Canvas,
     pub vis_colors: [[u8; 4]; 24],
     pub pledit: PleditColors,
+    /// The window shapes; the windows are cut to them as they are drawn, at whatever density.
     pub regions: Regions,
-    /// Window-shape masks rasterised once from `regions`, if the skin defines any.
-    pub main_mask: Option<Mask>,
-    pub main_shade_mask: Option<Mask>,
-    pub eq_mask: Option<Mask>,
-    pub eq_shade_mask: Option<Mask>,
     /// The mouse pointers the skin has; the system's show where it has none.
     cursors: HashMap<SkinCursor, CursorImage>,
 }
 
 impl std::fmt::Debug for Skin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let has_regions = [
-            &self.main_mask,
-            &self.main_shade_mask,
-            &self.eq_mask,
-            &self.eq_shade_mask,
-        ]
-        .iter()
-        .any(|m| m.is_some());
+        let has_regions = self.regions != Regions::default();
         f.debug_struct("Skin")
             .field("name", &self.name)
             .field("sheets", &self.sheets.keys().collect::<Vec<_>>())
@@ -231,7 +217,6 @@ impl Skin {
                 Err(e) => log::warn!("{name}: cannot decode {}: {e:#}", which.file_name()),
             }
         }
-        let mask = |polys: Option<&Polygons>, w, h| polys.map(|p| region_mask(p, w, h));
         Ok(Skin {
             name: name.to_string(),
             sheets,
@@ -239,10 +224,6 @@ impl Skin {
             empty: Canvas::from(Image::new(0, 0)),
             vis_colors,
             pledit,
-            main_mask: mask(regions.normal.as_ref(), main::W, main::H),
-            main_shade_mask: mask(regions.windowshade.as_ref(), main::W, main_shade::H),
-            eq_mask: mask(regions.equalizer.as_ref(), eq::W, eq::H),
-            eq_shade_mask: mask(regions.equalizer_ws.as_ref(), eq::W, eq_shade::H),
             regions,
             cursors,
         })
@@ -461,40 +442,36 @@ fn build_polygons(num_points: &[usize], points: &[i32]) -> Polygons {
     polys
 }
 
-/// Rasterise polygons into a visibility mask of `w`x`h` (true = visible).
-#[must_use]
-pub fn region_mask(polys: &Polygons, w: i32, h: i32) -> Mask {
-    let (uw, uh) = (
-        usize::try_from(w).unwrap_or(0),
-        usize::try_from(h).unwrap_or(0),
-    );
-    let mut mask = vec![false; uw * uh];
-    let mut xs: Vec<f32> = Vec::new();
+/// Mark the pixels of one row that `polys` cover, a pixel being covered when its centre is
+/// inside a polygon. `cy` is the row's centre in polygon units (skin pixels), `scale` how many
+/// of `row`'s pixels make one unit, and `xs` scratch space for the edge crossings.
+pub fn cover_row(polys: &Polygons, cy: f32, scale: f32, row: &mut [bool], xs: &mut Vec<f32>) {
+    let len = row.len() as f32;
     for poly in polys.iter().filter(|p| p.len() >= 3) {
-        for y in 0..uh {
-            let cy = y as f32 + 0.5;
-            xs.clear();
-            for (i, &(x1, y1)) in poly.iter().enumerate() {
-                let (x2, y2) = poly[(i + 1) % poly.len()];
-                if (y1 <= cy && y2 > cy) || (y2 <= cy && y1 > cy) {
-                    xs.push(x1 + (cy - y1) * (x2 - x1) / (y2 - y1));
-                }
+        xs.clear();
+        for (i, &(x1, y1)) in poly.iter().enumerate() {
+            let (x2, y2) = poly[(i + 1) % poly.len()];
+            if (y1 <= cy && y2 > cy) || (y2 <= cy && y1 > cy) {
+                xs.push(x1 + (cy - y1) * (x2 - x1) / (y2 - y1));
             }
-            xs.sort_by(f32::total_cmp);
-            for pair in xs.chunks_exact(2) {
-                let x0 = pair[0].round().clamp(0.0, uw as f32) as usize;
-                let x1 = pair[1].round().clamp(0.0, uw as f32) as usize;
-                mask[y * uw + x0..y * uw + x1].fill(true);
+        }
+        xs.sort_by(f32::total_cmp);
+        for pair in xs.chunks_exact(2) {
+            // Clamped to 0..=len, so the casts stay in range.
+            let x0 = (pair[0] * scale).round().clamp(0.0, len) as usize;
+            let x1 = (pair[1] * scale).round().clamp(0.0, len) as usize;
+            if x0 < x1 {
+                row[x0..x1].fill(true);
             }
         }
     }
-    mask.into_boxed_slice()
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::sprites::main;
 
     #[test]
     fn viscolor_parses_lines_with_comments_and_keeps_defaults_for_the_rest() {
@@ -513,6 +490,16 @@ mod tests {
         assert_eq!(c.current, [0x40, 0x40, 0x40, 255]);
         assert_eq!(c.normal_bg, PleditColors::default().normal_bg);
         assert_eq!(c.font, "Tahoma");
+    }
+
+    /// `polys` rasterised at one pixel per skin pixel into a `w`x`h` grid, `true` where covered.
+    fn region_mask(polys: &Polygons, w: usize, h: usize) -> Vec<bool> {
+        let mut mask = vec![false; w * h];
+        let mut xs = Vec::new();
+        for (y, row) in mask.chunks_exact_mut(w).enumerate() {
+            cover_row(polys, y as f32 + 0.5, 1.0, row, &mut xs);
+        }
+        mask
     }
 
     #[test]
@@ -566,7 +553,7 @@ mod tests {
             }
         }
         assert_eq!(skin.sheet(Sheet::Main).size(), (main::W, main::H));
-        assert!(skin.main_mask.is_none() && skin.main_shade_mask.is_none());
+        assert!(skin.regions.normal.is_none() && skin.regions.windowshade.is_none());
         assert!(skin.has_own_sheet(Sheet::EqEx));
         // Winamp 2.91's own pointers, and only those.
         let has: Vec<SkinCursor> = SkinCursor::ALL

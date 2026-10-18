@@ -281,13 +281,14 @@ impl TtfFont {
         color: [u8; 4],
         clip: Rect,
     ) -> i32 {
-        self.cover(text, x, top, clip, |px, py, cov| {
+        self.cover(text, x, top, clip, 1, |px, py, cov| {
             c.put(px, py, blend(c.get(px, py), color, cov));
         })
     }
 
     /// Like [`TtfFont::draw`], on a skin canvas: positions, sizes and the advance are in skin
-    /// pixels.
+    /// pixels, and the glyphs are drawn at the canvas's density, so a denser canvas has sharper
+    /// text laid out the same way.
     pub fn draw_canvas(
         &self,
         c: &mut Canvas,
@@ -297,26 +298,33 @@ impl TtfFont {
         color: [u8; 4],
         clip: Rect,
     ) -> i32 {
-        self.cover(text, x, top, clip, |px, py, cov| {
-            c.put(px, py, blend(c.get(px, py), color, cov));
+        let k = c.density().get();
+        let image = c.image_mut();
+        self.cover(text, x, top, clip, k, |px, py, cov| {
+            image.put(px, py, blend(image.get(px, py), color, cov));
         })
     }
 
-    /// Lay out and rasterise `text` with its top at `top`, calling `plot` with the position and
-    /// coverage of every touched pixel inside `clip`; returns the advance in pixels.
+    /// Lay out `text` with its top at `top` and rasterise it `k` times larger, calling `plot`
+    /// with the position and coverage of every touched pixel inside `clip`, both in pixels a
+    /// `k`th of a layout pixel wide. Returns the advance in layout pixels.
     fn cover(
         &self,
         text: &str,
         x: i32,
         top: i32,
         clip: Rect,
+        k: i32,
         mut plot: impl FnMut(i32, i32, u8),
     ) -> i32 {
-        let baseline = top + self.ascent;
+        let scale = k as f32;
+        let size = self.px * scale;
+        let clip = clip.scaled(k);
+        let baseline = (top + self.ascent).saturating_mul(k);
         let mut pen = x as f32;
         for ch in text.chars() {
-            let (m, bitmap) = self.face(ch).rasterize(ch, self.px);
-            let gx = pen.round() as i32 + m.xmin;
+            let (m, bitmap) = self.face(ch).rasterize(ch, size);
+            let gx = (pen * scale).round() as i32 + m.xmin;
             let gy = baseline - m.ymin - m.height as i32;
             for yy in 0..m.height {
                 for xx in 0..m.width {
@@ -352,6 +360,49 @@ fn blend(dst: [u8; 4], src: [u8; 4], cov: u8) -> [u8; 4] {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// The bounding box of the pixels `draw` changes on a blank canvas of `density`, in image
+    /// pixels, and the advance it returns.
+    fn drawn_box(font: &TtfFont, text: &str, density: u8) -> (Rect, i32) {
+        let density = crate::canvas::Density::new(density).unwrap();
+        let mut c = Canvas::new(80, 20, density);
+        let clip = c.bounds();
+        let advance = font.draw_canvas(&mut c, text, 5, 4, [255, 255, 255, 255], clip);
+        let img = c.image();
+        let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for y in 0..img.h {
+            for x in 0..img.w {
+                if img.get(x, y) != [0, 0, 0, 0] {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        (Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1), advance)
+    }
+
+    #[test]
+    fn denser_canvases_draw_the_same_text_layout_with_finer_pixels() {
+        let font = TtfFont::load_default(TtfFont::DEFAULT_PX);
+        let (one, advance) = drawn_box(&font, "Llama 2.91", 1);
+        let (three, advance3) = drawn_box(&font, "Llama 2.91", 3);
+        assert_eq!(
+            advance, advance3,
+            "the advance is in skin pixels at any density"
+        );
+        assert!(
+            three.w > one.w * 2 && three.h > one.h * 2,
+            "{one:?} vs {three:?}"
+        );
+        // The text lands within a skin pixel of where it does at density 1.
+        for (a, b) in [
+            (one.x, three.x),
+            (one.y, three.y),
+            (one.right(), three.right()),
+            (one.bottom(), three.bottom()),
+        ] {
+            assert!((a * 3 - b).abs() <= 3, "{one:?} vs {three:?}");
+        }
+    }
 
     #[test]
     fn glyph_lookup_is_case_insensitive_and_falls_back_to_space() {

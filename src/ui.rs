@@ -14,7 +14,7 @@ use crate::font::TtfFont;
 use crate::info::StreamDetails;
 use crate::menus::{AppCommand, Command, MenuKind};
 use crate::playlist::{self, Rng, Shuffle, SortKey};
-use crate::skin::{Mask, Skin};
+use crate::skin::{Polygons, Skin, cover_row};
 use crate::sprites::{
     eq as e, eq_shade as es, main as m, main_shade as ms, pl as p, pl_shade as ps,
 };
@@ -1861,22 +1861,22 @@ impl Ui {
         r: Rect,
         now: Instant,
     ) {
-        let mask = match (kind, self.is_shaded(kind)) {
+        let shape = match (kind, self.is_shaded(kind)) {
             (WindowKind::Main, false) => {
                 main_window::draw(self, c, skin, r, now);
-                skin.main_mask.as_ref()
+                skin.regions.normal.as_ref()
             }
             (WindowKind::Main, true) => {
                 main_window::draw_shade(self, c, skin, r, now);
-                skin.main_shade_mask.as_ref()
+                skin.regions.windowshade.as_ref()
             }
             (WindowKind::Eq, false) => {
                 eq_window::draw(self, c, skin, r, now);
-                skin.eq_mask.as_ref()
+                skin.regions.equalizer.as_ref()
             }
             (WindowKind::Eq, true) => {
                 eq_window::draw_shade(self, c, skin, r);
-                skin.eq_shade_mask.as_ref()
+                skin.regions.equalizer_ws.as_ref()
             }
             // region.txt has no section for the playlist.
             (WindowKind::Playlist, false) => {
@@ -1888,8 +1888,8 @@ impl Ui {
                 None
             }
         };
-        if let Some(mask) = mask {
-            apply_mask(c, r, mask);
+        if let Some(polys) = shape {
+            cut_to_shape(c, r, polys);
         }
     }
 
@@ -2680,15 +2680,26 @@ impl Ui {
 }
 
 /// Make every pixel of `r` outside `mask` fully transparent.
-fn apply_mask(c: &mut Canvas, r: Rect, mask: &Mask) {
-    let w = usize::try_from(r.w).unwrap_or(0);
+/// Clear the pixels of window rectangle `r` outside the shape `polys` gives it, at the canvas's
+/// density, so a denser canvas has a smoother outline.
+fn cut_to_shape(c: &mut Canvas, r: Rect, polys: &Polygons) {
+    let k = c.density().get();
+    let area = r.scaled(k);
+    let w = usize::try_from(area.w).unwrap_or(0);
     if w == 0 {
         return;
     }
-    for (i, visible) in mask.iter().enumerate() {
-        if !visible {
-            let (x, y) = (i % w, i / w);
-            c.put(r.x + x as i32, r.y + y as i32, [0, 0, 0, 0]);
+    let scale = k as f32;
+    let mut row = vec![false; w];
+    let mut xs = Vec::new();
+    let image = c.image_mut();
+    for y in 0..area.h {
+        row.fill(false);
+        cover_row(polys, (y as f32 + 0.5) / scale, scale, &mut row, &mut xs);
+        for (x, covered) in row.iter().enumerate() {
+            if !covered {
+                image.put(area.x + x as i32, area.y + y, [0, 0, 0, 0]);
+            }
         }
     }
 }
@@ -3583,16 +3594,7 @@ mod tests {
              [WindowShade]\nNumPoints=4\nPointList=0,0,275,0,275,13,0,13\n\
              [EqualizerWS]\nNumPoints=4\nPointList=1,0,275,0,275,14,1,14\n",
         );
-        let mask = |polys: Option<&crate::skin::Polygons>| {
-            polys.map(|p| crate::skin::region_mask(p, 275, 14))
-        };
-        skin.main_shade_mask = mask(regions.windowshade.as_ref());
-        skin.eq_shade_mask = mask(regions.equalizer_ws.as_ref());
-        skin.main_mask = Some(crate::skin::region_mask(
-            regions.normal.as_ref().unwrap(),
-            275,
-            116,
-        ));
+        skin.regions = regions;
         let main = draw(&ui, &skin, Main);
         assert_eq!(main.get(100, 13)[3], 0, "the last row is cut away");
         assert_eq!(main.get(100, 12)[3], 255, "the rest of the bar is not");
@@ -3632,6 +3634,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn dense_windows_draw_the_skin_bitmaps_exactly_enlarged() {
+        let skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut ui = Ui::demo();
+        let now = Instant::now();
+        ui.tick(now);
+        for shaded in [false, true] {
+            (ui.main_shade, ui.eq_shade, ui.pl_shade) = (shaded, shaded, shaded);
+            for kind in WindowKind::ALL {
+                let (w, h) = ui.window_size(kind);
+                let mut one = Canvas::new(w, h, Density::ONE);
+                let mut three = Canvas::new(w, h, Density::new(3).unwrap());
+                // Without the TrueType font every piece comes from the skin's bitmaps.
+                ui.draw_window(kind, &mut one, &skin, None, now);
+                ui.draw_window(kind, &mut three, &skin, None, now);
+                let dense = three.image();
+                for y in 0..dense.h {
+                    for x in 0..dense.w {
+                        assert_eq!(
+                            dense.get(x, y),
+                            one.get(x / 3, y / 3),
+                            "{kind:?} (shaded: {shaded}) image pixel ({x},{y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_dense_canvas_cuts_slanted_shapes_finer_than_a_skin_pixel() {
+        let mut skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        skin.regions =
+            crate::skin::parse_region("[Normal]\nNumPoints=3\nPointList=0,0,275,0,0,116\n");
+        let ui = Ui::new();
+        let now = Instant::now();
+        let mut two = Canvas::new(m::W, m::H, Density::new(2).unwrap());
+        ui.draw_window(Main, &mut two, &skin, None, now);
+        let img = two.image();
+        let alpha = |x: i32, y: i32| img.get(x, y)[3];
+        assert_eq!((alpha(0, 0), alpha(549, 231)), (255, 0));
+        // Along the slanted edge some skin pixels are cut part way through.
+        let split = (0..m::H).any(|sy| {
+            (0..m::W).any(|sx| {
+                let block = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                    .map(|(dx, dy)| alpha(sx * 2 + dx, sy * 2 + dy));
+                block.contains(&0) && block.contains(&255)
+            })
+        });
+        assert!(split, "the outline has steps half a skin pixel apart");
     }
 
     #[test]

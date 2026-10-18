@@ -378,12 +378,22 @@ in half steps from 1x to 3x:
 - The desktop's own scale factor applies on top, so a 200% desktop shows a 1x
   zoom at 2x.
 
-Whole-number scales draw every skin pixel as an exact square of screen pixels.
-Scales in between use a sharp-bilinear filter: each skin pixel keeps its flat
-colour and only its edges blend over one screen pixel. Plain nearest-neighbour
-at those scales would make some rows and columns a pixel wider than others,
-which garbles the bitmap fonts. Windows are sized to whole screen pixels and the
-image is stretched to fill them exactly, so docked windows meet without gaps.
+NeoAmp draws each skin pixel as a block of as many screen pixels as the scale
+calls for, rounded up to a whole number: 2x2 at 1.5x, 3x3 at 2.5x. At
+whole-number scales every skin pixel is an exact square of screen pixels. At
+scales in between, the graphics card shrinks the image to fit by averaging, so
+every row and column keeps the same width; plain nearest-neighbour would make
+some a pixel wider than others, which garbles the bitmap fonts. Beyond 8x
+(3x zoom, double size and a desktop scale above 133%), NeoAmp draws 8x8 blocks
+and the graphics card enlarges them the rest of the way, keeping each skin
+pixel's colour flat.
+
+The skin's bitmaps are enlarged pixel for pixel and keep their classic look,
+but the playlist text is drawn as sharply as the screen allows, and window
+shapes whose `region.txt` has slanted edges get smooth outlines (most skins
+build their shapes from rectangles, which look the same). Windows are sized to
+whole screen pixels and the image is stretched to fill them exactly, so docked
+windows meet without gaps.
 
 ## Windowshade
 
