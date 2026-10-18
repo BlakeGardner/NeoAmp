@@ -6,8 +6,9 @@
 //! case title-bar drags are handed to the compositor and no snapping happens.
 //!
 //! Windows are sized in physical pixels: skin size times the UI scale times the desktop's
-//! scale factor, rounded. `upscale::Upscaler` stretches each canvas over its whole window: exact
-//! squares at whole-number scales, sharp-bilinear in between.
+//! scale factor, rounded. Each is drawn at that scale rounded up (see [`Density::covering`]),
+//! and `upscale::Upscaler` stretches the canvas over the whole window: exact at whole-number
+//! scales, shrunk by averaging in between.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -135,10 +136,12 @@ fn round_px(v: f64) -> i32 {
     }
 }
 
-/// The canvas of a window `(w, h)` skin pixels in size. Windows are drawn at one image pixel
-/// per skin pixel, and the GPU enlarges them to the window.
-fn window_canvas((w, h): (i32, i32)) -> Canvas {
-    Canvas::new(w, h, Density::ONE)
+/// The canvas of a window `(w, h)` skin pixels in size; the GPU stretches it over the window.
+/// Windows are drawn at [`Density::covering`] their scale: as many image pixels per skin
+/// pixel as the screen shows, rounded up, so the playlist text is sharp and the window shapes
+/// smooth, while the skin's bitmaps are enlarged pixel for pixel.
+fn window_canvas((w, h): (i32, i32), density: Density) -> Canvas {
+    Canvas::new(w, h, density)
 }
 
 /// The size of `canvas`'s pixels, as the GPU buffer that shows them is sized.
@@ -407,7 +410,7 @@ pub fn render_screenshot(
 ) -> Result<()> {
     const RATE: u32 = 44_100;
     let start = Instant::now();
-    let mut canvas = window_canvas(ui.layout().size);
+    let mut canvas = window_canvas(ui.layout().size, Density::ONE);
     ui.vis.set_sample_rate(RATE);
     let mut signal = vec![0.0; usize::try_from(u128::from(RATE) * FRAME.as_millis() / 1000)?];
     for k in 0..70 {
@@ -570,6 +573,21 @@ impl Pane {
     /// Screen pixels per skin pixel: the UI scale times the desktop's scale for this window.
     fn scale(&self, ui_scale: f64) -> f64 {
         ui_scale * self.window.scale_factor()
+    }
+
+    /// Give the window a canvas `size` skin pixels big at `density`, and a GPU buffer to match,
+    /// unless it already has them.
+    fn fit_canvas(&mut self, size: (i32, i32), density: Density) {
+        if self.canvas.size() == size && self.canvas.density() == density {
+            return;
+        }
+        self.canvas = window_canvas(size, density);
+        let resized =
+            buffer_size(&self.canvas).and_then(|(w, h)| Ok(self.pixels.resize_buffer(w, h)?));
+        match resized {
+            Ok(()) => self.upscaler.rebind(&self.pixels),
+            Err(e) => log::error!("resize_buffer: {e:#}"),
+        }
     }
 
     /// The last pointer position in canvas (skin pixel) coordinates.
@@ -1590,7 +1608,8 @@ impl App {
         if let Some(p) = at {
             window.set_outer_position(p);
         }
-        let canvas = window_canvas((w, h));
+        let density = Density::covering(ui_scale * window.scale_factor());
+        let canvas = window_canvas((w, h), density);
         let (bw, bh) = buffer_size(&canvas)?;
         let size = window.inner_size();
         let make_surface =
@@ -1810,16 +1829,8 @@ impl App {
             let Some(pane) = self.pane_mut(kind) else {
                 continue;
             };
-            if pane.canvas.size() != (w, h) {
-                pane.canvas = window_canvas((w, h));
-                if let Ok((bw, bh)) = buffer_size(&pane.canvas) {
-                    match pane.pixels.resize_buffer(bw, bh) {
-                        Ok(()) => pane.upscaler.rebind(&pane.pixels),
-                        Err(e) => log::error!("resize_buffer: {e}"),
-                    }
-                }
-            }
             let scale = pane.scale(ui_scale);
+            pane.fit_canvas((w, h), Density::covering(scale));
             let wanted = scaled_size((w, h), scale);
             if pane.window.inner_size() != wanted {
                 let _ = pane.window.request_inner_size(wanted);
@@ -2368,10 +2379,10 @@ impl App {
         let Some(pane) = self.panes.iter_mut().find(|p| p.kind == kind) else {
             return;
         };
-        let size = ui.window_size(kind);
-        if pane.canvas.size() != size {
-            pane.canvas = window_canvas(size);
-        }
+        pane.fit_canvas(
+            ui.window_size(kind),
+            Density::covering(pane.scale(ui.scale())),
+        );
         ui.draw_window(kind, &mut pane.canvas, skin, font, now);
         let frame = pane.pixels.frame_mut();
         let drawn = &pane.canvas.image().data;

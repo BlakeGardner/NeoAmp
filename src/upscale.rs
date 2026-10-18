@@ -1,4 +1,5 @@
-//! Presents a window's canvas stretched over the whole window with sharp-bilinear filtering.
+//! Presents a window's canvas stretched over the whole window: sharp-bilinear when enlarging,
+//! averaged when shrinking.
 //!
 //! `pixels`' own renderer keeps the aspect ratio and clips to whole screen pixels, so a skin
 //! 275 pixels wide shown at 1.5x (412.5 screen pixels, in a 413-pixel window) loses its last
@@ -6,11 +7,14 @@
 //! window sizes rounded to whole screen pixels, one axis may stretch by under a pixel more than
 //! the other.
 //!
-//! Inside each skin pixel the shader samples that pixel's centre; within one screen pixel of a
-//! skin-pixel edge it blends linearly into the neighbour. Nearest-neighbour at a fractional
-//! scale would make some rows and columns a screen pixel wider than others; this keeps them
-//! even with a one-pixel soft edge. At whole-number scales every sample lands on a texel
-//! centre, so the output is exactly nearest-neighbour.
+//! When the canvas is coarser than the screen, the shader samples each canvas pixel's centre,
+//! and within one screen pixel of a canvas-pixel edge it blends linearly into the neighbour.
+//! Nearest-neighbour at a fractional scale would make some rows and columns a screen pixel
+//! wider than others; this keeps them even with a one-pixel soft edge. At whole-number scales
+//! every sample lands on a texel centre, so the output is exactly nearest-neighbour.
+//!
+//! A canvas drawn finer than the screen (a density rounded up from a fractional scale, such as
+//! 2 at 1.5x) is shrunk instead: each screen pixel averages the canvas pixels under it.
 //!
 //! The canvas is premultiplied (masked-out pixels are all zero, everything else is opaque),
 //! so filtered samples are written as they are.
@@ -40,12 +44,22 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(canvas));
     let texel = in.uv * size;
-    // Skin pixels per screen pixel along each axis.
+    // Canvas pixels per screen pixel along each axis.
     let step = vec2<f32>(abs(dpdx(texel.x)), abs(dpdy(texel.y)));
+    if (step.x > 1.0 || step.y > 1.0) {
+        // Shrinking: four bilinear taps a quarter of the screen pixel's footprint from its
+        // centre together weigh each canvas pixel by about how much of the footprint it covers.
+        let d = max(step, vec2<f32>(1.0)) * 0.25;
+        let sum = textureSampleLevel(canvas, canvas_sampler, (texel - d) / size, 0.0)
+            + textureSampleLevel(canvas, canvas_sampler, (texel + vec2<f32>(d.x, -d.y)) / size, 0.0)
+            + textureSampleLevel(canvas, canvas_sampler, (texel + vec2<f32>(-d.x, d.y)) / size, 0.0)
+            + textureSampleLevel(canvas, canvas_sampler, (texel + d) / size, 0.0);
+        return sum * 0.25;
+    }
     let f = fract(texel);
     let offset = clamp(f / step, vec2<f32>(0.0), vec2<f32>(0.5))
         + clamp((f - 1.0) / step + 0.5, vec2<f32>(0.0), vec2<f32>(0.5));
-    return textureSample(canvas, canvas_sampler, (floor(texel) + offset) / size);
+    return textureSampleLevel(canvas, canvas_sampler, (floor(texel) + offset) / size, 0.0);
 }
 ";
 

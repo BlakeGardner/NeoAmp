@@ -88,8 +88,12 @@ program does the same:
 - `src/canvas.rs` is a small RGBA software framebuffer with clipped blits.
   The windows and the skin sheets are `Canvas`es, which take every position
   and size in skin pixels and draw each skin pixel as a `Density` × `Density`
-  block of image pixels. Everything is drawn at density 1 for now; denser
-  canvases are groundwork for skins with higher-resolution artwork.
+  block of image pixels. `app.rs` draws each window at its scale (zoom,
+  double size and the desktop's scale) rounded up, `Density::covering`: skin
+  sheets are enlarged pixel for pixel as they are blitted, the playlist text
+  is rasterised at that density, and the shapes from `region.txt` are cut at
+  it. `src/upscale.rs` shrinks a canvas finer than the screen by averaging.
+  `--screenshot` draws at density 1.
 - `src/sprites.rs` holds the sprite coordinates and window layout, which are
   identical for every classic skin.
 - `src/skin.rs` reads a `.wsz` (zip + BMP/PNG), `viscolor.txt`,
