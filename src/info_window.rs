@@ -95,7 +95,7 @@ impl InfoWindow {
         let mut info = Info::new(scale, &font, location);
         info.set_contents(contents);
         let (w, h) = info.size();
-        let window = DialogWindow::open(el, info::TITLE, (w, h), on_top)?;
+        let window = DialogWindow::open(el, info::TITLE, (w, h), on_top, None)?;
         Ok(InfoWindow {
             window,
             canvas: Image::new(w, h),

@@ -73,6 +73,8 @@ pub enum Error {
     /// The server's answer is not HTTP.
     BadResponse(String),
     TooManyRedirects,
+    /// The body is longer than the caller allows, in bytes.
+    TooLarge(usize),
     /// The server said nothing for [`Timeouts::idle`].
     TimedOut,
     /// The caller asked to stop.
@@ -88,9 +90,11 @@ impl Error {
             Error::Io(_) | Error::TimedOut | Error::BadResponse(_) => true,
             // Overloaded or failing servers, and SHOUTcast's "server full".
             Error::Status { code, .. } => matches!(code, 408 | 429 | 500..=599),
-            Error::InvalidUrl(_) | Error::Tls(_) | Error::TooManyRedirects | Error::Cancelled => {
-                false
-            }
+            Error::InvalidUrl(_)
+            | Error::Tls(_)
+            | Error::TooManyRedirects
+            | Error::TooLarge(_)
+            | Error::Cancelled => false,
         }
     }
 }
@@ -104,6 +108,7 @@ impl fmt::Display for Error {
             Error::Status { code, reason } => write!(f, "the server answered {code} {reason}"),
             Error::BadResponse(why) => write!(f, "the server's answer is not HTTP: {why}"),
             Error::TooManyRedirects => write!(f, "too many redirects"),
+            Error::TooLarge(limit) => write!(f, "the answer is longer than {limit} bytes"),
             Error::TimedOut => write!(f, "the server stopped answering"),
             Error::Cancelled => write!(f, "cancelled"),
         }
@@ -519,9 +524,7 @@ impl Response {
                 Ok(n) => {
                     out.extend_from_slice(&chunk[..n]);
                     if out.len() > limit {
-                        return Err(Error::BadResponse(format!(
-                            "more than {limit} bytes where a playlist was expected"
-                        )));
+                        return Err(Error::TooLarge(limit));
                     }
                     last = Instant::now();
                 }
@@ -1030,6 +1033,24 @@ pub(crate) mod tests {
         assert!(matches!(e, Error::BadResponse(_)), "{e}");
         let requests = server.join().unwrap();
         assert!(requests[1].starts_with("GET /next "));
+    }
+
+    #[test]
+    fn a_body_longer_than_allowed_is_refused() {
+        let (address, server) = serve(
+            vec![vec![
+                b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789".to_vec(),
+            ]],
+            Duration::ZERO,
+        );
+        let e = fetch(&address, "/big")
+            .unwrap()
+            .read_to_end_limited(9, &never)
+            .unwrap_err();
+        assert!(matches!(e, Error::TooLarge(9)), "{e}");
+        assert!(!e.is_retryable());
+        assert_eq!(e.to_string(), "the answer is longer than 9 bytes");
+        server.join().unwrap();
     }
 
     #[test]

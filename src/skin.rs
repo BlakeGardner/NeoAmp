@@ -3,6 +3,7 @@
 //! (`cbuttons.svg`), which NeoAmp draws in place of the bitmap at the windows' density.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
@@ -15,6 +16,17 @@ use crate::svg::SvgSheet;
 
 /// Largest sheet dimension we accept from an untrusted archive (real sheets are under 400px).
 const MAX_SHEET_SIDE: u32 = 4096;
+/// Largest `.wsz` file read, from disk or the network. Skins are a few hundred kilobytes; the
+/// largest in the Winamp Skin Museum, a few megabytes.
+pub const MAX_WSZ_BYTES: usize = 32 << 20;
+/// Most entries an archive may list. Skins have a few dozen.
+const MAX_ENTRIES: usize = 4096;
+/// Most bytes one file in an archive may unpack to: room for any real sheet or SVG.
+const MAX_ENTRY_BYTES: usize = 8 << 20;
+/// Most bytes the files NeoAmp reads from an archive may unpack to, together.
+const MAX_UNPACKED_BYTES: usize = 32 << 20;
+/// The text files read from a skin.
+const TEXT_FILES: [&str; 3] = ["viscolor.txt", "pledit.txt", "region.txt"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PleditColors {
@@ -135,10 +147,14 @@ impl Skin {
     /// Load a `.wsz` file from disk.
     ///
     /// # Errors
-    /// Fails if the file cannot be read, is not a zip archive, or contains no usable sheets.
+    /// Fails if the file cannot be read, is larger than [`MAX_WSZ_BYTES`], is not a zip
+    /// archive, or contains no usable sheets.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Skin> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let mut bytes = Vec::new();
+        File::open(path)
+            .and_then(|f| f.take(limit(MAX_WSZ_BYTES)).read_to_end(&mut bytes))
+            .with_context(|| format!("reading {}", path.display()))?;
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -146,17 +162,32 @@ impl Skin {
         Self::from_wsz(&bytes, &name)
     }
 
-    /// Parse a `.wsz` archive held in memory.
+    /// Parse a `.wsz` archive held in memory. Only the files a skin is made of are unpacked.
     ///
     /// # Errors
-    /// Fails if `bytes` is not a zip archive or contains no usable sheets. Individual
-    /// undecodable entries are logged and skipped, as Winamp did.
+    /// Fails if `bytes` is not a zip archive or contains no usable sheets, or if the archive
+    /// is larger than [`MAX_WSZ_BYTES`], lists more than 4096 files or its skin files unpack
+    /// to more than 32 MB. Individual undecodable entries are logged and skipped, as Winamp
+    /// did, and so is a file that unpacks to more than 8 MB.
     pub fn from_wsz(bytes: &[u8], name: &str) -> Result<Skin> {
+        if bytes.len() > MAX_WSZ_BYTES {
+            bail!(
+                "{name}: more than {} MB, too large for a skin",
+                MAX_WSZ_BYTES >> 20
+            );
+        }
         let mut archive =
             zip::ZipArchive::new(Cursor::new(bytes)).context("skin is not a zip archive")?;
-        let mut files: HashMap<String, Vec<u8>> = HashMap::with_capacity(archive.len());
+        if archive.len() > MAX_ENTRIES {
+            bail!(
+                "{name}: {} files in the archive, too many for a skin",
+                archive.len()
+            );
+        }
+        let mut files: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut unpacked = 0;
         for i in 0..archive.len() {
-            let mut f = match archive.by_index(i) {
+            let f = match archive.by_index(i) {
                 Ok(f) => f,
                 Err(e) => {
                     log::warn!("skipping zip entry {i}: {e}");
@@ -175,10 +206,28 @@ impl Skin {
                 .next()
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            let mut buf = Vec::new();
-            if f.read_to_end(&mut buf).is_ok() {
-                files.entry(base).or_insert(buf);
+            if files.contains_key(&base) || !is_skin_file(&base) {
+                continue;
             }
+            let mut buf = Vec::new();
+            if f.take(limit(MAX_ENTRY_BYTES))
+                .read_to_end(&mut buf)
+                .is_err()
+            {
+                continue;
+            }
+            if buf.len() > MAX_ENTRY_BYTES {
+                log::warn!("{name}: skipping {full_name}, larger than a skin's files are");
+                continue;
+            }
+            unpacked += buf.len();
+            if unpacked > MAX_UNPACKED_BYTES {
+                bail!(
+                    "{name}: unpacks to more than {} MB, too much for a skin",
+                    MAX_UNPACKED_BYTES >> 20
+                );
+            }
+            files.insert(base, buf);
         }
         Self::from_files(&files, name)
     }
@@ -334,12 +383,30 @@ impl Skin {
     }
 }
 
+/// A reader limit one byte past `max`, so that going over it shows.
+fn limit(max: usize) -> u64 {
+    u64::try_from(max).map_or(u64::MAX, |m| m.saturating_add(1))
+}
+
+/// Whether `name` (lowercase, without folders) is one of the files a skin is made of.
+fn is_skin_file(name: &str) -> bool {
+    if TEXT_FILES.contains(&name) || SkinCursor::ALL.iter().any(|c| c.file_name() == name) {
+        return true;
+    }
+    name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        matches!(ext, "bmp" | "png" | "svg") && SHEET_FILES.iter().any(|(_, s)| *s == stem)
+    })
+}
+
 fn decode_image(bytes: &[u8]) -> Result<Canvas> {
-    let img = image::load_from_memory(bytes)?;
-    let (w, h) = (img.width(), img.height());
+    let reader = || image::ImageReader::new(Cursor::new(bytes)).with_guessed_format();
+    // The size first, so that a small file claiming a huge picture is never decoded.
+    let (w, h) = reader()?.into_dimensions()?;
     if w == 0 || h == 0 || w > MAX_SHEET_SIDE || h > MAX_SHEET_SIDE {
         bail!("unreasonable sheet size {w}x{h}");
     }
+    let img = reader()?.decode()?;
+    let (w, h) = (img.width(), img.height());
     let mut data = img.into_rgba8().into_raw();
     // Skins are opaque bitmaps; normalise alpha so blits never leak transparency.
     for px in data.chunks_exact_mut(4) {
@@ -751,5 +818,100 @@ mod tests {
     #[test]
     fn garbage_is_rejected_not_panicked_on() {
         assert!(Skin::from_wsz(b"not a zip", "x").is_err());
+    }
+
+    /// A zip archive of `files`, deflated.
+    fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write as _;
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .compression_level(Some(1));
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, bytes) in files {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn archives_listing_too_many_files_are_refused() {
+        let names: Vec<String> = (0..=MAX_ENTRIES).map(|i| format!("{i}.txt")).collect();
+        let files: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), &b""[..])).collect();
+        let e = Skin::from_wsz(&zip_of(&files), "many").unwrap_err();
+        assert!(e.to_string().contains("too many"), "{e}");
+    }
+
+    #[test]
+    fn only_skin_files_are_unpacked_and_an_oversized_one_is_skipped() {
+        let main_bmp = image_bmp(main::W, main::H);
+        let huge = vec![0; MAX_ENTRY_BYTES + 1];
+        let wsz = zip_of(&[
+            ("Skin/main.bmp", &main_bmp),
+            ("Skin/cbuttons.bmp", &huge),
+            // Not a skin file: never unpacked, so it counts towards nothing.
+            ("Skin/video.bmp", &vec![0; MAX_UNPACKED_BYTES + 1]),
+        ]);
+        let skin = Skin::from_wsz(&wsz, "padded").unwrap();
+        assert!(skin.has_sheet(Sheet::Main));
+        assert!(!skin.has_sheet(Sheet::CButtons));
+    }
+
+    #[test]
+    fn skin_files_unpacking_to_too_much_together_are_refused() {
+        let big = vec![0; MAX_ENTRY_BYTES];
+        let names = [
+            "main.bmp",
+            "cbuttons.bmp",
+            "titlebar.bmp",
+            "posbar.bmp",
+            "text.bmp",
+        ];
+        let files: Vec<(&str, &[u8])> = names.iter().map(|n| (*n, big.as_slice())).collect();
+        let e = Skin::from_wsz(&zip_of(&files), "bomb").unwrap_err();
+        assert!(e.to_string().contains("unpacks to more"), "{e}");
+    }
+
+    #[test]
+    fn files_too_large_for_a_skin_are_not_read() {
+        let e = Skin::from_wsz(&vec![0; MAX_WSZ_BYTES + 1], "big").unwrap_err();
+        assert!(e.to_string().contains("too large"), "{e}");
+        let path = std::env::temp_dir().join(format!("neoamp-big-{}.wsz", std::process::id()));
+        std::fs::write(&path, vec![0; MAX_WSZ_BYTES + 1]).unwrap();
+        let e = Skin::from_path(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert!(e.to_string().contains("too large"), "{e}");
+    }
+
+    #[test]
+    fn a_picture_claiming_a_huge_size_is_not_decoded() {
+        fn crc32(data: &[u8]) -> u32 {
+            let mut c = u32::MAX;
+            for b in data {
+                c ^= u32::from(*b);
+                for _ in 0..8 {
+                    c = if c & 1 == 0 {
+                        c >> 1
+                    } else {
+                        0xEDB8_8320 ^ (c >> 1)
+                    };
+                }
+            }
+            !c
+        }
+        fn chunk(png: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            let body = [kind, data].concat();
+            png.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            png.extend_from_slice(&body);
+            png.extend_from_slice(&crc32(&body).to_be_bytes());
+        }
+        // A PNG saying 100000 x 100000, without the picture.
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let size = [100_000u32.to_be_bytes(), 100_000u32.to_be_bytes()].concat();
+        chunk(&mut png, b"IHDR", &[&size[..], &[8, 6, 0, 0, 0]].concat());
+        chunk(&mut png, b"IDAT", &[]);
+        chunk(&mut png, b"IEND", &[]);
+        let e = decode_image(&png).unwrap_err();
+        assert!(e.to_string().contains("unreasonable"), "{e}");
     }
 }

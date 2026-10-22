@@ -8,11 +8,11 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use softbuffer::{Context, Surface};
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
 use winit::window::{Window, WindowId, WindowLevel};
 
-use crate::canvas::Image;
+use crate::canvas::{Image, Rect};
 use crate::classic::FACE;
 
 /// A dialog's window and the surface it is drawn on.
@@ -42,9 +42,31 @@ pub(crate) fn window_size((w, h): (i32, i32)) -> PhysicalSize<u32> {
     PhysicalSize::new(dimension(w).get(), dimension(h).get())
 }
 
+/// Where a dialog `size` pixels inside goes beside `stack`, the windows it belongs with, on
+/// `screen`, `gap` pixels away: to the right, or else to the left, with the top edges level.
+/// `None` when it fits on neither side.
+pub(crate) fn beside(
+    stack: Rect,
+    screen: Rect,
+    (w, _): (i32, i32),
+    gap: i32,
+) -> Option<PhysicalPosition<i32>> {
+    let right = stack.right() + gap;
+    let left = stack.x - gap - w;
+    let x = if right + w <= screen.right() {
+        right
+    } else if left >= screen.x {
+        left
+    } else {
+        return None;
+    };
+    Some(PhysicalPosition::new(x, stack.y.max(screen.y)))
+}
+
 impl DialogWindow {
     /// Open a window titled `title`, `size` pixels inside, above other applications' windows
-    /// if `on_top`.
+    /// if `on_top`, with its top-left corner `at` that position on the desktop, or wherever
+    /// the window manager puts it.
     ///
     /// # Errors
     /// Fails if the window or its surface cannot be created.
@@ -53,17 +75,21 @@ impl DialogWindow {
         title: &str,
         size: (i32, i32),
         on_top: bool,
+        at: Option<PhysicalPosition<i32>>,
     ) -> Result<DialogWindow> {
         let level = if on_top {
             WindowLevel::AlwaysOnTop
         } else {
             WindowLevel::Normal
         };
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(title)
             .with_resizable(false)
             .with_window_level(level)
             .with_inner_size(window_size(size));
+        if let Some(at) = at {
+            attrs = attrs.with_position(at);
+        }
         let attrs = crate::window_icon::with_icon(attrs, el);
         let window = Arc::new(
             el.create_window(attrs)
@@ -128,4 +154,24 @@ impl DialogWindow {
 /// softbuffer's 0x00RRGGBB.
 fn pixel(c: [u8; 4]) -> u32 {
     (u32::from(c[0]) << 16) | (u32::from(c[1]) << 8) | u32::from(c[2])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dialog_goes_right_of_the_windows_or_else_left_or_where_it_is_put() {
+        let screen = Rect::new(0, 0, 1920, 1080);
+        let at = |stack, w| beside(stack, screen, (w, 420), 8).map(|p| (p.x, p.y));
+        assert_eq!(at(Rect::new(64, 64, 275, 348), 600), Some((347, 64)));
+        assert_eq!(at(Rect::new(1500, 64, 275, 348), 600), Some((892, 64)));
+        assert_eq!(
+            at(Rect::new(500, 64, 900, 348), 600),
+            None,
+            "no room either side"
+        );
+        // A stack poking above the screen does not take the dialog with it.
+        assert_eq!(at(Rect::new(64, -40, 275, 348), 600), Some((347, 0)));
+    }
 }

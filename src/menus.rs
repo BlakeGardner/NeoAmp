@@ -67,6 +67,8 @@ pub enum AppCommand {
     Skin(usize),
     /// Pick a skin file with the platform's dialog.
     OpenSkin,
+    /// Browse the Winamp Skin Museum.
+    SkinMuseum,
     /// Preset file `n` of [`Library::presets`].
     UserPreset(usize),
     /// Pick a preset file with the platform's dialog.
@@ -437,6 +439,7 @@ fn presets(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
 fn skins(lib: &Library<'_>) -> Vec<Item<Command>> {
     let mut items = vec![
         Item::new("&Open Skin...", Command::App(AppCommand::OpenSkin)),
+        Item::new("Skin &Museum...", Command::App(AppCommand::SkinMuseum)),
         Item::separator(),
         Item::new("<&NeoAmp Skin>", Command::App(AppCommand::NeoAmpSkin))
             .chosen(lib.skin.is_neoamp()),
@@ -629,6 +632,10 @@ mod tests {
             ..Library::default()
         };
         let items = build(MenuKind::Skins, &Ui::new(), &lib);
+        assert_eq!(
+            find(&items, "Skin &Museum...").kind(),
+            &Kind::Command(Command::App(AppCommand::SkinMuseum))
+        );
         assert_eq!(find(&items, "<&NeoAmp Skin>").mark(), Mark::None);
         assert_eq!(find(&items, "<&Winamp Base Skin>").mark(), Mark::None);
         assert_eq!(find(&items, "Classic").mark(), Mark::None);

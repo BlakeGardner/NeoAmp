@@ -20,6 +20,9 @@ presets](#skins-presets-and-auto-load-presets).
 Set `NEOAMP_CONFIG_DIR=<folder>` to keep both files somewhere else, for
 example a portable copy on a USB stick or a test run that should not touch
 your real settings. NeoAmp creates the folder the first time it saves. The
+Skin Museum's downloads, which otherwise go in the platform's cache folder,
+then go in `cache/museum` inside it too (see [The Skin Museum's
+downloads](#the-skin-museums-downloads)). The
 Flatpak can write only below its own folder, so there the folder must be
 inside `~/.var/app/io.github.BlakeGardner.NeoAmp/`, given with
 `flatpak run --env=NEOAMP_CONFIG_DIR=<folder> io.github.BlakeGardner.NeoAmp`.
@@ -28,7 +31,7 @@ Uninstalling NeoAmp leaves the folder, so a later install starts the way the
 last one was left: Windows' uninstaller removes only the program, as does
 dragging the macOS app to the Bin, and `flatpak uninstall` keeps it unless
 given `--delete-data`. Delete the folder to remove your settings, skins and
-presets too.
+presets too, and the Skin Museum's cache folder for its downloads.
 
 ## Editing the file
 
@@ -409,6 +412,25 @@ Preset names are written in UTF-8. Winamp wrote them in the Windows code page,
 so names with accents from Winamp's files show correctly in NeoAmp, but
 NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
 
+## The Skin Museum's downloads
+
+The Skin Museum dialog (see [Skin Museum](GUIDE.md#skin-museum) in the user
+guide) keeps the screenshots and skins it fetches, named after each skin's
+MD5 (`<md5>.png`, `<md5>.wsz`), so that they show at once the next time. They
+are not settings: the folder holds at most 100 MB, the files used longest ago
+go first, and deleting it is always safe.
+
+| Platform | Folder |
+| --- | --- |
+| Linux | `~/.cache/neoamp/museum/` (or `$XDG_CACHE_HOME/neoamp/museum/`) |
+| Linux, the Flatpak | `~/.var/app/io.github.BlakeGardner.NeoAmp/cache/neoamp/museum/` |
+| Windows | `%LOCALAPPDATA%\NeoAmp\cache\museum\` |
+| macOS | `~/Library/Caches/NeoAmp/museum/` |
+
+With `NEOAMP_CONFIG_DIR` set, it is `cache/museum` inside that folder. A skin
+installed from the dialog is copied out of it into the skins folder, so it
+stays when the cache is cleared.
+
 ## What is not saved
 
 - Whether a track was playing. NeoAmp always starts stopped, as Winamp did.
@@ -418,6 +440,10 @@ NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
   entry's title. The Open URL dialog keeps no list of recent addresses.
 - Which playlist rows were selected, and how far the playlist was scrolled
   (it scrolls to the current entry).
+- The Skin Museum's list and searches, which are kept only while NeoAmp runs,
+  and a skin being tried on that was not installed: `skin` keeps naming the
+  one chosen before, which comes back when the dialog closes and at the next
+  start.
 
 ## The command line and the settings
 

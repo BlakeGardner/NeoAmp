@@ -12,6 +12,8 @@ The code is `App::key_cmd` and `App::playlist_key` in
 [src/app.rs](../src/app.rs), with the menus' keys in
 [src/menu.rs](../src/menu.rs), the Jump to file dialog's in
 [src/jump.rs](../src/jump.rs) and [src/jump_window.rs](../src/jump_window.rs),
+the Skin Museum dialog's in [src/museum_dialog.rs](../src/museum_dialog.rs)
+and [src/museum_window.rs](../src/museum_window.rs),
 the Open URL dialog's in [src/url_window.rs](../src/url_window.rs), the edit
 boxes' in [src/text_box.rs](../src/text_box.rs) and the File info dialog's in
 [src/info_window.rs](../src/info_window.rs).
@@ -164,6 +166,24 @@ added to the search.
 | Ctrl+A | ⌘A | Select everything in the search box, so that typing replaces it |
 | Enter | Return | Play the highlighted entry and close the dialog |
 | Escape | Esc | Close the dialog |
+
+## Skin Museum dialog
+
+Skins > Skin Museum... opens it. Typing searches the museum once you pause. A
+key typed with Ctrl, Alt or Cmd held is not added to the search.
+
+| Key | macOS | Action |
+| --- | --- | --- |
+| Up / Down | ↑ / ↓ | Move the highlight in the list; NeoAmp tries the skin on a moment later |
+| Page Up / Page Down | Page Up / Page Down | Move the highlight a page |
+| Left / Right | ← / → | Move the caret in the search box |
+| Home / End | Home / End | Move the caret to the start or end of the search box |
+| Backspace | Delete | Delete the character before the caret (or everything, when all is selected) |
+| Delete | ⌦ | Delete the character after the caret (or everything, when all is selected) |
+| Ctrl+V | ⌘V | Paste the clipboard's text into the search box |
+| Ctrl+A | ⌘A | Select everything in the search box, so that typing replaces it |
+| Enter | Return | Search at once, if what is typed is not listed yet; otherwise install the highlighted skin |
+| Escape | Esc | Close the dialog, putting back the skin you had |
 
 ## Open URL dialog
 

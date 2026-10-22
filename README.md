@@ -48,8 +48,10 @@ conveniences, like media key controls.
 ### Winamp, as you remember it
 
 - **Any classic skin.** Drop a `.wsz` onto the window to wear it, with the
-  skin's own colours, playlist font, window shapes and mouse pointers.
-  Thousands are in the [Winamp Skin Museum](https://skins.webamp.org/).
+  skin's own colours, playlist font, window shapes and mouse pointers. Or
+  open Skins > Skin Museum... to search the
+  [Winamp Skin Museum](https://skins.webamp.org/)'s thousands and try them
+  on before you keep one.
 - **Docking windows.** Drag the equalizer and playlist away, snap them back,
   and roll any window up into a 14-pixel windowshade bar.
 - **The real equalizer.** Ten bands and a preamp, Winamp's presets and your

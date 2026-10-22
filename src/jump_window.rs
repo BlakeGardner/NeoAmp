@@ -62,7 +62,7 @@ impl JumpWindow {
         let font = TtfFont::load_menu(menu::font_px(scale));
         let jump = Jump::new(scale, &font, current, now);
         let (w, h) = jump.size();
-        let window = DialogWindow::open(el, jump::TITLE, (w, h), on_top)?;
+        let window = DialogWindow::open(el, jump::TITLE, (w, h), on_top, None)?;
         Ok(JumpWindow {
             window,
             canvas: Image::new(w, h),
