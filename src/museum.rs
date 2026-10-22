@@ -1,10 +1,10 @@
 //! The Winamp Skin Museum (<https://skins.webamp.org>): its skins in the order of its front
-//! page, its search, and each skin's file and screenshot.
+//! page, its search, and each skin's file.
 //!
 //! The museum is a volunteer project, with a GraphQL API that answers plain `GET` requests
 //! without an account. NeoAmp asks for [`PAGE`] skins at a time, says who it is in every
-//! request (`User-Agent: NeoAmp/<version>`, from [`crate::http`]), keeps the screenshots and
-//! skins it fetched in a [`Cache`] folder, and treats an answer it cannot read as no answer, so
+//! request (`User-Agent: NeoAmp/<version>`, from [`crate::http`]), keeps the skins it fetched
+//! in a [`Cache`] folder, and treats an answer it cannot read as no answer, so
 //! that a change on the museum's side costs only the Skin Museum dialog.
 //!
 //! Everything here blocks; the dialog runs it on threads of its own (see `museum_window`).
@@ -30,8 +30,6 @@ pub const PAGE: usize = 50;
 const MAX_QUERY_CHARS: usize = 100;
 /// The most an answer may take. A page of skins is about 20 KB.
 const MAX_ANSWER_BYTES: usize = 1 << 20;
-/// The most a screenshot may take. They are about 160 KB.
-const MAX_SCREENSHOT_BYTES: usize = 2 << 20;
 /// The most the cache folder holds before the files least recently used are deleted.
 pub const CACHE_BYTES: u64 = 100 << 20;
 /// The longest name a skin is installed under, in characters.
@@ -46,8 +44,6 @@ pub struct MuseumSkin {
     pub filename: String,
     /// Where its `.wsz` file is.
     pub download_url: String,
-    /// Where the museum's 275 x 348 picture of it is.
-    pub screenshot_url: String,
 }
 
 impl MuseumSkin {
@@ -121,7 +117,7 @@ impl Listing {
 
     /// The GraphQL query for the page starting at skin `offset`.
     fn query(&self, offset: usize) -> String {
-        const FIELDS: &str = "md5 filename nsfw download_url screenshot_url";
+        const FIELDS: &str = "md5 filename nsfw download_url";
         match self {
             Listing::Museum => format!(
                 "{{ skins(first: {PAGE}, offset: {offset}, sort: MUSEUM) {{ nodes {{ {FIELDS} }} }} }}"
@@ -158,8 +154,8 @@ fn query_url(api: &str, query: &str) -> String {
 /// One page of a listing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Page {
-    /// The skins on it that can be shown: those flagged NSFW, or lacking a file or a picture
-    /// to fetch securely, are left out.
+    /// The skins on it that can be shown: those flagged NSFW, or lacking a file to fetch
+    /// securely, are left out.
     pub skins: Vec<MuseumSkin>,
     /// How many skins the museum sent, shown or not; the next page starts that many on.
     pub sent: usize,
@@ -208,7 +204,6 @@ struct Node {
     filename: Option<String>,
     nsfw: Option<bool>,
     download_url: Option<String>,
-    screenshot_url: Option<String>,
 }
 
 impl Node {
@@ -222,13 +217,11 @@ impl Node {
         let md5 = self.md5?.to_ascii_lowercase();
         let filename = self.filename.filter(|f| !f.trim().is_empty())?;
         let download_url = self.download_url.filter(|u| https(u))?;
-        let screenshot_url = self.screenshot_url.filter(|u| https(u))?;
         let is_md5 = md5.len() == 32 && md5.bytes().all(|b| b.is_ascii_hexdigit());
         (is_md5 && self.nsfw != Some(true)).then_some(MuseumSkin {
             md5,
             filename,
             download_url,
-            screenshot_url,
         })
     }
 }
@@ -293,22 +286,6 @@ fn fetch_page_from(
     parse_page(listing, &json)
 }
 
-/// The skin's screenshot, a PNG: from `cache`, or else from the museum, and then kept.
-///
-/// # Errors
-/// Fails if it is not cached and cannot be fetched.
-pub fn screenshot(skin: &MuseumSkin, cache: &Cache, cancel: &dyn Fn() -> bool) -> Result<Vec<u8>> {
-    let name = format!("{}.png", skin.md5);
-    if let Some(png) = cache.get(&name) {
-        return Ok(png);
-    }
-    let png = fetch(&skin.screenshot_url, MAX_SCREENSHOT_BYTES, cancel)?;
-    if let Err(e) = cache.put(&name, &png) {
-        log::warn!("cannot keep the screenshot: {e:#}");
-    }
-    Ok(png)
-}
-
 /// The skin's `.wsz` file, and where it is kept in `cache`: from there, or else from the
 /// museum.
 ///
@@ -328,8 +305,8 @@ pub fn download(
     Ok((wsz, path))
 }
 
-/// A folder of files fetched from the museum, so that they need not be fetched again:
-/// `<md5>.png` for a screenshot and `<md5>.wsz` for a skin. Reading a file marks it as used;
+/// A folder of skins fetched from the museum, so that they need not be fetched again, each
+/// named `<md5>.wsz`. Reading a file marks it as used;
 /// once the folder holds more than its limit, the files least recently used are deleted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cache {
@@ -434,7 +411,6 @@ mod tests {
             md5: MD5.into(),
             filename: filename.into(),
             download_url: format!("https://r2.webampskins.org/skins/{MD5}.wsz"),
-            screenshot_url: format!("https://r2.webampskins.org/screenshots/{MD5}.png"),
         }
     }
 
@@ -515,9 +491,7 @@ mod tests {
     #[test]
     fn pages_keep_only_skins_that_can_be_shown() {
         let node = |md5: &str, nsfw: &str, url: &str| {
-            format!(
-                r#"{{"md5":"{md5}","filename":"x.wsz","nsfw":{nsfw},"download_url":"{url}","screenshot_url":"https://s/x.png"}}"#
-            )
+            format!(r#"{{"md5":"{md5}","filename":"x.wsz","nsfw":{nsfw},"download_url":"{url}"}}"#)
         };
         let nodes = [
             node(MD5, "false", "https://d/x.wsz"),
@@ -558,7 +532,7 @@ mod tests {
     fn a_page_is_fetched_with_its_query() {
         let nodes = vec![
             format!(
-                r#"{{"md5":"{MD5}","filename":"x.wsz","nsfw":false,"download_url":"https://d","screenshot_url":"https://s"}}"#
+                r#"{{"md5":"{MD5}","filename":"x.wsz","nsfw":false,"download_url":"https://d"}}"#
             );
             PAGE
         ]
@@ -585,23 +559,20 @@ mod tests {
     fn downloads_are_kept_and_found_again() {
         let tmp = TempDir::new("download");
         let cache = Cache::new(tmp.0.clone(), CACHE_BYTES);
-        let (address, server) = serve(vec![ok("WSZ"), ok("PNG")], Duration::ZERO);
+        let (address, server) = serve(vec![ok("WSZ")], Duration::ZERO);
         let mut s = skin("x.wsz");
         s.download_url = format!("{address}/x.wsz");
-        s.screenshot_url = format!("{address}/x.png");
         let (wsz, path) = download(&s, &cache, &|| false).unwrap();
         assert_eq!(
             (wsz.as_slice(), path.clone()),
             (&b"WSZ"[..], tmp.0.join(format!("{MD5}.wsz")))
         );
-        assert_eq!(screenshot(&s, &cache, &|| false).unwrap(), b"PNG");
-        assert_eq!(server.join().unwrap().len(), 2);
-        // The server has gone; both come from the cache now.
+        assert_eq!(server.join().unwrap().len(), 1);
+        // The server has gone; it comes from the cache now.
         assert_eq!(
             download(&s, &cache, &|| false).unwrap(),
             (b"WSZ".to_vec(), path)
         );
-        assert_eq!(screenshot(&s, &cache, &|| false).unwrap(), b"PNG");
     }
 
     #[test]

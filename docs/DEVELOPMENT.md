@@ -144,8 +144,8 @@ program does the same:
   `app.rs`, which wears it in place of the chosen one until it is installed
   or the dialog closes. `src/museum.rs` talks to the museum's GraphQL API
   (plain `GET` requests through `src/http.rs`, answers read with
-  [serde_json](https://crates.io/crates/serde_json)) and keeps the
-  screenshots and skins it fetched in a cache folder of at most 100 MB.
+  [serde_json](https://crates.io/crates/serde_json)) and keeps the skins
+  it fetched in a cache folder of at most 100 MB.
 - `src/audio/` plays the music (see [Audio](#audio)), internet radio included
   (`src/audio/stream.rs`, fetched by `src/http.rs`; see
   [Internet radio](#internet-radio)), and `src/vis.rs` turns the samples being

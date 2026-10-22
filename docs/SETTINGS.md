@@ -415,10 +415,10 @@ NeoAmp's show garbled in Winamp. Plain ASCII names are the same in both.
 ## The Skin Museum's downloads
 
 The Skin Museum dialog (see [Skin Museum](GUIDE.md#skin-museum) in the user
-guide) keeps the screenshots and skins it fetches, named after each skin's
-MD5 (`<md5>.png`, `<md5>.wsz`), so that they show at once the next time. They
-are not settings: the folder holds at most 100 MB, the files used longest ago
-go first, and deleting it is always safe.
+guide) keeps the skins it fetches, named after each one's MD5
+(`<md5>.wsz`), so that they come at once the next time. They are not
+settings: the folder holds at most 100 MB, the files used longest ago go
+first, and deleting it is always safe.
 
 | Platform | Folder |
 | --- | --- |

@@ -1,14 +1,14 @@
 //! The Skin Museum dialog (Skins > Skin Museum...): the Winamp Skin Museum's skins in a list
-//! that a search narrows, with the highlighted skin's screenshot beside it. A moment after a
-//! skin is highlighted, NeoAmp's own windows wear it, to try it on; Install keeps it in the
-//! skins folder, and Close puts back the skin that was showing.
+//! that a search narrows. A moment after a skin is highlighted, NeoAmp's own windows wear it,
+//! to try it on; Install keeps it in the skins folder, and Close puts back the skin that was
+//! showing.
 //!
 //! This is the dialog's state, layout, input and drawing, drawn like Jump to file
 //! ([`crate::jump`]). It fetches nothing itself: `museum_window` asks it what is wanted
 //! ([`Museum::next_request`]), fetches that on threads of its own and hands back what arrives.
 //! Geometry is in physical pixels: Windows' sizes at 96 DPI times the dialog's scale.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::canvas::{Image, Rect};
@@ -23,35 +23,28 @@ use crate::text_box::{Edit, TextBox};
 pub const TITLE: &str = "Skin Museum";
 /// Typing waits this long for the next key before searching.
 const SEARCH_DELAY: Duration = Duration::from_millis(400);
-/// A highlighted skin's screenshot is fetched once the highlight has rested this long...
-const SCREENSHOT_DELAY: Duration = Duration::from_millis(150);
-/// ...and the skin itself, to try it on, after this long.
+/// A highlighted skin is fetched, to try it on, once the highlight has rested this long.
 const TRY_DELAY: Duration = Duration::from_millis(500);
 /// The next page is fetched while fewer rows than this are left below those shown.
 const PREFETCH_ROWS: usize = 10;
-/// Screenshots kept in memory; the cache folder keeps more.
-const SCREENSHOTS_KEPT: usize = 32;
 
 /// Sizes at 96 DPI, which `px` scales.
 mod metric {
-    pub const W: i32 = 600;
+    pub const W: i32 = 380;
     pub const H: i32 = 420;
     pub const MARGIN: i32 = 8;
     pub const GAP: i32 = 6;
     pub const EDIT_H: i32 = 21;
     pub const BUTTON_W: i32 = 75;
     pub const BUTTON_H: i32 = 23;
-    /// The museum's screenshots: the three windows stacked, at 1x.
-    pub const SHOT_W: i32 = 275;
-    pub const SHOT_H: i32 = 348;
-    /// From the screenshot's box to the line under it.
-    pub const CAPTION_GAP: i32 = 4;
     pub const LINE_H: i32 = 14;
 }
 
 const LABEL: &str = "Search:";
 const INSTALL: &str = "Install";
 const CLOSE: &str = "Close";
+/// What the line under the list says while no skin is highlighted.
+const HINT: &str = "Choose a skin to try it on";
 
 /// What a key does in the dialog.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -86,11 +79,7 @@ pub enum Outcome {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     /// The page of `listing` that starts at skin `offset`.
-    Page {
-        listing: Listing,
-        offset: usize,
-    },
-    Screenshot(MuseumSkin),
+    Page { listing: Listing, offset: usize },
     /// The skin itself, to try it on.
     Skin(MuseumSkin),
 }
@@ -137,14 +126,6 @@ impl Default for Listed {
     }
 }
 
-/// A screenshot, as far as it has been fetched.
-#[derive(Debug)]
-enum Shot {
-    Loading,
-    Ready(Image),
-    Failed,
-}
-
 /// How far trying a skin on has got.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Trying {
@@ -177,14 +158,10 @@ struct Layout {
     label_x: i32,
     edit: Rect,
     list: Rect,
+    /// The line under the list: the skin being tried on.
+    caption: Rect,
     /// The line beside the buttons that says how the list is doing.
     status: Rect,
-    /// The screenshot's sunken box.
-    shot: Rect,
-    /// The screenshot, inside the box.
-    picture: Rect,
-    /// The line under the screenshot.
-    caption: Rect,
     install: Rect,
     close: Rect,
 }
@@ -195,47 +172,26 @@ impl Layout {
         let t = line(scale);
         let (w, h) = (p(metric::W), p(metric::H));
         let (margin, gap) = (p(metric::MARGIN), p(metric::GAP));
-        let border = 2 * t;
-        let picture_size = (p(metric::SHOT_W), p(metric::SHOT_H));
-        let shot = Rect::new(
-            w - margin - picture_size.0 - 2 * border,
-            margin,
-            picture_size.0 + 2 * border,
-            picture_size.1 + 2 * border,
-        );
-        let picture = Rect::new(
-            shot.x + border,
-            shot.y + border,
-            picture_size.0,
-            picture_size.1,
-        );
-        let caption = Rect::new(
-            shot.x,
-            shot.bottom() + p(metric::CAPTION_GAP),
-            shot.w,
-            p(metric::LINE_H),
-        );
-        let left_w = shot.x - 2 * margin;
         let label_w = m.text_width(LABEL);
         let edit_x = margin + label_w + gap;
-        let edit = Rect::new(edit_x, margin, margin + left_w - edit_x, p(metric::EDIT_H));
+        let edit = Rect::new(edit_x, margin, w - margin - edit_x, p(metric::EDIT_H));
         let button = (p(metric::BUTTON_W), p(metric::BUTTON_H));
         let buttons_y = h - margin - button.1;
         let close = Rect::new(w - margin - button.0, buttons_y, button.0, button.1);
         let install = close.offset(-(button.0 + gap), 0);
+        let line_h = p(metric::LINE_H);
+        let caption = Rect::new(margin, buttons_y - gap - line_h, w - 2 * margin, line_h);
         let list_y = edit.bottom() + gap;
-        let list = Rect::new(margin, list_y, left_w, buttons_y - gap - list_y);
-        let status = Rect::new(margin, buttons_y, left_w, button.1);
+        let list = Rect::new(margin, list_y, w - 2 * margin, caption.y - gap - list_y);
+        let status = Rect::new(margin, buttons_y, install.x - gap - margin, button.1);
         Layout {
             size: (w, h),
             t,
             label_x: margin,
             edit,
             list,
-            status,
-            shot,
-            picture,
             caption,
+            status,
             install,
             close,
         }
@@ -257,14 +213,8 @@ pub struct Museum {
     list: ListBox,
     /// The MD5 of the highlighted skin.
     highlight: Option<String>,
-    /// When the highlight moved to that skin; `None` while nothing is to be fetched for it
-    /// unasked.
+    /// When the highlight moved to that skin; `None` while it is not to be tried on unasked.
     picked: Option<Instant>,
-    shots: HashMap<String, Shot>,
-    /// The screenshots in `shots`, oldest first.
-    shot_order: VecDeque<String>,
-    /// The highlighted skin's screenshot at the dialog's scale, with its MD5.
-    picture: Option<(String, Image)>,
     trying: Trying,
     /// Install was pressed for the skin with this MD5 before it had arrived.
     install_wanted: Option<String>,
@@ -298,9 +248,6 @@ impl Museum {
             list,
             highlight: None,
             picked: None,
-            shots: HashMap::new(),
-            shot_order: VecDeque::new(),
-            picture: None,
             trying: Trying::Idle,
             install_wanted: None,
             pressed: None,
@@ -331,8 +278,6 @@ impl Museum {
         self.scale = scale;
         self.layout = Layout::new(scale, m);
         self.list.relayout(self.layout.list, scale);
-        self.picture = None;
-        self.update_picture();
     }
 
     #[must_use]
@@ -355,8 +300,7 @@ impl Museum {
         self.skins().get(self.list.selected()?)
     }
 
-    /// The highlight may have moved to another skin: its screenshot shows if it is to hand,
-    /// and the wait to fetch it, and to try the skin on, starts again.
+    /// The highlight may have moved to another skin: the wait to try it on starts again.
     fn sync_highlight(&mut self, now: Instant) {
         let md5 = self.highlighted().map(|s| s.md5.clone());
         if md5 == self.highlight {
@@ -365,34 +309,6 @@ impl Museum {
         self.highlight = md5;
         self.picked = self.highlight.is_some().then_some(now);
         self.install_wanted = None;
-        self.update_picture();
-    }
-
-    /// Scale the highlighted skin's screenshot to the dialog, if it is to hand.
-    fn update_picture(&mut self) {
-        let Some(md5) = &self.highlight else {
-            self.picture = None;
-            return;
-        };
-        if self.picture.as_ref().is_some_and(|(m, _)| m == md5) {
-            return;
-        }
-        let r = self.layout.picture;
-        self.picture = match self.shots.get(md5) {
-            Some(Shot::Ready(image)) => Some((md5.clone(), image.resized(r.w, r.h))),
-            _ => None,
-        };
-    }
-
-    fn keep_shot(&mut self, md5: String, shot: Shot) {
-        if self.shots.insert(md5.clone(), shot).is_none() {
-            self.shot_order.push_back(md5);
-        }
-        while self.shot_order.len() > SCREENSHOTS_KEPT {
-            if let Some(old) = self.shot_order.pop_front() {
-                self.shots.remove(&old);
-            }
-        }
     }
 
     /// List what the search box says now.
@@ -408,7 +324,6 @@ impl Museum {
         self.highlight = None;
         self.picked = None;
         self.install_wanted = None;
-        self.picture = None;
     }
 
     /// Call every frame: once typing has paused, list what the search box says. True if the
@@ -425,8 +340,8 @@ impl Museum {
     }
 
     /// The next thing to fetch, if any, now marked as on its way: more of the listing while
-    /// its end is near; then the highlighted skin's screenshot, and the skin itself to try on,
-    /// once the highlight has rested a moment (or at once, after Install).
+    /// its end is near; then the highlighted skin, to try it on, once the highlight has rested
+    /// a moment (or at once, after Install).
     pub fn next_request(&mut self, now: Instant) -> Option<Request> {
         let len = self.list.len();
         let near_end = self.list.scroll() + self.list.visible_rows() + PREFETCH_ROWS >= len
@@ -443,13 +358,10 @@ impl Museum {
             });
         }
         let skin = self.highlighted()?.clone();
-        let rested = self.picked.map(|t| now.saturating_duration_since(t));
-        if rested.is_some_and(|r| r >= SCREENSHOT_DELAY) && !self.shots.contains_key(&skin.md5) {
-            self.keep_shot(skin.md5.clone(), Shot::Loading);
-            return Some(Request::Screenshot(skin));
-        }
-        let wanted = self.install_wanted.as_ref() == Some(&skin.md5)
-            || rested.is_some_and(|r| r >= TRY_DELAY);
+        let rested = self
+            .picked
+            .is_some_and(|t| now.saturating_duration_since(t) >= TRY_DELAY);
+        let wanted = self.install_wanted.as_ref() == Some(&skin.md5) || rested;
         let busy = match &self.trying {
             Trying::Idle => false,
             Trying::Fetching(m) | Trying::Wearing(m) | Trying::Installed(m) => *m == skin.md5,
@@ -495,24 +407,6 @@ impl Museum {
             return false;
         }
         self.list.set_len(len);
-        true
-    }
-
-    /// A screenshot asked for has arrived, or could not be fetched. True if the dialog needs
-    /// drawing again.
-    pub fn screenshot_arrived(&mut self, md5: &str, picture: Result<Image, String>) -> bool {
-        let shot = match picture {
-            Ok(image) => Shot::Ready(image),
-            Err(why) => {
-                log::warn!("cannot show the Skin Museum's picture of {md5}: {why}");
-                Shot::Failed
-            }
-        };
-        self.keep_shot(md5.to_owned(), shot);
-        if self.highlight.as_deref() != Some(md5) {
-            return false;
-        }
-        self.update_picture();
         true
     }
 
@@ -757,31 +651,19 @@ impl Museum {
         status
     }
 
-    /// The line under the screenshot: the highlighted skin, and whether it is worn.
-    fn caption(&self) -> String {
-        let Some(skin) = self.highlighted() else {
-            return String::new();
-        };
+    /// The line under the list: the highlighted skin, and whether it is worn; `None` while no
+    /// skin is highlighted.
+    fn caption(&self) -> Option<String> {
+        let skin = self.highlighted()?;
         let name = skin.name();
         let this = |m: &String| *m == skin.md5;
-        match &self.trying {
+        Some(match &self.trying {
             Trying::Fetching(m) if this(m) => format!("Fetching {name}..."),
             Trying::Wearing(m) if this(m) => format!("Trying on {name}"),
             Trying::Installed(m) if this(m) => format!("Installed {name}"),
             Trying::Failed(m, _) if this(m) => format!("Can't use {name}"),
             _ => name.to_owned(),
-        }
-    }
-
-    /// What the screenshot's box says while it shows no screenshot.
-    fn placeholder(&self) -> &'static str {
-        let Some(md5) = &self.highlight else {
-            return "Choose a skin to try it on";
-        };
-        match self.shots.get(md5) {
-            Some(Shot::Failed) => "No picture of this skin",
-            _ => "Loading the picture...",
-        }
+        })
     }
 
     /// Draw the dialog into `c`, which must be [`Museum::size`]. `font` must be the menu font
@@ -805,6 +687,24 @@ impl Museum {
             label.push_str(skin.name());
             true
         });
+        match self.caption() {
+            Some(caption) => font.draw(
+                c,
+                &caption,
+                l.caption.x,
+                centred(l.caption),
+                TEXT,
+                l.caption,
+            ),
+            None => font.draw(
+                c,
+                HINT,
+                l.caption.x,
+                centred(l.caption),
+                GRAY_TEXT,
+                l.caption,
+            ),
+        };
         font.draw(
             c,
             &self.status(),
@@ -813,21 +713,6 @@ impl Museum {
             TEXT,
             l.status,
         );
-
-        classic::sunken(c, l.shot, t);
-        match &self.picture {
-            Some((md5, image)) if self.highlight.as_ref() == Some(md5) => {
-                c.blit(image, image.bounds(), l.picture.x, l.picture.y);
-            }
-            _ => {
-                let text = self.placeholder();
-                let x = l.picture.x + (l.picture.w - font.width(text)) / 2;
-                font.draw(c, text, x, centred(l.picture), GRAY_TEXT, l.picture);
-            }
-        }
-        let caption = self.caption();
-        let x = l.caption.x + (l.caption.w - font.width(&caption)).max(0) / 2;
-        font.draw(c, &caption, x, centred(l.caption), TEXT, l.caption);
 
         // The buttons; Install is the default, which Enter presses.
         for (part, r, text) in [
@@ -859,7 +744,6 @@ mod tests {
             md5: format!("{i:032x}"),
             filename: format!("Skin {i}.wsz"),
             download_url: format!("https://d/{i}.wsz"),
-            screenshot_url: format!("https://s/{i}.png"),
         }
     }
 
@@ -896,6 +780,7 @@ mod tests {
         let (mut m, now) = open();
         assert_eq!(m.skins().len(), 50);
         assert_eq!(m.highlighted(), None);
+        assert_eq!(m.caption(), None);
         assert_eq!(
             m.next_request(after(now, 5000)),
             None,
@@ -905,28 +790,22 @@ mod tests {
     }
 
     #[test]
-    fn a_highlighted_skin_shows_its_screenshot_then_is_tried_on() {
+    fn a_highlighted_skin_is_tried_on_once_the_highlight_rests() {
         let (mut m, now) = open();
         let _ = m.key(Key::Down, now);
         assert_eq!(m.highlighted(), Some(&skin(0)));
-        assert_eq!(m.next_request(after(now, 100)), None, "not yet");
+        assert_eq!(m.caption().as_deref(), Some("Skin 0"));
+        assert_eq!(m.next_request(after(now, 400)), None, "not yet");
         assert_eq!(
-            m.next_request(after(now, 200)),
-            Some(Request::Screenshot(skin(0)))
-        );
-        assert_eq!(m.next_request(after(now, 300)), None);
-        assert!(m.screenshot_arrived(&skin(0).md5, Ok(Image::new(275, 348))));
-        assert!(m.picture.is_some());
-        assert_eq!(
-            m.next_request(after(now, 600)),
+            m.next_request(after(now, 500)),
             Some(Request::Skin(skin(0)))
         );
-        assert_eq!(m.caption(), "Fetching Skin 0...");
+        assert_eq!(m.caption().as_deref(), Some("Fetching Skin 0..."));
         assert_eq!(m.next_request(after(now, 700)), None, "once");
         assert_eq!(m.skin_arrived(&skin(0).md5, Ok(())), Arrival::Wear);
-        assert_eq!(m.caption(), "Trying on Skin 0");
+        assert_eq!(m.caption().as_deref(), Some("Trying on Skin 0"));
         assert_eq!(m.key(Key::Enter, now), Outcome::Install);
-        assert_eq!(m.caption(), "Installed Skin 0");
+        assert_eq!(m.caption().as_deref(), Some("Installed Skin 0"));
         assert_eq!(m.key(Key::Enter, now), Outcome::None, "kept already");
     }
 
@@ -935,20 +814,12 @@ mod tests {
         let (mut m, now) = open();
         let _ = m.key(Key::Down, now);
         assert_eq!(
-            m.next_request(after(now, 200)),
-            Some(Request::Screenshot(skin(0)))
-        );
-        assert_eq!(
             m.next_request(after(now, 600)),
             Some(Request::Skin(skin(0)))
         );
         let later = after(now, 700);
         let _ = m.key(Key::Down, later);
         assert_eq!(m.skin_arrived(&skin(0).md5, Ok(())), Arrival::Drop);
-        assert_eq!(
-            m.next_request(after(later, 200)),
-            Some(Request::Screenshot(skin(1)))
-        );
         assert_eq!(
             m.next_request(after(later, 600)),
             Some(Request::Skin(skin(1)))
@@ -957,7 +828,7 @@ mod tests {
             m.skin_arrived(&skin(1).md5, Err("broken".into())),
             Arrival::Drop
         );
-        assert_eq!(m.caption(), "Can't use Skin 1");
+        assert_eq!(m.caption().as_deref(), Some("Can't use Skin 1"));
         assert_eq!(
             m.next_request(after(later, 5000)),
             None,
@@ -980,7 +851,6 @@ mod tests {
         let i = m.layout.install;
         let _ = m.pointer_down(i.x + 5, i.y + 5, now, &Fixed);
         assert_eq!(m.pointer_up(i.x + 5, i.y + 5), Outcome::Redraw);
-        // The screenshot does not wait either way, but the skin comes first.
         assert_eq!(m.next_request(now), Some(Request::Skin(skin(2))));
         assert_eq!(m.skin_arrived(&skin(2).md5, Ok(())), Arrival::Install);
         let c = m.layout.close;
@@ -1028,6 +898,7 @@ mod tests {
     #[test]
     fn more_is_fetched_near_the_end_and_failures_are_said() {
         let (mut m, now) = open();
+        // The first highlights the top row; the second moves a page.
         let _ = m.key(Key::PageDown, now);
         let _ = m.key(Key::PageDown, now);
         assert_eq!(m.next_request(now), None, "far from the end");
@@ -1074,47 +945,46 @@ mod tests {
     fn choosing_another_skin_stops_trying_until_the_highlight_moves() {
         let (mut m, now) = open();
         let _ = m.key(Key::Down, now);
-        let _ = m.next_request(after(now, 200));
         assert_eq!(
             m.next_request(after(now, 600)),
             Some(Request::Skin(skin(0)))
         );
         assert_eq!(m.skin_arrived(&skin(0).md5, Ok(())), Arrival::Wear);
         m.dropped();
-        assert_eq!(m.caption(), "Skin 0");
+        assert_eq!(m.caption().as_deref(), Some("Skin 0"));
         assert_eq!(m.next_request(after(now, 5000)), None);
         let _ = m.key(Key::Down, after(now, 5000));
         assert_eq!(
             m.next_request(after(now, 5600)),
-            Some(Request::Screenshot(skin(1)))
+            Some(Request::Skin(skin(1)))
         );
     }
 
     #[test]
-    fn it_draws_the_screenshot_at_the_dialogs_scale() {
+    fn it_draws_the_list_the_line_under_it_and_the_buttons() {
         let font = TtfFont::load_menu(crate::menu::font_px(2.0));
         let now = Instant::now();
         let mut m = Museum::new(2.0, &font, Listings::default(), now);
         let _ = m.next_request(now);
         m.page_arrived(&Listing::Museum, 0, Ok(page(0, 5, false)));
-        let _ = m.key(Key::Down, now);
-        let mut shot = Image::new(275, 348);
-        shot.put(1, 1, [255, 0, 0, 255]);
-        m.screenshot_arrived(&skin(0).md5, Ok(shot));
         let (w, h) = m.size();
-        assert_eq!((w, h), (1200, 840));
+        assert_eq!((w, h), (760, 840));
+        let l = m.layout;
+        assert!(l.list.bottom() < l.caption.y && l.caption.bottom() < l.install.y);
+        assert!(l.status.right() < l.install.x && l.close.right() < w);
+        let ink = |c: &Image, r: Rect, color| {
+            (r.y..r.bottom()).any(|y| (r.x..r.right()).any(|x| c.get(x, y) == color))
+        };
         let mut c = Image::new(w, h);
         m.draw(&mut c, &font, now);
-        let p = m.layout.picture;
-        assert_eq!((p.w, p.h), (550, 696));
-        assert_eq!(
-            c.get(p.x + 3, p.y + 3),
-            [255, 0, 0, 255],
-            "pixel (1, 1), doubled"
+        assert!(
+            ink(&c, l.caption, GRAY_TEXT),
+            "the hint, while none is highlighted"
         );
-        assert_eq!(c.get(p.x + 1, p.y + 1), [0, 0, 0, 0]);
+        let _ = m.key(Key::Down, now);
+        m.draw(&mut c, &font, now);
         let rows = m.list.rows();
         assert_eq!(c.get(rows.right() - 2, rows.y + 2), classic::SELECTION);
-        assert!(m.layout.shot.right() <= w && m.layout.caption.bottom() <= m.layout.install.y);
+        assert!(!ink(&c, l.caption, GRAY_TEXT) && ink(&c, l.caption, TEXT));
     }
 }
