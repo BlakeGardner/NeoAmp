@@ -25,7 +25,8 @@
 //!   Open URL dialog, drawn like Windows 2000's dialogs ([`classic`]), with edit boxes from
 //!   [`text_box`] and lists from [`list_box`].
 //! - [`museum_dialog`]: the Skin Museum dialog, which finds skins in the Winamp Skin Museum
-//!   through [`museum`] and tries them on NeoAmp's own windows.
+//!   through [`museum`] and tries them on NeoAmp's own windows; [`browser`] opens the
+//!   museum's web site.
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
 //! - [`now_playing`]: the system's media keys and "now playing" display; [`instance`] hands
@@ -37,6 +38,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod browser;
 pub mod canvas;
 pub mod classic;
 mod clipboard;

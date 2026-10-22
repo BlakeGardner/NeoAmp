@@ -780,6 +780,12 @@ from inside NeoAmp. It needs an internet connection.
   NeoAmp place windows, so there the desktop puts it.
 - **Without a connection**, or if the museum changes the way it answers, the
   list says it can't reach the museum, and the rest of NeoAmp carries on.
+- **The credit** above the buttons says the skins are hosted and provided by
+  the Winamp Skin Museum; click its name to open
+  [skins.webamp.org](https://skins.webamp.org/) in your browser. On Linux
+  the link goes through the desktop portal (`xdg-desktop-portal`), which
+  desktops and the Flatpak provide; without one, nothing opens and the log
+  says why.
 
 The skins fetched are kept, so they come at once next time, in a cache
 folder that holds at most 100 MB; past that, the files used longest ago are

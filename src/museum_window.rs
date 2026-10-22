@@ -15,9 +15,10 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
-use winit::window::WindowId;
+use winit::window::{CursorIcon, WindowId};
 
 use crate::app::{EditShortcut, edit_shortcut};
+use crate::browser;
 use crate::canvas::{Image, Rect};
 use crate::clipboard;
 use crate::dialog_window::{DialogWindow, beside, window_size};
@@ -124,6 +125,8 @@ pub(crate) struct MuseumWindow {
     caret_drawn: bool,
     /// Wheel travel not yet turned into whole notches.
     wheel_rest: f64,
+    /// The pointer is over the link and shows a hand.
+    on_link: bool,
     cache: Cache,
     /// Where fetches send what they brought back.
     done_tx: Sender<Done>,
@@ -189,6 +192,7 @@ impl MuseumWindow {
             focused: false,
             caret_drawn: false,
             wheel_rest: 0.0,
+            on_link: false,
             cache,
             done_tx,
             done_rx,
@@ -232,8 +236,26 @@ impl MuseumWindow {
                 .museum
                 .highlighted()
                 .map_or(Event::None, |s| Event::Install(s.md5.clone())),
+            Outcome::OpenSite => {
+                browser::open(museum::SITE);
+                Event::None
+            }
             Outcome::Close => Event::Close,
             Outcome::None | Outcome::Redraw => Event::None,
+        }
+    }
+
+    /// Show a hand over the link, as browsers do, and the arrow elsewhere.
+    fn update_pointer(&mut self, x: i32, y: i32) {
+        let on_link = self.museum.on_link(x, y);
+        if on_link != self.on_link {
+            self.on_link = on_link;
+            let icon = if on_link {
+                CursorIcon::Pointer
+            } else {
+                CursorIcon::Default
+            };
+            self.window.window().set_cursor(icon);
         }
     }
 
@@ -252,6 +274,7 @@ impl MuseumWindow {
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = position;
                 let (x, y) = self.pointer();
+                self.update_pointer(x, y);
                 self.museum.pointer_moved(x, y)
             }
             WindowEvent::MouseInput {
