@@ -1,7 +1,7 @@
 //! The Skin Museum dialog (Skins > Skin Museum...): the Winamp Skin Museum's skins in a list
 //! that a search narrows. A moment after a skin is highlighted, NeoAmp's own windows wear it,
 //! to try it on; Install keeps it in the skins folder, and Close puts back the skin that was
-//! showing.
+//! showing. The line above the buttons credits the museum, with a link to its site.
 //!
 //! This is the dialog's state, layout, input and drawing, drawn like Jump to file
 //! ([`crate::jump`]). It fetches nothing itself: `museum_window` asks it what is wanted
@@ -31,7 +31,7 @@ const PREFETCH_ROWS: usize = 10;
 /// Sizes at 96 DPI, which `px` scales.
 mod metric {
     pub const W: i32 = 380;
-    pub const H: i32 = 420;
+    pub const H: i32 = 440;
     pub const MARGIN: i32 = 8;
     pub const GAP: i32 = 6;
     pub const EDIT_H: i32 = 21;
@@ -45,6 +45,11 @@ const INSTALL: &str = "Install";
 const CLOSE: &str = "Close";
 /// What the line under the list says while no skin is highlighted.
 const HINT: &str = "Choose a skin to try it on";
+/// The line above the buttons, which ends in a link to the museum's site.
+const CREDIT: &str = "Skins hosted and provided by the ";
+const LINK: &str = "Winamp Skin Museum";
+/// A link's colour, as Windows 2000 drew them.
+const LINK_COLOR: [u8; 4] = [0x00, 0x00, 0xFF, 0xFF];
 
 /// What a key does in the dialog.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -72,6 +77,8 @@ pub enum Outcome {
     Redraw,
     /// Keep the skin being worn, which is the highlighted one.
     Install,
+    /// Open the museum's web site in the browser.
+    OpenSite,
     Close,
 }
 
@@ -145,6 +152,8 @@ enum Part {
     Edit,
     /// The list, rows or scroll bar.
     List,
+    /// The link to the museum's site.
+    Link,
     InstallButton,
     CloseButton,
 }
@@ -160,6 +169,10 @@ struct Layout {
     list: Rect,
     /// The line under the list: the skin being tried on.
     caption: Rect,
+    /// The line above the buttons that credits the museum.
+    credit: Rect,
+    /// The link's words at the end of it, which a click opens.
+    link: Rect,
     /// The line beside the buttons that says how the list is doing.
     status: Rect,
     install: Rect,
@@ -180,7 +193,14 @@ impl Layout {
         let close = Rect::new(w - margin - button.0, buttons_y, button.0, button.1);
         let install = close.offset(-(button.0 + gap), 0);
         let line_h = p(metric::LINE_H);
-        let caption = Rect::new(margin, buttons_y - gap - line_h, w - 2 * margin, line_h);
+        let credit = Rect::new(margin, buttons_y - gap - line_h, w - 2 * margin, line_h);
+        let link = Rect::new(
+            credit.x + m.text_width(CREDIT),
+            credit.y,
+            m.text_width(LINK),
+            line_h,
+        );
+        let caption = credit.offset(0, -(gap + line_h));
         let list_y = edit.bottom() + gap;
         let list = Rect::new(margin, list_y, w - 2 * margin, caption.y - gap - list_y);
         let status = Rect::new(margin, buttons_y, install.x - gap - margin, button.1);
@@ -191,6 +211,8 @@ impl Layout {
             edit,
             list,
             caption,
+            credit,
+            link,
             status,
             install,
             close,
@@ -546,7 +568,16 @@ impl Museum {
         if l.close.contains(x, y) {
             return Some(Part::CloseButton);
         }
+        if l.link.contains(x, y) {
+            return Some(Part::Link);
+        }
         self.list.part_at(x, y).map(|_| Part::List)
+    }
+
+    /// Whether (`x`, `y`) is on the link, where the pointer shows a hand.
+    #[must_use]
+    pub fn on_link(&self, x: i32, y: i32) -> bool {
+        self.layout.link.contains(x, y)
     }
 
     /// The pointer pressed at (`x`, `y`).
@@ -561,7 +592,7 @@ impl Museum {
                 self.list.pointer_down(x, y);
                 self.sync_highlight(now);
             }
-            Part::InstallButton | Part::CloseButton => {}
+            Part::Link | Part::InstallButton | Part::CloseButton => {}
         }
         self.pressed = Some(part);
         Outcome::Redraw
@@ -608,6 +639,7 @@ impl Museum {
                 outcome => outcome,
             },
             Part::CloseButton if over => Outcome::Close,
+            Part::Link if over => Outcome::OpenSite,
             _ => Outcome::Redraw,
         }
     }
@@ -705,6 +737,12 @@ impl Museum {
                 l.caption,
             ),
         };
+        // The credit, its last words a link: blue and underlined.
+        let y = centred(l.credit);
+        font.draw(c, CREDIT, l.credit.x, y, TEXT, l.credit);
+        font.draw(c, LINK, l.link.x, y, LINK_COLOR, l.credit);
+        let underline = Rect::new(l.link.x, y + font.ascent() + t, l.link.w, t);
+        c.fill_rect_clipped(underline, LINK_COLOR, l.credit);
         font.draw(
             c,
             &self.status(),
@@ -860,6 +898,19 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_the_link_opens_the_museums_site() {
+        let (mut m, now) = open();
+        let link = m.layout.link;
+        let (x, y) = (link.x + 2, link.y + link.h / 2);
+        assert!(m.on_link(x, y) && !m.on_link(link.x - 2, y));
+        let _ = m.pointer_down(x, y, now, &Fixed);
+        assert_eq!(m.pointer_up(x, y), Outcome::OpenSite);
+        // Letting go elsewhere opens nothing.
+        let _ = m.pointer_down(x, y, now, &Fixed);
+        assert_eq!(m.pointer_up(0, 0), Outcome::Redraw);
+    }
+
+    #[test]
     fn typing_searches_once_it_pauses_and_enter_searches_at_once() {
         let (mut m, now) = open();
         let _ = m.key(Key::Down, now);
@@ -968,9 +1019,11 @@ mod tests {
         let _ = m.next_request(now);
         m.page_arrived(&Listing::Museum, 0, Ok(page(0, 5, false)));
         let (w, h) = m.size();
-        assert_eq!((w, h), (760, 840));
+        assert_eq!((w, h), (760, 880));
         let l = m.layout;
-        assert!(l.list.bottom() < l.caption.y && l.caption.bottom() < l.install.y);
+        assert!(l.list.bottom() < l.caption.y && l.caption.bottom() < l.credit.y);
+        assert!(l.credit.bottom() < l.install.y);
+        assert!(l.link.x > l.credit.x && l.link.right() <= l.credit.right());
         assert!(l.status.right() < l.install.x && l.close.right() < w);
         let ink = |c: &Image, r: Rect, color| {
             (r.y..r.bottom()).any(|y| (r.x..r.right()).any(|x| c.get(x, y) == color))
@@ -981,6 +1034,9 @@ mod tests {
             ink(&c, l.caption, GRAY_TEXT),
             "the hint, while none is highlighted"
         );
+        assert!(ink(&c, l.link, LINK_COLOR), "the link");
+        let before_link = Rect::new(l.credit.x, l.credit.y, l.link.x - l.credit.x, l.credit.h);
+        assert!(ink(&c, before_link, TEXT) && !ink(&c, before_link, LINK_COLOR));
         let _ = m.key(Key::Down, now);
         m.draw(&mut c, &font, now);
         let rows = m.list.rows();

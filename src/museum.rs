@@ -22,6 +22,8 @@ use serde::Deserialize;
 use crate::http::{self, Timeouts, Url};
 use crate::skin::MAX_WSZ_BYTES;
 
+/// The museum's web site.
+pub const SITE: &str = "https://skins.webamp.org/";
 /// The museum's GraphQL API.
 const API: &str = "https://api.webamp.org/graphql";
 /// Skins asked for at a time.

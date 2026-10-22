@@ -145,7 +145,11 @@ program does the same:
   or the dialog closes. `src/museum.rs` talks to the museum's GraphQL API
   (plain `GET` requests through `src/http.rs`, answers read with
   [serde_json](https://crates.io/crates/serde_json)) and keeps the skins
-  it fetched in a cache folder of at most 100 MB.
+  it fetched in a cache folder of at most 100 MB. `src/browser.rs` opens the
+  museum's site from the dialog's credit line: `NSWorkspace` on macOS, the
+  shell's `ShellExecuteEx` on Windows (through the
+  [open](https://crates.io/crates/open) crate) and the desktop portal's
+  `OpenURI` over zbus on Linux, so no command line is run.
 - `src/audio/` plays the music (see [Audio](#audio)), internet radio included
   (`src/audio/stream.rs`, fetched by `src/http.rs`; see
   [Internet radio](#internet-radio)), and `src/vis.rs` turns the samples being
