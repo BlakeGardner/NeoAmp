@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Instant;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
@@ -27,8 +27,6 @@ use crate::museum::{self, Cache, Listing, MuseumSkin, Page};
 use crate::museum_dialog::{self, Arrival, Key, Listings, Museum, Outcome, Request};
 use crate::skin::Skin;
 
-/// Largest screenshot side accepted, in pixels; the museum's are 275 x 348.
-const MAX_SCREENSHOT_SIDE: u32 = 1024;
 /// From NeoAmp's windows to the dialog beside them, at 96 DPI.
 const GAP: f64 = 8.0;
 
@@ -65,10 +63,6 @@ enum Done {
         offset: usize,
         page: Result<Page, String>,
     },
-    Screenshot {
-        md5: String,
-        picture: Result<Image, String>,
-    },
     Skin {
         skin: MuseumSkin,
         wsz: Result<(Box<Skin>, PathBuf), String>,
@@ -83,10 +77,6 @@ impl Done {
                 listing,
                 offset,
                 page: Err(why.to_owned()),
-            },
-            Request::Screenshot(skin) => Done::Screenshot {
-                md5: skin.md5,
-                picture: Err(why.to_owned()),
             },
             Request::Skin(skin) => Done::Skin {
                 skin,
@@ -108,15 +98,6 @@ fn fetch(request: Request, cache: &Cache, cancel: &dyn Fn() -> bool) -> Done {
                 page,
             }
         }
-        Request::Screenshot(skin) => {
-            let picture = museum::screenshot(&skin, cache, cancel)
-                .and_then(|png| decode_screenshot(&png))
-                .map_err(why);
-            Done::Screenshot {
-                md5: skin.md5,
-                picture,
-            }
-        }
         Request::Skin(skin) => {
             let wsz = museum::download(&skin, cache, cancel)
                 .and_then(|(bytes, file)| {
@@ -126,26 +107,6 @@ fn fetch(request: Request, cache: &Cache, cancel: &dyn Fn() -> bool) -> Done {
             Done::Skin { skin, wsz }
         }
     }
-}
-
-/// A screenshot's pixels, from its PNG file.
-fn decode_screenshot(png: &[u8]) -> Result<Image> {
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(png));
-        r.set_format(image::ImageFormat::Png);
-        r
-    };
-    // The size first, so that a small file claiming a huge picture is never decoded.
-    let (w, h) = reader().into_dimensions()?;
-    if w == 0 || h == 0 || w > MAX_SCREENSHOT_SIDE || h > MAX_SCREENSHOT_SIDE {
-        bail!("a screenshot of {w}x{h}");
-    }
-    let picture = reader().decode()?.into_rgba8();
-    let (w, h) = (
-        i32::try_from(picture.width())?,
-        i32::try_from(picture.height())?,
-    );
-    Image::from_rgba(w, h, picture.into_raw()).ok_or_else(|| anyhow::anyhow!("a broken screenshot"))
 }
 
 /// The dialog and its window.
@@ -391,9 +352,6 @@ impl MuseumWindow {
                     offset,
                     page,
                 } => redraw |= self.museum.page_arrived(&listing, offset, page),
-                Done::Screenshot { md5, picture } => {
-                    redraw |= self.museum.screenshot_arrived(&md5, picture);
-                }
                 Done::Skin { skin, wsz } => {
                     redraw = true;
                     let (read, wsz) = match wsz {
@@ -457,21 +415,6 @@ impl MuseumWindow {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn screenshots_are_decoded_and_oversized_ones_refused() {
-        let encode = |w: u32, h: u32| {
-            let mut png = std::io::Cursor::new(Vec::new());
-            image::RgbaImage::new(w, h)
-                .write_to(&mut png, image::ImageFormat::Png)
-                .unwrap();
-            png.into_inner()
-        };
-        let shot = decode_screenshot(&encode(275, 348)).unwrap();
-        assert_eq!((shot.w, shot.h), (275, 348));
-        assert!(decode_screenshot(&encode(2000, 10)).is_err());
-        assert!(decode_screenshot(b"not a png").is_err());
-    }
 
     #[test]
     fn what_cannot_be_fetched_comes_back_failed() {

@@ -768,9 +768,9 @@ from inside NeoAmp. It needs an internet connection.
   up a skin nobody has checked. Enter searches at once; an empty box goes back
   to the museum's list.
 - **Trying a skin on:** click a skin, or move to it with the arrow keys, and
-  its screenshot appears beside the list. Half a second later NeoAmp's own
-  windows wear it, so you see it with your playlist and at your zoom. Nothing
-  is kept yet: **Close** (or Escape) puts back the skin you had.
+  half a second later NeoAmp's own windows wear it, so you see it with your
+  playlist and at your zoom; the line under the list says which skin is on.
+  Nothing is kept yet: **Close** (or Escape) puts back the skin you had.
 - **Install** (or Enter) keeps the skin being tried on: it is copied into the
   skins folder under the museum's file name (`Bento_Classified.wsz`, say) and
   becomes the chosen skin, remembered like any other. The dialog stays open
@@ -781,9 +781,9 @@ from inside NeoAmp. It needs an internet connection.
 - **Without a connection**, or if the museum changes the way it answers, the
   list says it can't reach the museum, and the rest of NeoAmp carries on.
 
-The screenshots and skins fetched are kept, so they show at once next time,
-in a cache folder that holds at most 100 MB; past that, the files used longest
-ago are deleted. Deleting the folder is always safe:
+The skins fetched are kept, so they come at once next time, in a cache
+folder that holds at most 100 MB; past that, the files used longest ago are
+deleted. Deleting the folder is always safe:
 
 | Platform | Folder |
 | --- | --- |

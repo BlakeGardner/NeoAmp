@@ -204,7 +204,9 @@ skin with NeoAmp's name and icon, shown by default.
       listed the skins folder and linked to winamp.com for more. The user
       chose the museum's own order before a search, search over every skin
       not flagged NSFW, trying on after half a second's rest, a 100 MB cache
-      and a dialog opened beside the windows, with no key of its own.
+      and a dialog opened beside the windows, with no key of its own. The
+      museum's screenshots were shown beside the list at first, then taken
+      out at the user's request: the windows wearing the skin show it.
 - [ ] Open a `https://.../*.wsz` address given on the command line as a
       skin, downloading it first.
 
