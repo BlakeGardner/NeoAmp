@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="42" height="9" viewBox="0 0 42 9">
+<rect x="0" y="0" width="42" height="9" fill="#000000"/>
+<path d="M0 0h1v1h-1zM2 0h1v1h-1zM4 0h1v1h-1zM6 0h1v1h-1zM8 0h1v1h-1zM10 0h1v1h-1zM12 0h1v1h-1zM14 0h1v1h-1zM16 0h1v1h-1zM18 0h1v1h-1zM20 0h1v1h-1zM22 0h1v1h-1zM24 0h1v1h-1zM26 0h1v1h-1zM28 0h1v1h-1zM30 0h1v1h-1zM32 0h1v1h-1zM34 0h1v1h-1zM0 2h1v1h-1zM2 2h1v1h-1zM4 2h1v1h-1zM6 2h1v1h-1zM8 2h1v1h-1zM10 2h1v1h-1zM12 2h1v1h-1zM14 2h1v1h-1zM16 2h1v1h-1zM18 2h1v1h-1zM20 2h1v1h-1zM22 2h1v1h-1zM24 2h1v1h-1zM26 2h1v1h-1zM28 2h1v1h-1zM30 2h1v1h-1zM32 2h1v1h-1zM34 2h1v1h-1zM0 4h1v1h-1zM2 4h1v1h-1zM4 4h1v1h-1zM6 4h1v1h-1zM8 4h1v1h-1zM10 4h1v1h-1zM12 4h1v1h-1zM14 4h1v1h-1zM16 4h1v1h-1zM18 4h1v1h-1zM20 4h1v1h-1zM22 4h1v1h-1zM24 4h1v1h-1zM26 4h1v1h-1zM28 4h1v1h-1zM30 4h1v1h-1zM32 4h1v1h-1zM34 4h1v1h-1zM0 6h1v1h-1zM2 6h1v1h-1zM4 6h1v1h-1zM6 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM32 6h1v1h-1zM34 6h1v1h-1zM0 8h1v1h-1zM2 8h1v1h-1zM4 8h1v1h-1zM6 8h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h1v1h-1zM16 8h1v1h-1zM18 8h1v1h-1zM20 8h1v1h-1zM22 8h1v1h-1zM24 8h1v1h-1zM26 8h1v1h-1zM28 8h1v1h-1zM30 8h1v1h-1zM32 8h1v1h-1zM34 8h1v1h-1z" fill="#182129"/>
+<!-- play, pause and stop -->
+<polygon points="4,0 9,4.5 4,9" fill="#00e800"/>
+<rect x="9" y="2" width="3" height="5" fill="#00e800"/>
+<rect x="15" y="2" width="3" height="5" fill="#00e800"/>
+<rect x="20" y="2" width="5" height="5" fill="#00e800"/>
+<!-- not working, then working: the lamps beside the status -->
+<rect x="36" y="0" width="3" height="3" fill="#00e800"/>
+<rect x="36" y="6" width="3" height="3" fill="#4e0f00"/>
+<path d="M36 4h1v1h-1zM38 4h1v1h-1z" fill="#182129"/>
+<rect x="39" y="0" width="3" height="3" fill="#114033"/>
+<rect x="39" y="6" width="3" height="3" fill="#ff2833"/>
+<path d="M40 4h1v1h-1z" fill="#182129"/>
+</svg>
