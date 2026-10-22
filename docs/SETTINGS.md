@@ -114,7 +114,12 @@ size = [275, 116]
 ```
 
 `zoom`, `skin` and the `[output]` table are written only once they differ
-from the defaults.
+from the defaults. Choosing the Winamp base skin, for one, adds this line
+under `always_on_top`:
+
+```toml
+skin = "winamp"
+```
 
 ## Top-level settings
 
@@ -129,7 +134,7 @@ from the defaults.
 | `double_size` | `true` / `false` | `false` | Double size (**Ctrl+D**, or the `D` in the clutter bar). |
 | `always_on_top` | `true` / `false` | `false` | Always on top (**Ctrl+A**, or the `A` in the clutter bar). |
 | `zoom` | `1`, `1.5`, `2`, `2.5`, `3` | none | The zoom picked with **Ctrl+=** / **Ctrl+-**, Options > Zoom or `--scale`. |
-| `skin` | path to a `.wsz` file | none | The classic skin shown. |
+| `skin` | `"winamp"`, or the path of a `.wsz` file | none (NeoAmp's own skin) | The skin shown. |
 
 - **`volume`** is the slider's position, not a gain. The sound is scaled by its
   square, which follows loudness more closely: `0.5` plays at a quarter of
@@ -157,16 +162,23 @@ from the defaults.
   Any value other than the five steps is ignored. `--scale` on the command
   line overrides it, and the new zoom is then saved in turn, unless it is the
   one the screen would get anyway.
-- **`skin`** is the full path of the skin file; without it NeoAmp uses its
-  built-in base skin. The Skins menu sets it, and so does dropping a `.wsz`
-  onto a window or passing one on the command line. A skin from outside the
-  skins folder is copied into it first, and `skin` names the copy. Choose
-  **<Base Skin>** in the Skins menu, or delete the line, to go back to the
-  built-in skin. If the file has been moved or deleted, NeoAmp shows the
-  built-in skin, logs a warning and drops the key at the next save. Windows paths are written in
-  single quotes, `skin = 'C:\Skins\Classic.wsz'`; inside double quotes every
-  backslash must be doubled. A path that is not valid Unicode, which Linux
-  allows, cannot be stored, so such a skin is not remembered.
+- **`skin`** names one of the two skins built into NeoAmp, or a skin file.
+  Without it NeoAmp shows its own skin, drawn in SVG; `"neoamp"` means the
+  same, but NeoAmp never writes it. `"winamp"` is Winamp 2.91's base skin,
+  chosen with **<Winamp Base Skin>** in the Skins menu. Anything else is the
+  full path of a `.wsz` file. The Skins menu sets it, and so does dropping a
+  `.wsz` onto a window or passing one on the command line. A skin from
+  outside the skins folder is copied into it first, and `skin` names the
+  copy. Choose **<NeoAmp Skin>** in the Skins menu, or delete the line, to go
+  back to NeoAmp's own skin. If the file has been moved or deleted, NeoAmp
+  shows its own skin, logs a warning and drops the key at the next save.
+  Windows paths are written in single quotes,
+  `skin = 'C:\Skins\Classic.wsz'`; inside double quotes every backslash must
+  be doubled. A path that is not valid Unicode, which Linux allows, cannot be
+  stored, so such a skin is not remembered, and the next start shows NeoAmp's
+  own skin. Versions of NeoAmp before the NeoAmp skin wrote no `skin` key for
+  the Winamp base skin, so they start with NeoAmp's own skin after an
+  update.
 
 ## `[eq]`: the equalizer
 
@@ -418,7 +430,8 @@ remembered like any other change:
 - With `--enqueue`, they join the end of the saved playlist instead, and
   nothing starts playing.
 - A `.wsz` file (or `--skin`) replaces the saved skin, and is copied into the
-  skins folder.
+  skins folder. `--skin` takes only a file; the two built-in skins are chosen
+  from the Skins menu.
 - `--scale` replaces the saved zoom.
 - `--screenshot` neither reads nor writes any of these files.
 

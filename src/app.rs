@@ -46,7 +46,7 @@ use crate::now_playing::{self, NowPlaying};
 use crate::playlist::SortKey;
 use crate::playlist_file;
 use crate::popup::Popups;
-use crate::settings::{Saver, Settings, Store, WindowLayout};
+use crate::settings::{Saver, Settings, SkinChoice, Store, WindowLayout};
 use crate::shortcut::Shortcut;
 use crate::skin::Skin;
 use crate::sprites::pl::TRACK_H;
@@ -61,8 +61,11 @@ use crate::vis;
 use crate::window_icon;
 use crate::zoom::Zoom;
 
-/// The stock Winamp 2.91 skin, embedded as the fallback for every missing sheet.
+/// The stock Winamp 2.91 skin, embedded as the fallback for every missing sheet and pointer.
 pub const BASE_SKIN: &[u8] = include_bytes!("../skins/base-2.91.wsz");
+/// NeoAmp's own skin, drawn as SVG (`skins/neo/make.py`): the one shown unless another is
+/// chosen. Its pointers come from [`BASE_SKIN`].
+pub const NEOAMP_SKIN: &[u8] = include_bytes!("../skins/NeoAmp.wsz");
 const FRAME: Duration = Duration::from_millis(33);
 /// Where the main window first appears, relative to the primary monitor.
 const INITIAL_OFFSET: (i32, i32) = (64, 64);
@@ -112,7 +115,7 @@ fn kind_index(kind: WindowKind) -> usize {
 /// zoom and the files to play. Each overrides what the saved settings say.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
-    /// A `.wsz` skin to show instead of the saved one (or the embedded base skin).
+    /// A `.wsz` skin to show instead of the saved one (or NeoAmp's own).
     pub skin: Option<PathBuf>,
     /// Render one frame to this PNG and exit instead of opening windows.
     pub screenshot: Option<PathBuf>,
@@ -209,7 +212,8 @@ fn is_digit_3(event: &KeyEvent) -> bool {
     event.physical_key == PhysicalKey::Code(KeyCode::Digit3)
 }
 
-/// Load the base skin, apply the options and either render a screenshot or open the windows.
+/// Load the built-in skins, apply the options and either render a screenshot or open the
+/// windows.
 ///
 /// Opening the windows restores the saved settings and playlist (see [`crate::settings`]),
 /// with the options taking precedence, and saves them again as they change and on exit. A
@@ -217,9 +221,9 @@ fn is_digit_3(event: &KeyEvent) -> bool {
 /// still runs, silently.
 ///
 /// # Errors
-/// Fails if the embedded base skin or the requested skin cannot be parsed, if the screenshot
-/// cannot be written, if no windowing backend can be initialised, or if the playlist scanner
-/// thread cannot be started.
+/// Fails if a built-in skin or the requested skin cannot be parsed, if the screenshot cannot
+/// be written, if no windowing backend can be initialised, or if the playlist scanner thread
+/// cannot be started.
 pub fn run(opts: Options) -> Result<()> {
     // Paths are remembered, and may be handed to a NeoAmp running elsewhere, so they must not
     // depend on the folder this one was started in.
@@ -253,13 +257,14 @@ pub fn run(opts: Options) -> Result<()> {
     };
 
     let base = Skin::from_wsz(BASE_SKIN, "base-2.91").context("embedded base skin")?;
+    let mut neo = Skin::from_wsz(NEOAMP_SKIN, "NeoAmp").context("embedded NeoAmp skin")?;
+    neo.fill_missing_from(&base);
     let custom = skin_path
-        .as_deref()
-        .map(|p| load_skin(p, &base))
+        .map(|p| load_skin(&p, &base).map(|skin| (skin, p)))
         .transpose()?;
 
     if let Some(out) = &opts.screenshot {
-        let skin = custom.as_ref().unwrap_or(&base);
+        let skin = custom.as_ref().map_or(&neo, |(skin, _)| skin);
         let font = TtfFont::load_playlist(&skin.pledit.font, TtfFont::DEFAULT_PX);
         return render_screenshot(Ui::demo(), skin, Some(&font), out);
     }
@@ -270,14 +275,13 @@ pub fn run(opts: Options) -> Result<()> {
     }
     let loaded = store.as_ref().and_then(Store::load_settings);
     let settings = loaded.clone().unwrap_or_default();
-    let (custom, skin_path) = match (custom, skin_path) {
+    let shown = match custom {
         // A skin from the command line joins the Skins menu.
-        (Some(skin), Some(path)) => (Some(skin), Some(install_skin(&path, store.as_ref()))),
-        (Some(skin), None) => (Some(skin), None),
-        (None, _) => restore_skin(settings.skin.as_deref(), &base),
+        Some((skin, path)) => Shown::File(Box::new(skin), install_skin(&path, store.as_ref())),
+        None => restore_skin(&settings.skin, &base),
     };
     let autoload = store.as_ref().map(Store::load_autoload).unwrap_or_default();
-    let font_family = custom.as_ref().unwrap_or(&base).pledit.font.clone();
+    let font_family = shown.skin(&neo, &base).pledit.font.clone();
     let font = TtfFont::load_playlist(&font_family, TtfFont::DEFAULT_PX);
 
     let mut ui = Ui::new();
@@ -299,8 +303,8 @@ pub fn run(opts: Options) -> Result<()> {
         player,
         scanner,
         base,
-        custom,
-        skin_path,
+        neo,
+        shown,
         font,
         font_family,
         pointers: HashMap::new(),
@@ -382,18 +386,50 @@ fn install_skin(path: &Path, store: Option<&Store>) -> PathBuf {
     }
 }
 
-/// Load the skin the settings name, if any. One that cannot be loaded any more (moved or
-/// deleted, say) gives way to the base skin and is forgotten.
-fn restore_skin(path: Option<&Path>, base: &Skin) -> (Option<Skin>, Option<PathBuf>) {
-    let Some(path) = path else {
-        return (None, None);
-    };
-    match load_skin(path, base) {
-        Ok(skin) => (Some(skin), Some(path.to_path_buf())),
-        Err(e) => {
-            log::warn!("cannot load the saved skin, using the base skin: {e:#}");
-            (None, None)
+/// The skin on show.
+#[derive(Debug)]
+enum Shown {
+    /// NeoAmp's own skin.
+    NeoAmp,
+    /// The Winamp base skin.
+    Winamp,
+    /// A skin loaded from a file, and the file, which the settings remember.
+    File(Box<Skin>, PathBuf),
+}
+
+impl Shown {
+    /// The skin itself, given the two built-in ones.
+    fn skin<'a>(&'a self, neo: &'a Skin, base: &'a Skin) -> &'a Skin {
+        match self {
+            Shown::NeoAmp => neo,
+            Shown::Winamp => base,
+            Shown::File(skin, _) => skin,
         }
+    }
+
+    /// What the settings remember.
+    fn choice(&self) -> SkinChoice {
+        match self {
+            Shown::NeoAmp => SkinChoice::NeoAmp,
+            Shown::Winamp => SkinChoice::Winamp,
+            Shown::File(_, path) => SkinChoice::File(path.clone()),
+        }
+    }
+}
+
+/// Load the skin the settings name. A file that cannot be loaded any more (moved or deleted,
+/// say) gives way to NeoAmp's skin and is forgotten.
+fn restore_skin(choice: &SkinChoice, base: &Skin) -> Shown {
+    match choice {
+        SkinChoice::NeoAmp => Shown::NeoAmp,
+        SkinChoice::Winamp => Shown::Winamp,
+        SkinChoice::File(path) => match load_skin(path, base) {
+            Ok(skin) => Shown::File(Box::new(skin), path.clone()),
+            Err(e) => {
+                log::warn!("cannot load the saved skin, using NeoAmp's: {e:#}");
+                Shown::NeoAmp
+            }
+        },
     }
 }
 
@@ -629,11 +665,11 @@ struct App {
     /// `None` when no audio device could be opened.
     player: Option<Player>,
     scanner: Scanner,
+    /// The Winamp base skin, which every other skin borrows what it lacks from.
     base: Skin,
-    /// A user-chosen skin; `None` means the embedded base skin is shown.
-    custom: Option<Skin>,
-    /// The file `custom` came from, to be remembered.
-    skin_path: Option<PathBuf>,
+    /// NeoAmp's own skin, the default.
+    neo: Skin,
+    shown: Shown,
     /// The playlist's font: the built-in one for the family the skin names.
     font: TtfFont,
     /// The family the skin named when `font` was loaded.
@@ -734,16 +770,21 @@ impl App {
         match load_skin(path, &self.base) {
             Ok(s) => {
                 log::info!("loaded skin {}", s.name);
-                self.custom = Some(s);
-                self.skin_path = Some(install_skin(path, self.store.as_ref()));
-                self.skin_changed();
+                let path = install_skin(path, self.store.as_ref());
+                self.show_skin(Shown::File(Box::new(s), path));
             }
             Err(e) => log::error!("cannot load skin {}: {e:#}", path.display()),
         }
     }
 
     fn skin(&self) -> &Skin {
-        self.custom.as_ref().unwrap_or(&self.base)
+        self.shown.skin(&self.neo, &self.base)
+    }
+
+    /// Show `shown` in place of the skin on show.
+    fn show_skin(&mut self, shown: Shown) {
+        self.shown = shown;
+        self.skin_changed();
     }
 
     /// Another skin is showing: forget the old one's pointers, and load the playlist font the
@@ -834,11 +875,8 @@ impl App {
     /// Carry out a menu command that needs files or dialogs.
     fn app_command(&mut self, command: AppCommand, el: &ActiveEventLoop) {
         match command {
-            AppCommand::BaseSkin => {
-                self.custom = None;
-                self.skin_path = None;
-                self.skin_changed();
-            }
+            AppCommand::NeoAmpSkin => self.show_skin(Shown::NeoAmp),
+            AppCommand::WinampSkin => self.show_skin(Shown::Winamp),
             AppCommand::Skin(i) => {
                 if let Some(path) = self.menu_skins.get(i).map(|e| e.path.clone()) {
                     self.load_skin(&path);
@@ -1094,9 +1132,10 @@ impl App {
         if menus::lists_devices(req.kind) {
             self.menu_devices = audio::output_devices();
         }
+        let skin = self.shown.choice();
         let lib = Library {
             skins: &self.menu_skins,
-            skin: self.skin_path.as_deref(),
+            skin: &skin,
             presets: &self.menu_presets,
             has_auto_preset,
             devices: &self.menu_devices,
@@ -1217,7 +1256,10 @@ impl App {
     fn settings(&mut self) -> Settings {
         let mut settings = Settings::from_ui(&self.ui);
         // TOML cannot hold a path that is not valid Unicode (`load_skin` says so once).
-        settings.skin = self.skin_path.clone().filter(|p| p.to_str().is_some());
+        settings.skin = match self.shown.choice() {
+            SkinChoice::File(path) if path.to_str().is_none() => SkinChoice::NeoAmp,
+            choice => choice,
+        };
         self.update_layout();
         // Positions from the window layer; which windows are open, shaded and how big, from the
         // interface.
@@ -2373,7 +2415,7 @@ impl App {
     }
 
     fn render(&mut self, kind: WindowKind, now: Instant) {
-        let skin = self.custom.as_ref().unwrap_or(&self.base);
+        let skin = self.shown.skin(&self.neo, &self.base);
         let ui = &self.ui;
         let font = Some(&self.font);
         let Some(pane) = self.panes.iter_mut().find(|p| p.kind == kind) else {

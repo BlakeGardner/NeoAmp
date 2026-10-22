@@ -103,7 +103,7 @@ pointers](GUIDE.md#skin-fonts-and-pointers) and
 - [x] Honour `Font=` in `pledit.txt`, with built-in free fonts standing in
       for the families skins name ([src/font.rs](../src/font.rs)).
 - [x] Use the skin's cursors (`.cur` files, [src/cursor.rs](../src/cursor.rs)),
-      borrowing the base skin's where a skin has none.
+      borrowing the Winamp base skin's where a skin has none.
 - [x] File info dialog (the **I** button, Alt+3, MISC > FILE INFO),
       [src/info.rs](../src/info.rs). It shows the tags but cannot edit them
       (the user chose read-only over writing tags with `lofty`).
@@ -172,6 +172,32 @@ Left out: cover art in the "now playing" display, and files opened from the
 macOS Finder (they arrive as an Apple Event that winit does not pass on, so
 the app claims no file types). Output devices, media controls and the single
 instance were tried on Linux only.
+
+## Phase 8: Sharp drawing and NeoAmp's own skin
+
+Done: see [Zoom](GUIDE.md#zoom) and [SVG skins](GUIDE.md#svg-skins) in the
+user guide, and [SVG_SKINS.md](SVG_SKINS.md) for skin makers. Not a Winamp
+feature: Winamp drew every skin at one screen pixel per skin pixel. The user
+chose SVG artwork over xBRZ and Lanczos upscales of the base skin's bitmaps;
+SVG sheets inside ordinary `.wsz` files, used at every zoom; sharp drawing
+always on, with no setting; and a skin of NeoAmp's own, traced from the base
+skin with NeoAmp's name and icon, shown by default.
+
+- [x] Draw each window at the screen's resolution: as many image pixels per
+      skin pixel as the screen shows, rounded up
+      ([src/canvas.rs](../src/canvas.rs)), so the playlist text and slanted
+      window shapes are sharp while bitmaps are enlarged pixel for pixel.
+- [x] SVG sheets in skins (`cbuttons.svg` beside or instead of
+      `cbuttons.bmp`), rasterised at each window's density
+      ([src/svg.rs](../src/svg.rs)).
+- [x] NeoAmp's own skin, all SVG (`skins/NeoAmp.wsz`, drawn by
+      `skins/neo/make.py`), shown by default. Winamp's base skin stays built
+      in, as **<Winamp Base Skin>** in the Skins menu and as the fallback
+      every skin borrows from.
+- [ ] 1x bitmaps in `skins/NeoAmp.wsz`, so that it shows in Winamp and
+      Webamp too.
+
+Run on Linux (X11) and macOS; not yet on Windows.
 
 ## Optional
 
