@@ -11,9 +11,11 @@ in the [user guide](GUIDE.md).
 
 ## Building and running
 
-NeoAmp needs Rust 1.88 or newer. The stock `base-2.91.wsz` skin must be
-present at `skins/base-2.91.wsz` (it is in the repository); it is embedded
-into the binary at build time.
+NeoAmp needs Rust 1.88 or newer. Two skins in the repository are embedded
+into the binary at build time: `skins/NeoAmp.wsz`, NeoAmp's own skin and the
+one it shows by default (see [The NeoAmp skin](#the-neoamp-skin)), and the
+stock Winamp 2.91 skin, `skins/base-2.91.wsz`, which every other skin
+borrows what it lacks from.
 
 On Linux, cpal needs the ALSA development files (Windows and macOS need
 nothing extra):
@@ -98,8 +100,9 @@ program does the same:
   identical for every classic skin.
 - `src/skin.rs` reads a `.wsz` (zip + BMP/PNG), `viscolor.txt`,
   `pledit.txt`, `region.txt` and the mouse pointers (`src/cursor.rs`), and
-  falls back per file to the embedded base skin for anything a skin leaves
-  out (see [Skin fonts and pointers](GUIDE.md#skin-fonts-and-pointers)). A
+  falls back per file to the embedded Winamp base skin for anything a skin
+  leaves out, NeoAmp's own skin included (see [Skin fonts and
+  pointers](GUIDE.md#skin-fonts-and-pointers)). A
   sheet can also come as SVG ([SVG_SKINS.md](SVG_SKINS.md)): `src/svg.rs`
   parses it with usvg and rasterises it with resvg at each density a window
   asks for, caching each raster. resvg is built without its default features,
@@ -156,7 +159,11 @@ program does the same:
 
 `skins/NeoAmp.wsz` is a skin drawn entirely as SVG
 ([SVG_SKINS.md](SVG_SKINS.md)): the base skin's layout and colours, traced,
-with NeoAmp's name and icon in place of Winamp's. `skins/neo/make.py` draws
+with NeoAmp's name and icon in place of Winamp's. It is built into NeoAmp as
+the default skin (`NEOAMP_SKIN` in `src/app.rs`), and takes its mouse
+pointers from the Winamp base skin, as any skin without them does; the
+Skins menu's **<Winamp Base Skin>** shows the base skin itself.
+`skins/neo/make.py` draws
 it. It needs only Python 3 and its standard library (`py` instead of
 `python3` on Windows), and nothing else in the build uses it:
 
@@ -167,9 +174,9 @@ python3 skins/neo/make.py
 It writes an SVG for every sheet but the optional `nums_ex` (which the base
 skin lacks too), `viscolor.txt` and `pledit.txt` into `skins/neo/`, and packs
 them into `skins/NeoAmp.wsz`. Change the script rather
-than the SVGs, and commit the script, the SVGs and the `.wsz` together. The
-skin has no bitmaps, so Winamp and Webamp, which ignore SVG sheets, show their
-own base skin instead.
+than the SVGs, and commit the script, the SVGs and the `.wsz` together; then
+rebuild, since the `.wsz` is embedded. The skin has no bitmaps, so Winamp and
+Webamp, which ignore SVG sheets, show their own base skin instead.
 
 ### Audio
 

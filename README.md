@@ -77,7 +77,7 @@ conveniences, like media key controls.
   macOS.
 - **Sharp on any screen.** The windows zoom from 1x to 3x to suit your
   monitor, the playlist text stays crisp, and skins can bring SVG artwork that
-  stays sharp at any size.
+  stays sharp at any size, as NeoAmp's own skin does.
 - **Follows your headphones.** Pick any output device. When it goes away,
   playback moves to the default and comes back when it returns, without
   losing its place.

@@ -80,9 +80,9 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub zoom: Option<Zoom>,
-    /// The `.wsz` skin shown. `None` is the built-in base skin.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skin: Option<PathBuf>,
+    /// The skin shown. NeoAmp's own, the default, is not written.
+    #[serde(skip_serializing_if = "SkinChoice::is_neoamp")]
+    pub skin: SkinChoice,
     pub analyzer: AnalyzerOptions,
     pub oscilloscope: ScopeOptions,
     pub eq: EqConfig,
@@ -109,7 +109,7 @@ impl Default for Settings {
             double_size: false,
             always_on_top: false,
             zoom: None,
-            skin: None,
+            skin: SkinChoice::NeoAmp,
             analyzer: AnalyzerOptions::default(),
             oscilloscope: ScopeOptions::default(),
             eq: EqConfig::default(),
@@ -117,6 +117,50 @@ impl Default for Settings {
             windows: WindowLayout::default(),
             output: None,
         }
+    }
+}
+
+/// Which skin is shown. In `settings.toml` it is `"winamp"` for the built-in Winamp base skin,
+/// or a `.wsz` file's path; `"neoamp"`, or no `skin` key, is NeoAmp's own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum SkinChoice {
+    /// NeoAmp's own skin, built in.
+    #[default]
+    NeoAmp,
+    /// Winamp 2.91's base skin, built in. Every skin borrows what it lacks from it.
+    Winamp,
+    /// A `.wsz` file.
+    File(PathBuf),
+}
+
+impl SkinChoice {
+    const NEOAMP: &str = "neoamp";
+    const WINAMP: &str = "winamp";
+
+    #[must_use]
+    pub fn is_neoamp(&self) -> bool {
+        matches!(self, SkinChoice::NeoAmp)
+    }
+}
+
+impl Serialize for SkinChoice {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            SkinChoice::NeoAmp => serializer.serialize_str(Self::NEOAMP),
+            SkinChoice::Winamp => serializer.serialize_str(Self::WINAMP),
+            SkinChoice::File(path) => path.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SkinChoice {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let path = PathBuf::deserialize(deserializer)?;
+        Ok(match path.to_str() {
+            Some(Self::NEOAMP) => SkinChoice::NeoAmp,
+            Some(Self::WINAMP) => SkinChoice::Winamp,
+            _ => SkinChoice::File(path),
+        })
     }
 }
 
@@ -324,7 +368,7 @@ impl Settings {
             double_size: ui.double_size,
             always_on_top: ui.always_on_top,
             zoom: (ui.zoom != ui.default_zoom).then_some(ui.zoom),
-            skin: None,
+            skin: SkinChoice::NeoAmp,
             analyzer: ui.vis.analyzer,
             oscilloscope: ScopeOptions {
                 style: ui.vis.scope_style,
@@ -668,7 +712,7 @@ mod tests {
             double_size: true,
             always_on_top: true,
             zoom: Zoom::try_from(2.5).ok(),
-            skin: Some(PathBuf::from("/skins/Classic.wsz")),
+            skin: SkinChoice::File(PathBuf::from("/skins/Classic.wsz")),
             analyzer: AnalyzerOptions {
                 style: AnalyzerStyle::Fire,
                 bands: Bands::Thin,
@@ -822,12 +866,31 @@ mod tests {
             assert!(text.contains(line), "{line:?} in {text}");
         }
         let windows = Settings {
-            skin: Some(PathBuf::from(r"C:\Skins\Classic.wsz")),
+            skin: SkinChoice::File(PathBuf::from(r"C:\Skins\Classic.wsz")),
             ..Settings::default()
         };
         let text = windows.to_toml().unwrap();
         assert!(text.contains(r"skin = 'C:\Skins\Classic.wsz'"), "{text}");
         assert_eq!(Settings::from_toml(&text).unwrap(), windows);
+    }
+
+    #[test]
+    fn the_built_in_skins_are_saved_by_name() {
+        let winamp = Settings {
+            skin: SkinChoice::Winamp,
+            ..Settings::default()
+        };
+        let text = winamp.to_toml().unwrap();
+        assert!(text.contains("skin = \"winamp\"\n"), "{text}");
+        assert_eq!(Settings::from_toml(&text).unwrap(), winamp);
+        // NeoAmp's is the default: not written, but understood when written by hand.
+        let neoamp = Settings::from_toml("skin = \"neoamp\"").unwrap();
+        assert_eq!(neoamp.skin, SkinChoice::NeoAmp);
+        assert_eq!(Settings::from_toml("").unwrap().skin, SkinChoice::NeoAmp);
+        assert_eq!(
+            Settings::from_toml("skin = \"Winamp.wsz\"").unwrap().skin,
+            SkinChoice::File(PathBuf::from("Winamp.wsz"))
+        );
     }
 
     #[test]
@@ -888,7 +951,7 @@ mod tests {
         let mut expected = changed();
         // Left to the window layer.
         expected.zoom = None;
-        expected.skin = None;
+        expected.skin = SkinChoice::NeoAmp;
         expected.playlist.current = 0;
         expected.windows.scale = 1.0;
         expected.windows.main = None;

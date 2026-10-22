@@ -628,6 +628,24 @@ mod tests {
     }
 
     #[test]
+    fn embedded_neoamp_skin_is_all_svg_and_borrows_only_the_pointers() {
+        let base = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut skin = Skin::from_wsz(crate::app::NEOAMP_SKIN, "NeoAmp").unwrap();
+        skin.fill_missing_from(&base);
+        for (sheet, _) in SHEET_FILES {
+            if *sheet != Sheet::NumsEx {
+                assert!(skin.has_svg(*sheet), "{sheet:?} is not SVG");
+                assert!(skin.has_own_sheet(*sheet), "{sheet:?} is borrowed");
+            }
+        }
+        assert!(!skin.has_sheet(Sheet::NumsEx));
+        assert_eq!(skin.sheet(Sheet::Main).size(), (main::W, main::H));
+        for which in SkinCursor::ALL {
+            assert_eq!(skin.cursor(which), base.cursor(which), "{which:?}");
+        }
+    }
+
+    #[test]
     fn missing_sheets_are_borrowed_from_the_base_skin_and_known_as_borrowed() {
         let base = Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
         let mut files = HashMap::new();

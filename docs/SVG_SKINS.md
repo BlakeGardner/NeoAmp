@@ -12,7 +12,8 @@ text files. For any sheet, it can hold an SVG file named after the bitmap,
 such as `cbuttons.svg` beside or instead of `cbuttons.bmp`.
 
 - NeoAmp draws each sheet from its SVG if the skin has one, from its bitmap
-  otherwise, and from the built-in skin's bitmap if it has neither, the way
+  otherwise, and from the Winamp base skin's bitmap, built into NeoAmp, if it
+  has neither, the way
   Winamp falls back for a missing bitmap. A skin can convert one sheet at a
   time.
 - Winamp, Webamp and other players ignore the SVG files. A skin that keeps its
@@ -29,7 +30,7 @@ such as `cbuttons.svg` beside or instead of `cbuttons.bmp`.
 
 Each SVG is the same size as the bitmap it replaces, one SVG unit per skin
 pixel, and every sprite sits where it does in the bitmap. The easiest
-template is the bitmap itself: these are the sizes of the built-in skin's.
+template is the bitmap itself: these are the sizes of the Winamp base skin's.
 
 | File | Size | What it holds |
 | --- | --- | --- |
@@ -89,6 +90,6 @@ classic ones reach, is drawn less finely and enlarged the rest of the way.
 To keep the skin working in Winamp, leave the bitmaps in the archive, or
 export each SVG at its own size and save it as the bitmap.
 
-NeoAmp's own skin, `skins/NeoAmp.wsz` in the source repository, is an example
-with every sheet as SVG and no bitmaps. A script draws it rather than an
+NeoAmp's own skin, the one it shows by default (`skins/NeoAmp.wsz` in the
+source repository), is an example with every sheet as SVG and no bitmaps. A script draws it rather than an
 editor; see [The NeoAmp skin](DEVELOPMENT.md#the-neoamp-skin).

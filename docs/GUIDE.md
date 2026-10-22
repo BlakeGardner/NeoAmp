@@ -29,8 +29,9 @@ NeoAmp built for Linux (x86-64) as an archive holding the program and the
 README, and as a Flatpak bundle (see [Flatpak](#flatpak)); for macOS (Apple
 silicon and Intel) as an app on a disk image (see [macOS](#macos)); and for
 Windows (x86-64) as an installer, or as a zip of the program and the README
-to run without installing (see [Windows](#windows)). The base skin is built
-into the program, so nothing else needs installing alongside it.
+to run without installing (see [Windows](#windows)). NeoAmp's own skin and
+Winamp's base skin are built into the program, so nothing else needs
+installing alongside it.
 
 - **Linux** needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and anything
   later) and ALSA's library, `libasound2`, which desktop systems already have.
@@ -236,9 +237,9 @@ neoamp http://radio.example:8000/listen.pls
 ```
 
 A classic skin (`.wsz`) given this way is worn at once. It is copied into the
-skins folder and stays until another one replaces it; **<Base Skin>** in the
-Skins menu (**Alt+S**) goes back to the built-in skin. Dropping a `.wsz` onto
-a window does the same.
+skins folder and stays until another one replaces it; **<NeoAmp Skin>** in
+the Skins menu (**Alt+S**) goes back to NeoAmp's own skin. Dropping a `.wsz`
+onto a window does the same.
 
 ```bash
 neoamp ~/Downloads/Classic.wsz
@@ -424,9 +425,9 @@ shaded is saved with the other settings.
 The bars come from the skin's `titlebar.bmp`, `eq_ex.bmp` and `pledit.bmp`.
 A skin's `region.txt` can shape the main window's bar (`[WindowShade]`) and
 the equalizer's (`[EqualizerWS]`); `[Normal]` and `[Equalizer]` apply only to
-the full windows. A skin without `eq_ex.bmp` gets the built-in skin's
+the full windows. A skin without `eq_ex.bmp` gets the Winamp base skin's
 equalizer bar, but keeps its own shade button when pressed in the full window,
-as Webamp does, since the built-in one would not match.
+as Webamp does, since the base skin's would not match.
 
 Where the platforms differ: on pure Wayland, which lets no application move
 its windows, the windows docked below stay where they are and nothing
@@ -451,8 +452,9 @@ Windows 2000 did, grey and bevelled, whatever skin is loaded:
 - **EQ presets**: the equalizer's PRESETS button. Winamp's built-in presets,
   your own, `.eqf` files, auto-load presets and Reset (see
   [Saved settings](#saved-settings)).
-- **Skins**: **Alt+S** (also in the main menu). The skins in NeoAmp's skins
-  folder, the built-in base skin, and Open Skin... for any other.
+- **Skins**: **Alt+S** (also in the main menu). NeoAmp's own skin, the
+  default, and Winamp's base skin, both built in; the skins in NeoAmp's skins
+  folder; and Open Skin... for any other.
 - **Sort** and **Remove misc**: the playlist's MISC > SORT LIST and
   REM > MISC REM (see [Playlist](#playlist)).
 
@@ -753,7 +755,8 @@ A skin can carry any of its pictures as SVG as well as, or instead of, a
 bitmap: `cbuttons.svg` beside `cbuttons.bmp`, say. NeoAmp draws each picture
 from its SVG when the skin has one, so it stays sharp at every zoom, and from
 the bitmap otherwise. Winamp and Webamp ignore the SVG files, so such a skin
-still works there. [SVG_SKINS.md](SVG_SKINS.md) describes the format for skin
+still works there. NeoAmp's own skin, the one it starts with, is drawn
+entirely as SVG. [SVG_SKINS.md](SVG_SKINS.md) describes the format for skin
 makers.
 
 ## Skin fonts and pointers
@@ -790,8 +793,9 @@ one for each part of the windows: `TITLEBAR.CUR` over the main title bar,
 playlist's grip, and so on through the 24 Winamp read (`NORMAL.CUR`,
 `EQSLID.CUR`, `PTBAR.CUR`, ...). NeoAmp shows them where Winamp did, following
 Webamp's map of them and Winamp's Skinner's Atlas. A skin without one of them
-borrows the built-in skin's, as with its bitmaps; the built-in Winamp 2.91
-skin has eight (`CLOSE`, `EQSLID`, `EQTITLE`, `MAINMENU`, `POSBAR`, `PSIZE`,
+borrows the Winamp base skin's, as with its bitmaps (NeoAmp's own skin has
+none of its own, so it shows the base skin's); the Winamp 2.91 base skin has
+eight (`CLOSE`, `EQSLID`, `EQTITLE`, `MAINMENU`, `POSBAR`, `PSIZE`,
 `TITLEBAR` and `VOLBAL`). Where neither has one, the system's arrow shows, or
 over the playlist's grip a resize arrow. While a slider, a window or the grip
 is dragged, the pointer stays as it was when the drag began, as Windows kept

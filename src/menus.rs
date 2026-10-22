@@ -2,13 +2,12 @@
 //! whenever one opens (so check marks are always right), and the commands their items run.
 //! Items for features NeoAmp does not have yet are left out rather than greyed.
 
-use std::path::Path;
-
 use crate::audio::OutputDevice;
 use crate::eqf;
 use crate::library::Entry;
 use crate::menu::{Item, escape};
 use crate::playlist::SortKey;
+use crate::settings::SkinChoice;
 use crate::shortcut::{Key, Shortcut};
 use crate::ui::{InfoOf, KeyCmd, ListCmd, Ui};
 use crate::vis::{AnalyzerStyle, Bands, Falloff, ScopeStyle, VisMode};
@@ -60,7 +59,10 @@ pub enum Command {
 /// Menu commands the window layer carries out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AppCommand {
-    BaseSkin,
+    /// Show NeoAmp's own skin.
+    NeoAmpSkin,
+    /// Show the Winamp base skin.
+    WinampSkin,
     /// Skin `n` of [`Library::skins`].
     Skin(usize),
     /// Pick a skin file with the platform's dialog.
@@ -100,17 +102,29 @@ pub enum AppCommand {
 }
 
 /// What the menus list from disk, as it was when the menu opened.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct Library<'a> {
     pub skins: &'a [Entry],
-    /// The skin shown; `None` is the base skin.
-    pub skin: Option<&'a Path>,
+    /// The skin shown.
+    pub skin: &'a SkinChoice,
     pub presets: &'a [Entry],
     /// The current file has an auto-load preset.
     pub has_auto_preset: bool,
     /// The output devices that can be chosen by name; only listed for the menus that show
     /// them.
     pub devices: &'a [OutputDevice],
+}
+
+impl Default for Library<'_> {
+    fn default() -> Self {
+        Library {
+            skins: &[],
+            skin: &SkinChoice::NeoAmp,
+            presets: &[],
+            has_auto_preset: false,
+            devices: &[],
+        }
+    }
 }
 
 /// The items of menu `kind`.
@@ -424,11 +438,14 @@ fn skins(lib: &Library<'_>) -> Vec<Item<Command>> {
     let mut items = vec![
         Item::new("&Open Skin...", Command::App(AppCommand::OpenSkin)),
         Item::separator(),
-        Item::new("<&Base Skin>", Command::App(AppCommand::BaseSkin)).chosen(lib.skin.is_none()),
+        Item::new("<&NeoAmp Skin>", Command::App(AppCommand::NeoAmpSkin))
+            .chosen(lib.skin.is_neoamp()),
+        Item::new("<&Winamp Base Skin>", Command::App(AppCommand::WinampSkin))
+            .chosen(*lib.skin == SkinChoice::Winamp),
     ];
     items.extend(lib.skins.iter().enumerate().map(|(i, e)| {
         Item::new(escape(&e.name), Command::App(AppCommand::Skin(i)))
-            .chosen(lib.skin == Some(e.path.as_path()))
+            .chosen(matches!(lib.skin, SkinChoice::File(path) if *path == e.path))
     }));
     items
 }
@@ -605,16 +622,27 @@ mod tests {
                 path: PathBuf::from("/skins/Other.wsz"),
             },
         ];
+        let other = SkinChoice::File(PathBuf::from("/skins/Other.wsz"));
         let lib = Library {
             skins: &skins,
-            skin: Some(Path::new("/skins/Other.wsz")),
+            skin: &other,
             ..Library::default()
         };
         let items = build(MenuKind::Skins, &Ui::new(), &lib);
-        assert_eq!(find(&items, "<&Base Skin>").mark(), Mark::None);
+        assert_eq!(find(&items, "<&NeoAmp Skin>").mark(), Mark::None);
+        assert_eq!(find(&items, "<&Winamp Base Skin>").mark(), Mark::None);
         assert_eq!(find(&items, "Classic").mark(), Mark::None);
         assert_eq!(find(&items, "Other").mark(), Mark::Bullet);
-        let base = build(MenuKind::Skins, &Ui::new(), &Library::default());
-        assert_eq!(find(&base, "<&Base Skin>").mark(), Mark::Bullet);
+        let neoamp = build(MenuKind::Skins, &Ui::new(), &Library::default());
+        assert_eq!(find(&neoamp, "<&NeoAmp Skin>").mark(), Mark::Bullet);
+        assert_eq!(find(&neoamp, "<&Winamp Base Skin>").mark(), Mark::None);
+        let lib = Library {
+            skin: &SkinChoice::Winamp,
+            ..lib
+        };
+        let winamp = build(MenuKind::Skins, &Ui::new(), &lib);
+        assert_eq!(find(&winamp, "<&NeoAmp Skin>").mark(), Mark::None);
+        assert_eq!(find(&winamp, "<&Winamp Base Skin>").mark(), Mark::Bullet);
+        assert_eq!(find(&winamp, "Other").mark(), Mark::None);
     }
 }
