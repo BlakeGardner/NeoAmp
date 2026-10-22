@@ -23,14 +23,16 @@
 //!   saves playlists as M3U ([`m3u`]) or PLS ([`pls`]).
 //! - [`jump`]: the Jump to file dialog, [`info`] the File info dialog and [`url_dialog`] the
 //!   Open URL dialog, drawn like Windows 2000's dialogs ([`classic`]), with edit boxes from
-//!   [`text_box`].
+//!   [`text_box`] and lists from [`list_box`].
+//! - [`museum_dialog`]: the Skin Museum dialog, which finds skins in the Winamp Skin Museum
+//!   through [`museum`] and tries them on NeoAmp's own windows.
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
 //! - [`now_playing`]: the system's media keys and "now playing" display; [`instance`] hands
 //!   files opened while NeoAmp runs to the running copy.
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
 //!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
-//!   `info_window` and `url_window`), the platform's file dialogs (`file_dialog`), the
+//!   `info_window`, `url_window` and `museum_window`), the platform's file dialogs (`file_dialog`), the
 //!   clipboard (`clipboard`) and the windows' icon on Windows (`window_icon`).
 
 pub mod app;
@@ -52,10 +54,14 @@ pub mod instance;
 pub mod jump;
 mod jump_window;
 pub mod library;
+pub mod list_box;
 pub mod m3u;
 mod main_window;
 pub mod menu;
 pub mod menus;
+pub mod museum;
+pub mod museum_dialog;
+mod museum_window;
 pub mod now_playing;
 pub mod playlist;
 pub mod playlist_file;

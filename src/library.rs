@@ -50,15 +50,15 @@ fn is_in(file: &Path, dir: &Path) -> bool {
     parent.is_some() && parent == fs::canonicalize(dir).ok()
 }
 
-/// `file`'s name with ` (n)` before its extension, for `n` above 1.
-fn numbered(file: &Path, n: u32) -> Option<OsString> {
-    let name = file.file_name()?;
+/// `name` with ` (n)` before its extension, for `n` above 1.
+fn numbered(name: &Path, n: u32) -> Option<OsString> {
+    let whole = name.file_name()?;
     if n < 2 {
-        return Some(name.to_owned());
+        return Some(whole.to_owned());
     }
-    let mut numbered = file.file_stem()?.to_owned();
+    let mut numbered = name.file_stem()?.to_owned();
     numbered.push(format!(" ({n})"));
-    if let Some(ext) = file.extension() {
+    if let Some(ext) = name.extension() {
         numbered.push(".");
         numbered.push(ext);
     }
@@ -76,10 +76,25 @@ pub fn install(file: &Path, dir: &Path) -> Result<PathBuf> {
     if is_in(file, dir) {
         return Ok(file.to_path_buf());
     }
+    let Some(name) = file.file_name() else {
+        bail!("{} has no file name", file.display());
+    };
+    install_as(file, Path::new(name), dir)
+}
+
+/// Copy `file` into `dir` as [`install`] does, named `name` (a file name, without folders)
+/// rather than after `file`.
+///
+/// # Errors
+/// Fails if `name` is not a plain file name, or `file` cannot be read or copied.
+pub fn install_as(file: &Path, name: &Path, dir: &Path) -> Result<PathBuf> {
+    if name.file_name() != Some(name.as_os_str()) {
+        bail!("{} is not a file name", name.display());
+    }
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let contents = fs::read(file).with_context(|| format!("reading {}", file.display()))?;
     for n in 1..1000 {
-        let Some(name) = numbered(file, n) else {
+        let Some(name) = numbered(name, n) else {
             bail!("{} has no file name", file.display());
         };
         let dest = dir.join(name);
@@ -152,5 +167,28 @@ mod tests {
         assert_eq!(install(&skin, &skins).unwrap(), skins.join("Cool (2).wsz"));
         assert_eq!(fs::read(skins.join("Cool.wsz")).unwrap(), b"one");
         assert!(install(&outside.join("missing.wsz"), &skins).is_err());
+    }
+
+    #[test]
+    fn installing_under_another_name_numbers_clashes_too() {
+        let tmp = TempDir::new("install-as");
+        let skins = tmp.0.join("Skins");
+        let cached = tmp.0.join("0123abcd.wsz");
+        fs::write(&cached, b"one").unwrap();
+        let name = Path::new("Bento.wsz");
+        let copy = install_as(&cached, name, &skins).unwrap();
+        assert_eq!(copy, skins.join("Bento.wsz"));
+        assert_eq!(install_as(&cached, name, &skins).unwrap(), copy, "reused");
+        fs::write(&cached, b"two").unwrap();
+        assert_eq!(
+            install_as(&cached, name, &skins).unwrap(),
+            skins.join("Bento (2).wsz")
+        );
+        for bad in ["../Bento.wsz", "a/b.wsz", ""] {
+            assert!(
+                install_as(&cached, Path::new(bad), &skins).is_err(),
+                "{bad}"
+            );
+        }
     }
 }

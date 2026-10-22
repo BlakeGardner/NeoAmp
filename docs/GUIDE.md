@@ -17,6 +17,7 @@ with SVG pictures in [SVG_SKINS.md](SVG_SKINS.md).
 - [File info](#file-info)
 - [Playback](#playback)
 - [Media keys and "now playing"](#media-keys-and-now-playing)
+- [Skin Museum](#skin-museum)
 - [SVG skins](#svg-skins)
 - [Skin fonts and pointers](#skin-fonts-and-pointers)
 - [Saved settings](#saved-settings)
@@ -312,6 +313,7 @@ travel byte for byte, so names that are not valid Unicode arrive intact.
 | Visualizer mode (analyzer, scope, off) | click the visualizer | |
 | Visualizer styles and falloff | the `V` in the clutter bar, or right-click the visualizer | |
 | Skins | Skins in the main menu | Alt+S |
+| Find, try on and install skins from the Winamp Skin Museum | Skins > Skin Museum... | |
 | Move a window (docked ones follow the main window) | drag its title bar | |
 | Resize the playlist | drag the grip in its bottom-right corner (in its windowshade bar, the grip beside the shade button changes the width) | |
 | Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS, let go over an item | |
@@ -454,7 +456,8 @@ Windows 2000 did, grey and bevelled, whatever skin is loaded:
   [Saved settings](#saved-settings)).
 - **Skins**: **Alt+S** (also in the main menu). NeoAmp's own skin, the
   default, and Winamp's base skin, both built in; the skins in NeoAmp's skins
-  folder; and Open Skin... for any other.
+  folder; Open Skin... for any other; and Skin Museum... to find more (see
+  [Skin Museum](#skin-museum)).
 - **Sort** and **Remove misc**: the playlist's MISC > SORT LIST and
   REM > MISC REM (see [Playlist](#playlist)).
 
@@ -749,6 +752,52 @@ artist. Play/pause never starts a playing track over, as Winamp's Play button
   the volume keys bring up, tied to the main window.
 - **macOS:** Now Playing in Control Center, and the media keys (F7 to F9).
 
+## Skin Museum
+
+**Skins > Skin Museum...** browses the [Winamp Skin
+Museum](https://skins.webamp.org/), an archive of over 100,000 classic skins,
+from inside NeoAmp. It needs an internet connection.
+
+- **The list** starts in the museum's own order, the one its front page
+  shows, with the best-known skins first. More arrive, 50 at a time, as you
+  scroll towards the end. Skins the museum has flagged as not safe for work
+  are left out.
+- **Search:** type in the search box, and once you pause the list shows the
+  skins whose names match, best match first, from all of the museum's skins.
+  Most of those have never been reviewed by the museum, so a search can turn
+  up a skin nobody has checked. Enter searches at once; an empty box goes back
+  to the museum's list.
+- **Trying a skin on:** click a skin, or move to it with the arrow keys, and
+  its screenshot appears beside the list. Half a second later NeoAmp's own
+  windows wear it, so you see it with your playlist and at your zoom. Nothing
+  is kept yet: **Close** (or Escape) puts back the skin you had.
+- **Install** (or Enter) keeps the skin being tried on: it is copied into the
+  skins folder under the museum's file name (`Bento_Classified.wsz`, say) and
+  becomes the chosen skin, remembered like any other. The dialog stays open
+  for more.
+- The dialog opens beside NeoAmp's windows, on their right, or on their left
+  where there is no room, so they stay in view. Pure Wayland does not let
+  NeoAmp place windows, so there the desktop puts it.
+- **Without a connection**, or if the museum changes the way it answers, the
+  list says it can't reach the museum, and the rest of NeoAmp carries on.
+
+The screenshots and skins fetched are kept, so they show at once next time,
+in a cache folder that holds at most 100 MB; past that, the files used longest
+ago are deleted. Deleting the folder is always safe:
+
+| Platform | Folder |
+| --- | --- |
+| Linux | `~/.cache/neoamp/museum/` (or `$XDG_CACHE_HOME/neoamp/museum/`) |
+| Linux, the Flatpak | `~/.var/app/io.github.BlakeGardner.NeoAmp/cache/neoamp/museum/` |
+| Windows | `%LOCALAPPDATA%\NeoAmp\cache\museum\` |
+| macOS | `~/Library/Caches/NeoAmp/museum/` |
+
+With `NEOAMP_CONFIG_DIR` set, it is `cache/museum` inside that folder
+instead. The list and the searches are kept only while NeoAmp runs.
+
+The museum is a volunteer project. NeoAmp asks it for 50 skins at a time,
+fetches a skin only once you rest on it, and keeps what it fetched.
+
 ## SVG skins
 
 A skin can carry any of its pictures as SVG as well as, or instead of, a
@@ -881,6 +930,8 @@ Where the platforms differ:
   implemented. The menus leave out what NeoAmp cannot do yet
   (Preferences and the like) rather than grey it.
 - The File info dialog shows tags but cannot edit them.
+- The Skin Museum lists skins by their file names only, without the museum's
+  other details, and only in the museum's own order or by search.
 - Internet radio plays HE-AAC ("AAC+") streams only as their AAC core,
   without their high frequencies, and does not play Opus or HLS streams (see
   [Internet radio](#internet-radio)). There is no directory of stations, no

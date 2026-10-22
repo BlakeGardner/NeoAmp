@@ -42,6 +42,9 @@ use crate::jump_window::JumpWindow;
 use crate::library::{self, Entry};
 use crate::menu::{self, Anchor};
 use crate::menus::{self, AppCommand, Command, Library};
+use crate::museum::{self, Cache};
+use crate::museum_dialog::Listings;
+use crate::museum_window::{Event as MuseumEvent, MuseumWindow, Tried};
 use crate::now_playing::{self, NowPlaying};
 use crate::playlist::SortKey;
 use crate::playlist_file;
@@ -333,6 +336,9 @@ pub fn run(opts: Options) -> Result<()> {
         jump: None,
         info: None,
         url: None,
+        museum: None,
+        museum_listings: Listings::default(),
+        tried: None,
         menu_skins: Vec::new(),
         menu_presets: Vec::new(),
         menu_devices: Vec::new(),
@@ -415,6 +421,27 @@ impl Shown {
             Shown::File(_, path) => SkinChoice::File(path.clone()),
         }
     }
+}
+
+/// The skin to draw: one being tried on from the Skin Museum, or else the one shown.
+fn drawn<'a>(
+    tried: Option<&'a Tried>,
+    shown: &'a Shown,
+    neo: &'a Skin,
+    base: &'a Skin,
+) -> &'a Skin {
+    tried.map_or_else(|| shown.skin(neo, base), |t| &*t.skin)
+}
+
+/// The smallest rectangle holding both.
+fn union(a: Rect, b: Rect) -> Rect {
+    let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+    Rect::new(
+        x,
+        y,
+        a.right().max(b.right()) - x,
+        a.bottom().max(b.bottom()) - y,
+    )
 }
 
 /// Load the skin the settings name. A file that cannot be loaded any more (moved or deleted,
@@ -725,6 +752,13 @@ struct App {
     info: Option<InfoWindow>,
     /// The Open URL (or Add URL) dialog, while it is open.
     url: Option<UrlWindow>,
+    /// The Skin Museum dialog, while it is open.
+    museum: Option<MuseumWindow>,
+    /// What the Skin Museum has listed so far, kept while the dialog is closed.
+    museum_listings: Listings,
+    /// A skin from the Skin Museum, worn to try it on, in place of `shown`; the settings
+    /// still remember `shown`.
+    tried: Option<Tried>,
     /// The skins, preset files and output devices the open menu lists; its commands number
     /// them.
     menu_skins: Vec<Entry>,
@@ -778,13 +812,46 @@ impl App {
     }
 
     fn skin(&self) -> &Skin {
-        self.shown.skin(&self.neo, &self.base)
+        drawn(self.tried.as_ref(), &self.shown, &self.neo, &self.base)
     }
 
-    /// Show `shown` in place of the skin on show.
+    /// Show `shown` in place of the skin on show, and stop trying on a Skin Museum skin.
     fn show_skin(&mut self, shown: Shown) {
         self.shown = shown;
+        if self.tried.take().is_some()
+            && let Some(museum) = self.museum.as_mut()
+        {
+            museum.dropped(Instant::now());
+        }
         self.skin_changed();
+    }
+
+    /// Wear a skin from the Skin Museum, to try it on.
+    fn wear(&mut self, mut tried: Tried) {
+        tried.skin.fill_missing_from(&self.base);
+        self.tried = Some(tried);
+        self.skin_changed();
+    }
+
+    /// Keep the Skin Museum skin being tried on, if it is the one with this MD5: copy it into
+    /// the skins folder, and show it as the skin chosen.
+    fn keep_tried(&mut self, md5: &str) {
+        let Some(tried) = self.tried.take_if(|t| t.md5 == md5) else {
+            return;
+        };
+        let path = match &self.store {
+            Some(store) => {
+                let name = Path::new(&tried.file_name);
+                library::install_as(&tried.file, name, &store.skins_dir()).unwrap_or_else(|e| {
+                    log::error!("cannot add the skin to the skins folder: {e:#}");
+                    tried.file.clone()
+                })
+            }
+            None => tried.file.clone(),
+        };
+        log::info!("installed {}", path.display());
+        // The skin on show stays the same, so nothing needs drawing afresh.
+        self.shown = Shown::File(tried.skin, path);
     }
 
     /// Another skin is showing: forget the old one's pointers, and load the playlist font the
@@ -883,6 +950,7 @@ impl App {
                 }
             }
             AppCommand::OpenSkin => self.show_dialog(Purpose::OpenSkin),
+            AppCommand::SkinMuseum => self.open_museum(el),
             AppCommand::UserPreset(i) => {
                 if let Some(path) = self.menu_presets.get(i).map(|e| e.path.clone()) {
                     self.load_preset_file(&path);
@@ -1043,6 +1111,76 @@ impl App {
         self.handle(actions, el);
     }
 
+    /// Show the Skin Museum dialog beside the windows, or bring it to the front if it is open.
+    fn open_museum(&mut self, el: &ActiveEventLoop) {
+        if let Some(museum) = &self.museum {
+            museum.raise();
+            return;
+        }
+        let main = self.pane(WindowKind::Main);
+        let scale_factor = main.map_or(1.0, |p| p.window.scale_factor());
+        // Where the windows are, when the backend can tell.
+        let stack = self.panes.iter().filter_map(Pane::rect).reduce(union);
+        let screen = main.and_then(Pane::screen);
+        let cache = self.store.as_ref().map_or_else(
+            || std::env::temp_dir().join("neoamp-museum"),
+            Store::museum_dir,
+        );
+        // Like the other dialogs, it follows the zoom but not double size.
+        let opened = MuseumWindow::open(
+            el,
+            self.ui.zoom.factor(),
+            scale_factor,
+            self.ui.always_on_top,
+            stack.zip(screen),
+            std::mem::take(&mut self.museum_listings),
+            Cache::new(cache, museum::CACHE_BYTES),
+            Instant::now(),
+        );
+        match opened {
+            Ok(museum) => self.museum = Some(museum),
+            Err(e) => log::error!("cannot show the Skin Museum: {e:#}"),
+        }
+    }
+
+    /// An event for the Skin Museum dialog's window.
+    fn museum_event(&mut self, event: WindowEvent, now: Instant) {
+        let Some(museum) = self.museum.as_mut() else {
+            return;
+        };
+        let focus_event = matches!(event, WindowEvent::Focused(_));
+        let happened = museum.window_event(event, now);
+        self.museum_happened(happened);
+        if self.museum.is_none() || focus_event {
+            self.focus_changed(now);
+        }
+    }
+
+    /// Carry out what the Skin Museum dialog asks.
+    fn museum_happened(&mut self, event: MuseumEvent) {
+        match event {
+            MuseumEvent::None => {}
+            MuseumEvent::Wear { tried, install } => {
+                let md5 = tried.md5.clone();
+                self.wear(tried);
+                if install {
+                    self.keep_tried(&md5);
+                }
+            }
+            MuseumEvent::Install(md5) => self.keep_tried(&md5),
+            MuseumEvent::Close => {
+                // A closed window reports no more focus changes; the caller sees it is gone.
+                if let Some(mut museum) = self.museum.take() {
+                    self.museum_listings = museum.take_listings();
+                }
+                // The skin shown before comes back.
+                if self.tried.take().is_some() {
+                    self.skin_changed();
+                }
+            }
+        }
+    }
+
     /// Show the Jump to file dialog, or bring it to the front if it is open.
     fn open_jump(&mut self, el: &ActiveEventLoop) {
         if let Some(jump) = &self.jump {
@@ -1170,6 +1308,7 @@ impl App {
             || self.jump.as_ref().is_some_and(JumpWindow::has_focus)
             || self.info.as_ref().is_some_and(InfoWindow::has_focus)
             || self.url.as_ref().is_some_and(UrlWindow::has_focus)
+            || self.museum.as_ref().is_some_and(MuseumWindow::has_focus)
     }
 
     /// A window of ours gained or lost the focus.
@@ -2415,7 +2554,7 @@ impl App {
     }
 
     fn render(&mut self, kind: WindowKind, now: Instant) {
-        let skin = self.shown.skin(&self.neo, &self.base);
+        let skin = drawn(self.tried.as_ref(), &self.shown, &self.neo, &self.base);
         let ui = &self.ui;
         let font = Some(&self.font);
         let Some(pane) = self.panes.iter_mut().find(|p| p.kind == kind) else {
@@ -2516,6 +2655,10 @@ impl ApplicationHandler for App {
         }
         if self.url.as_ref().is_some_and(|u| u.id() == id) {
             self.url_event(event, now, el);
+            return;
+        }
+        if self.museum.as_ref().is_some_and(|m| m.id() == id) {
+            self.museum_event(event, now);
             return;
         }
         if self.popups.owns(id) {
@@ -2640,6 +2783,10 @@ impl ApplicationHandler for App {
             }
             if let Some(url) = self.url.as_mut() {
                 url.tick(now);
+            }
+            if let Some(museum) = self.museum.as_mut() {
+                let happened = museum.tick(now);
+                self.museum_happened(happened);
             }
             if let Some(info) = self.info.as_mut() {
                 info.tick();

@@ -55,6 +55,8 @@ const SKINS_DIR: &str = "skins";
 const PRESETS_DIR: &str = "Presets";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const PRESETS_DIR: &str = "presets";
+/// The downloads' folder, where it is inside another of NeoAmp's.
+const CACHE_DIR: &str = "cache";
 
 /// Everything `settings.toml` holds. A key missing from the file keeps its default, so files
 /// written by older versions load unchanged. [`Settings::apply`] brings values into range.
@@ -446,27 +448,44 @@ impl Settings {
     }
 }
 
-/// The folder the settings and playlist are kept in.
+/// The folder the settings and playlist are kept in, and the one for downloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Store {
     dir: PathBuf,
+    /// Downloads kept to save fetching them again, which may be deleted at any time.
+    cache: PathBuf,
 }
 
 impl Store {
+    /// The settings in `dir`, and the downloads in a folder inside it.
     #[must_use]
     pub fn new(dir: PathBuf) -> Store {
-        Store { dir }
+        let cache = dir.join(CACHE_DIR);
+        Store { dir, cache }
     }
 
-    /// The folder named by `NEOAMP_CONFIG_DIR`, otherwise NeoAmp's folder in the platform's
-    /// config directory. `None` when the platform reports no such directory (no home folder).
+    /// The folder named by `NEOAMP_CONFIG_DIR`, with the downloads inside it; otherwise
+    /// NeoAmp's folders in the platform's config and cache directories. `None` when the
+    /// platform reports no config directory (no home folder).
     #[must_use]
     pub fn platform() -> Option<Store> {
-        let dir = std::env::var_os(DIR_VAR)
-            .filter(|d| !d.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| dirs::config_dir().map(|d| d.join(DIR_NAME)))?;
-        Some(Store { dir })
+        if let Some(dir) = std::env::var_os(DIR_VAR).filter(|d| !d.is_empty()) {
+            return Some(Store::new(PathBuf::from(dir)));
+        }
+        let dir = dirs::config_dir()?.join(DIR_NAME);
+        // Windows' cache directory is Local AppData, which holds more than caches.
+        let cache = dirs::cache_dir().map(|d| {
+            let ours = d.join(DIR_NAME);
+            if cfg!(target_os = "windows") {
+                ours.join(CACHE_DIR)
+            } else {
+                ours
+            }
+        });
+        Some(match cache {
+            Some(cache) => Store { dir, cache },
+            None => Store::new(dir),
+        })
     }
 
     #[must_use]
@@ -484,6 +503,12 @@ impl Store {
     #[must_use]
     pub fn presets_dir(&self) -> PathBuf {
         self.dir.join(PRESETS_DIR)
+    }
+
+    /// Where the Skin Museum's screenshots and skins are kept once fetched.
+    #[must_use]
+    pub fn museum_dir(&self) -> PathBuf {
+        self.cache.join("museum")
     }
 
     /// The auto-load presets; none when there are none yet or they cannot be read (logged).
@@ -840,6 +865,8 @@ mod tests {
         assert!(tmp.0.join("autoload.eqf.bad").exists());
         assert_ne!(store.skins_dir(), store.presets_dir());
         assert!(store.skins_dir().starts_with(&tmp.0));
+        // A folder of its own keeps the downloads too, so test runs stay apart.
+        assert_eq!(store.museum_dir(), tmp.0.join("cache").join("museum"));
     }
 
     /// What docs/SETTINGS.md promises about reading and writing the file.

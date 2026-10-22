@@ -63,7 +63,7 @@ impl UrlWindow {
         let start = clipboard::web_url();
         let dialog = UrlDialog::new(purpose, scale, start.as_deref(), now);
         let (w, h) = dialog.size();
-        let window = DialogWindow::open(el, purpose.title(), (w, h), on_top)?;
+        let window = DialogWindow::open(el, purpose.title(), (w, h), on_top, None)?;
         Ok(UrlWindow {
             window,
             canvas: Image::new(w, h),

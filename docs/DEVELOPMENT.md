@@ -107,7 +107,10 @@ program does the same:
   parses it with usvg and rasterises it with resvg at each density a window
   asks for, caching each raster. resvg is built without its default features,
   so it reads no fonts, decodes no embedded bitmaps, and `svg.rs` keeps it
-  from loading files an SVG names.
+  from loading files an SVG names. Archives are untrusted: `skin.rs` reads at
+  most 32 MB of `.wsz`, unpacks only the files a skin is made of, each at most
+  8 MB and 32 MB together, refuses archives listing over 4096 files, and
+  reads a bitmap's size before decoding it.
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
   three windows and their windowshade bars; `src/ui.rs` holds state, hit
   testing and input.
@@ -130,9 +133,19 @@ program does the same:
   dialog and `src/url_dialog.rs` the Open URL dialog; `src/jump_window.rs`,
   `src/info_window.rs` and `src/url_window.rs` give them windows through
   `src/dialog_window.rs`. `src/text_box.rs` is their edit box,
-  `src/clipboard.rs` reads the clipboard for it through
+  `src/list_box.rs` their list with its scroll bar, `src/clipboard.rs` reads
+  the clipboard for the edit box through
   [arboard](https://crates.io/crates/arboard), and `src/classic.rs` holds
   the Windows 2000 colours, bevels and buttons they share with the menus.
+- `src/museum_dialog.rs` is the Skin Museum dialog (see [Skin
+  Museum](GUIDE.md#skin-museum)) and `src/museum_window.rs` its window, which
+  fetches what the dialog asks for on threads of their own, each sending
+  back what it brought over a channel, and hands a skin to try on to
+  `app.rs`, which wears it in place of the chosen one until it is installed
+  or the dialog closes. `src/museum.rs` talks to the museum's GraphQL API
+  (plain `GET` requests through `src/http.rs`, answers read with
+  [serde_json](https://crates.io/crates/serde_json)) and keeps the
+  screenshots and skins it fetched in a cache folder of at most 100 MB.
 - `src/audio/` plays the music (see [Audio](#audio)), internet radio included
   (`src/audio/stream.rs`, fetched by `src/http.rs`; see
   [Internet radio](#internet-radio)), and `src/vis.rs` turns the samples being
@@ -152,8 +165,9 @@ program does the same:
   playlist editing and playlist files, the skin parsers, the blitter, the
   dialogs and menus, the saved settings and playlist, the audio pipeline
   (decoding, resampling, the equalizer, and the decoder and mixer threads
-  working together), and the HTTP client and internet radio, against small
-  servers the tests run on the computer itself.
+  working together), and the HTTP client, internet radio and the Skin
+  Museum's requests, against small servers the tests run on the computer
+  itself. No test reaches the real museum.
 
 ### The NeoAmp skin
 

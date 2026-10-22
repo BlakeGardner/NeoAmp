@@ -70,6 +70,26 @@ impl Rect {
     }
 }
 
+/// For each of `to` pixels along an axis that `from` pixels are stretched over: the old pixels
+/// it covers, and how much of each, in old pixels.
+fn coverage(from: i32, to: i32) -> Vec<Vec<(i32, f64)>> {
+    let step = f64::from(from) / f64::from(to);
+    (0..to)
+        .map(|i| {
+            let (a, b) = (f64::from(i) * step, f64::from(i + 1) * step);
+            // Pixel positions within `from`, so the casts cannot truncate.
+            let first = a.floor() as i32;
+            let last = (b.ceil() as i32).min(from);
+            (first..last)
+                .filter_map(|s| {
+                    let w = b.min(f64::from(s + 1)) - a.max(f64::from(s));
+                    (w > 1e-9).then_some((s, w))
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// An RGBA8 raster, row-major with no padding.
 #[derive(Clone, Debug)]
 pub struct Image {
@@ -197,6 +217,41 @@ impl Image {
             };
             self.data[di..di + n].copy_from_slice(&src.data[si..si + n]);
         }
+    }
+
+    /// The image resized to `w` x `h` by averaging: each new pixel is the mean of the old ones
+    /// it covers, weighed by how much of each it covers. Enlarging by a whole number copies
+    /// every pixel exactly; in between, neighbours blend at the seams, as the windows do at
+    /// fractional zooms.
+    #[must_use]
+    pub fn resized(&self, w: i32, h: i32) -> Image {
+        let mut out = Image::new(w, h);
+        if self.w <= 0 || self.h <= 0 || out.w <= 0 || out.h <= 0 {
+            return out;
+        }
+        let cols = coverage(self.w, out.w);
+        let rows = coverage(self.h, out.h);
+        let area = (f64::from(self.w) / f64::from(out.w)) * (f64::from(self.h) / f64::from(out.h));
+        for (y, row) in (0..).zip(&rows) {
+            for (x, col) in (0..).zip(&cols) {
+                let mut sum = [0.0; 4];
+                for &(sy, wy) in row {
+                    for &(sx, wx) in col {
+                        let p = self.get(sx, sy);
+                        for (s, v) in sum.iter_mut().zip(p) {
+                            *s += f64::from(v) * wx * wy;
+                        }
+                    }
+                }
+                // Means of bytes stay within 0..=255, so the casts cannot truncate.
+                out.put(
+                    x,
+                    y,
+                    sum.map(|s| (s / area).round().clamp(0.0, 255.0) as u8),
+                );
+            }
+        }
+        out
     }
 
     /// Repeat `src_rect` horizontally across `dest` (clipped to it).
@@ -466,6 +521,32 @@ mod tests {
         let a = Rect::new(0, 0, 10, 10);
         assert_eq!(a.intersect(&Rect::new(5, 5, 10, 10)), Rect::new(5, 5, 5, 5));
         assert!(a.intersect(&Rect::new(20, 20, 5, 5)).is_empty());
+    }
+
+    #[test]
+    fn resizing_copies_whole_number_enlargements_and_averages_between() {
+        const BLUE: [u8; 4] = [0, 0, 255, 255];
+        let mut img = Image::new(2, 1);
+        img.put(0, 0, RED);
+        img.put(1, 0, BLUE);
+        let double = img.resized(4, 2);
+        assert_eq!(
+            [
+                double.get(0, 1),
+                double.get(1, 1),
+                double.get(2, 0),
+                double.get(3, 1)
+            ],
+            [RED, RED, BLUE, BLUE]
+        );
+        // At 1.5x the middle pixel straddles the seam and takes half of each.
+        let half = |p: [u8; 4]| p[0].abs_diff(128) <= 1 && p[2].abs_diff(128) <= 1 && p[3] == 255;
+        let wider = img.resized(3, 1);
+        assert_eq!([wider.get(0, 0), wider.get(2, 0)], [RED, BLUE]);
+        assert!(half(wider.get(1, 0)), "{:?}", wider.get(1, 0));
+        assert!(half(img.resized(1, 1).get(0, 0)), "shrunk");
+        assert!(img.resized(0, 5).data.is_empty());
+        assert_eq!(Image::new(0, 0).resized(3, 3).get(1, 1), [0; 4]);
     }
 
     #[test]

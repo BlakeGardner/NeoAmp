@@ -196,8 +196,20 @@ skin with NeoAmp's name and icon, shown by default.
       every skin borrows from.
 - [ ] 1x bitmaps in `skins/NeoAmp.wsz`, so that it shows in Winamp and
       Webamp too.
+- [x] Skins > Skin Museum...: the Winamp Skin Museum's skins, searched and
+      tried on NeoAmp's own windows before installing
+      ([src/museum_dialog.rs](../src/museum_dialog.rs),
+      [src/museum.rs](../src/museum.rs)); see [Skin
+      Museum](GUIDE.md#skin-museum). In place of Winamp's skin browser, which
+      listed the skins folder and linked to winamp.com for more. The user
+      chose the museum's own order before a search, search over every skin
+      not flagged NSFW, trying on after half a second's rest, a 100 MB cache
+      and a dialog opened beside the windows, with no key of its own.
+- [ ] Open a `https://.../*.wsz` address given on the command line as a
+      skin, downloading it first.
 
-Run on Linux (X11) and macOS; not yet on Windows.
+Sharp drawing and the SVG sheets were run on Linux (X11) and macOS; not yet
+on Windows.
 
 ## Optional
 
