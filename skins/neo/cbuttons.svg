@@ -1,0 +1,288 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="136" height="36" viewBox="0 0 136 36">
+<defs>
+<clipPath id="c1"><rect x="0" y="0" width="23" height="18"/></clipPath>
+<linearGradient id="g2" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280.074" y2="107.51"><stop offset="0" stop-color="#141420"/><stop offset="0.04" stop-color="#161621"/><stop offset="0.08" stop-color="#181724"/><stop offset="0.12" stop-color="#1b1b2a"/><stop offset="0.16" stop-color="#1f1f30"/><stop offset="0.2" stop-color="#222235"/><stop offset="0.24" stop-color="#26263b"/><stop offset="0.28" stop-color="#292940"/><stop offset="0.32" stop-color="#2d2c46"/><stop offset="0.36" stop-color="#30304c"/><stop offset="0.4" stop-color="#333351"/><stop offset="0.44" stop-color="#363554"/><stop offset="0.48" stop-color="#373757"/><stop offset="0.52" stop-color="#383859"/><stop offset="0.56" stop-color="#39395a"/><stop offset="0.6" stop-color="#39395a"/><stop offset="0.64" stop-color="#373757"/><stop offset="0.68" stop-color="#363554"/><stop offset="0.72" stop-color="#333350"/><stop offset="0.76" stop-color="#30304b"/><stop offset="0.8" stop-color="#2d2d46"/><stop offset="0.84" stop-color="#292940"/><stop offset="0.88" stop-color="#242439"/><stop offset="0.92" stop-color="#201f31"/><stop offset="1" stop-color="#1a1a29"/></linearGradient>
+<clipPath id="c3"><rect x="23" y="0" width="23" height="18"/></clipPath>
+<linearGradient id="g4" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280.074" y2="107.51"><stop offset="0" stop-color="#141420"/><stop offset="0.04" stop-color="#161621"/><stop offset="0.08" stop-color="#181724"/><stop offset="0.12" stop-color="#1b1b2a"/><stop offset="0.16" stop-color="#1f1f30"/><stop offset="0.2" stop-color="#222235"/><stop offset="0.24" stop-color="#26263b"/><stop offset="0.28" stop-color="#292940"/><stop offset="0.32" stop-color="#2d2c46"/><stop offset="0.36" stop-color="#30304c"/><stop offset="0.4" stop-color="#333351"/><stop offset="0.44" stop-color="#363554"/><stop offset="0.48" stop-color="#373757"/><stop offset="0.52" stop-color="#383859"/><stop offset="0.56" stop-color="#39395a"/><stop offset="0.6" stop-color="#39395a"/><stop offset="0.64" stop-color="#373757"/><stop offset="0.68" stop-color="#363554"/><stop offset="0.72" stop-color="#333350"/><stop offset="0.76" stop-color="#30304b"/><stop offset="0.8" stop-color="#2d2d46"/><stop offset="0.84" stop-color="#292940"/><stop offset="0.88" stop-color="#242439"/><stop offset="0.92" stop-color="#201f31"/><stop offset="1" stop-color="#1a1a29"/></linearGradient>
+<clipPath id="c5"><rect x="46" y="0" width="23" height="18"/></clipPath>
+<linearGradient id="g6" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280.074" y2="107.51"><stop offset="0" stop-color="#141420"/><stop offset="0.04" stop-color="#161621"/><stop offset="0.08" stop-color="#181724"/><stop offset="0.12" stop-color="#1b1b2a"/><stop offset="0.16" stop-color="#1f1f30"/><stop offset="0.2" stop-color="#222235"/><stop offset="0.24" stop-color="#26263b"/><stop offset="0.28" stop-color="#292940"/><stop offset="0.32" stop-color="#2d2c46"/><stop offset="0.36" stop-color="#30304c"/><stop offset="0.4" stop-color="#333351"/><stop offset="0.44" stop-color="#363554"/><stop offset="0.48" stop-color="#373757"/><stop offset="0.52" stop-color="#383859"/><stop offset="0.56" stop-color="#39395a"/><stop offset="0.6" stop-color="#39395a"/><stop offset="0.64" stop-color="#373757"/><stop offset="0.68" stop-color="#363554"/><stop offset="0.72" stop-color="#333350"/><stop offset="0.76" stop-color="#30304b"/><stop offset="0.8" stop-color="#2d2d46"/><stop offset="0.84" stop-color="#292940"/><stop offset="0.88" stop-color="#242439"/><stop offset="0.92" stop-color="#201f31"/><stop offset="1" stop-color="#1a1a29"/></linearGradient>
+<clipPath id="c7"><rect x="69" y="0" width="23" height="18"/></clipPath>
+<linearGradient id="g8" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280.074" y2="107.51"><stop offset="0" stop-color="#141420"/><stop offset="0.04" stop-color="#161621"/><stop offset="0.08" stop-color="#181724"/><stop offset="0.12" stop-color="#1b1b2a"/><stop offset="0.16" stop-color="#1f1f30"/><stop offset="0.2" stop-color="#222235"/><stop offset="0.24" stop-color="#26263b"/><stop offset="0.28" stop-color="#292940"/><stop offset="0.32" stop-color="#2d2c46"/><stop offset="0.36" stop-color="#30304c"/><stop offset="0.4" stop-color="#333351"/><stop offset="0.44" stop-color="#363554"/><stop offset="0.48" stop-color="#373757"/><stop offset="0.52" stop-color="#383859"/><stop offset="0.56" stop-color="#39395a"/><stop offset="0.6" stop-color="#39395a"/><stop offset="0.64" stop-color="#373757"/><stop offset="0.68" stop-color="#363554"/><stop offset="0.72" stop-color="#333350"/><stop offset="0.76" stop-color="#30304b"/><stop offset="0.8" stop-color="#2d2d46"/><stop offset="0.84" stop-color="#292940"/><stop offset="0.88" stop-color="#242439"/><stop offset="0.92" stop-color="#201f31"/><stop offset="1" stop-color="#1a1a29"/></linearGradient>
+<clipPath id="c9"><rect x="92" y="0" width="23" height="18"/></clipPath>
+<linearGradient id="g10" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280.074" y2="107.51"><stop offset="0" stop-color="#141420"/><stop offset="0.04" stop-color="#161621"/><stop offset="0.08" stop-color="#181724"/><stop offset="0.12" stop-color="#1b1b2a"/><stop offset="0.16" stop-color="#1f1f30"/><stop offset="0.2" stop-color="#222235"/><stop offset="0.24" stop-color="#26263b"/><stop offset="0.28" stop-color="#292940"/><stop offset="0.32" stop-color="#2d2c46"/><stop offset="0.36" stop-color="#30304c"/><stop offset="0.4" stop-color="#333351"/><stop offset="0.44" stop-color="#363554"/><stop offset="0.48" stop-color="#373757"/><stop offset="0.52" stop-color="#383859"/><stop offset="0.56" stop-color="#39395a"/><stop offset="0.6" stop-color="#39395a"/><stop offset="0.64" stop-color="#373757"/><stop offset="0.68" stop-color="#363554"/><stop offset="0.72" stop-color="#333350"/><stop offset="0.76" stop-color="#30304b"/><stop offset="0.8" stop-color="#2d2d46"/><stop offset="0.84" stop-color="#292940"/><stop offset="0.88" stop-color="#242439"/><stop offset="0.92" stop-color="#201f31"/><stop offset="1" stop-color="#1a1a29"/></linearGradient>
+<clipPath id="c11"><rect x="114" y="0" width="22" height="16"/></clipPath>
+<linearGradient id="g12" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280.074" y2="107.51"><stop offset="0" stop-color="#141420"/><stop offset="0.04" stop-color="#161621"/><stop offset="0.08" stop-color="#181724"/><stop offset="0.12" stop-color="#1b1b2a"/><stop offset="0.16" stop-color="#1f1f30"/><stop offset="0.2" stop-color="#222235"/><stop offset="0.24" stop-color="#26263b"/><stop offset="0.28" stop-color="#292940"/><stop offset="0.32" stop-color="#2d2c46"/><stop offset="0.36" stop-color="#30304c"/><stop offset="0.4" stop-color="#333351"/><stop offset="0.44" stop-color="#363554"/><stop offset="0.48" stop-color="#373757"/><stop offset="0.52" stop-color="#383859"/><stop offset="0.56" stop-color="#39395a"/><stop offset="0.6" stop-color="#39395a"/><stop offset="0.64" stop-color="#373757"/><stop offset="0.68" stop-color="#363554"/><stop offset="0.72" stop-color="#333350"/><stop offset="0.76" stop-color="#30304b"/><stop offset="0.8" stop-color="#2d2d46"/><stop offset="0.84" stop-color="#292940"/><stop offset="0.88" stop-color="#242439"/><stop offset="0.92" stop-color="#201f31"/><stop offset="1" stop-color="#1a1a29"/></linearGradient>
+</defs>
+<!-- prev, normal and pressed -->
+<g clip-path="url(#c1)">
+<g transform="translate(-16 -88)">
+<rect x="16" y="88" width="23" height="18" fill="url(#g2)"/>
+</g>
+</g>
+<rect x="0" y="0" width="22" height="17" fill="#bdced6"/>
+<rect x="0" y="0" width="21" height="1" fill="#adb5c6"/>
+<rect x="0" y="0" width="1" height="16" fill="#adb5c6"/>
+<rect x="1" y="1" width="19" height="1" fill="#efffff"/>
+<rect x="1" y="1" width="1" height="14" fill="#efffff"/>
+<rect x="20" y="1" width="1" height="1" fill="#adb5c6"/>
+<rect x="19" y="2" width="1" height="13" fill="#adb5c6"/>
+<rect x="2" y="14" width="18" height="1" fill="#adb5c6"/>
+<rect x="20" y="2" width="1" height="14" fill="#7b8494"/>
+<rect x="20" y="2" width="1" height="2" fill="#8494a5"/>
+<rect x="3" y="15" width="18" height="1" fill="#7b8494"/>
+<rect x="2" y="15" width="1" height="1" fill="#8494a5"/>
+<rect x="21" y="2" width="1" height="15" fill="#4a5a6b"/>
+<rect x="21" y="0" width="1" height="1" fill="#8494a5"/>
+<rect x="21" y="1" width="1" height="1" fill="#526373"/>
+<rect x="2" y="16" width="20" height="1" fill="#4a5a6b"/>
+<rect x="0" y="16" width="1" height="1" fill="#8494a5"/>
+<rect x="1" y="16" width="1" height="1" fill="#526373"/>
+<polygon points="6,4 9,4 9,14 6,14" fill="#4a5a6b"/>
+<polygon points="9,4 9,14 7.5,12.5 7.5,5.5" fill="#efffff"/>
+<polygon points="9,14 6,14 7.5,12.5 7.5,12.5" fill="#efffff"/>
+<polygon points="7,5 8,5 8,13 7,13" fill="#97a8b9"/>
+<polygon points="14.5,4 16,4 16,14 14.5,14 9.5,9" fill="#4a5a6b"/>
+<polygon points="16,4 16,14 14.5,12.5 14.5,5.5" fill="#efffff"/>
+<polygon points="16,14 14.5,14 15.121,12.5 14.5,12.5" fill="#efffff"/>
+<polygon points="14.5,14 9.5,9 11.621,9 15.121,12.5" fill="#efffff"/>
+<polygon points="14.914,5 15,5 15,13 14.914,13 10.914,9" fill="#97a8b9"/>
+<rect x="0" y="18" width="23" height="18" fill="#080810"/>
+<rect x="2" y="20" width="20" height="15" fill="#7b8c9c"/>
+<rect x="3" y="21" width="18" height="1" fill="#adbdc6"/>
+<rect x="3" y="21" width="1" height="14" fill="#adbdc6"/>
+<rect x="2" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="20" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="21" y="20" width="1" height="1" fill="#526b73"/>
+<rect x="2" y="34" width="1" height="1" fill="#637b84"/>
+<rect x="2" y="35" width="1" height="1" fill="#526b73"/>
+<polygon points="8,24 11,24 11,34 8,34" fill="#080810"/>
+<polygon points="11,24 11,34 9.5,32.5 9.5,25.5" fill="#adbdc6"/>
+<polygon points="11,34 8,34 9.5,32.5 9.5,32.5" fill="#adbdc6"/>
+<polygon points="9,25 10,25 10,33 9,33" fill="#4a5a6b"/>
+<polygon points="16.5,24 18,24 18,34 16.5,34 11.5,29" fill="#080810"/>
+<polygon points="18,24 18,34 16.5,32.5 16.5,25.5" fill="#adbdc6"/>
+<polygon points="18,34 16.5,34 17.121,32.5 16.5,32.5" fill="#adbdc6"/>
+<polygon points="16.5,34 11.5,29 13.621,29 17.121,32.5" fill="#adbdc6"/>
+<polygon points="16.914,25 17,25 17,33 16.914,33 12.914,29" fill="#4a5a6b"/>
+<!-- play, normal and pressed -->
+<g clip-path="url(#c3)">
+<g transform="translate(-16 -88)">
+<rect x="39" y="88" width="23" height="18" fill="url(#g4)"/>
+</g>
+</g>
+<rect x="23" y="0" width="22" height="17" fill="#bdced6"/>
+<rect x="23" y="0" width="21" height="1" fill="#adb5c6"/>
+<rect x="23" y="0" width="1" height="16" fill="#adb5c6"/>
+<rect x="24" y="1" width="19" height="1" fill="#efffff"/>
+<rect x="24" y="1" width="1" height="14" fill="#efffff"/>
+<rect x="43" y="1" width="1" height="1" fill="#adb5c6"/>
+<rect x="42" y="2" width="1" height="13" fill="#adb5c6"/>
+<rect x="25" y="14" width="18" height="1" fill="#adb5c6"/>
+<rect x="43" y="2" width="1" height="14" fill="#7b8494"/>
+<rect x="43" y="2" width="1" height="2" fill="#8494a5"/>
+<rect x="26" y="15" width="18" height="1" fill="#7b8494"/>
+<rect x="25" y="15" width="1" height="1" fill="#8494a5"/>
+<rect x="44" y="2" width="1" height="15" fill="#4a5a6b"/>
+<rect x="44" y="0" width="1" height="1" fill="#8494a5"/>
+<rect x="44" y="1" width="1" height="1" fill="#526373"/>
+<rect x="25" y="16" width="20" height="1" fill="#4a5a6b"/>
+<rect x="23" y="16" width="1" height="1" fill="#8494a5"/>
+<rect x="24" y="16" width="1" height="1" fill="#526373"/>
+<polygon points="29,4 39.5,9 29,14" fill="#4a5a6b"/>
+<polygon points="39.5,9 29,14 30.5,11.624 36.011,9" fill="#efffff"/>
+<polygon points="30,5.584 37.174,9 30,12.416" fill="#97a8b9"/>
+<rect x="23" y="18" width="23" height="18" fill="#080810"/>
+<rect x="25" y="20" width="20" height="15" fill="#7b8c9c"/>
+<rect x="26" y="21" width="18" height="1" fill="#adbdc6"/>
+<rect x="26" y="21" width="1" height="14" fill="#adbdc6"/>
+<rect x="25" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="43" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="44" y="20" width="1" height="1" fill="#526b73"/>
+<rect x="25" y="34" width="1" height="1" fill="#637b84"/>
+<rect x="25" y="35" width="1" height="1" fill="#526b73"/>
+<polygon points="31,24 41.5,29 31,34" fill="#080810"/>
+<polygon points="41.5,29 31,34 32.5,31.624 38.011,29" fill="#adbdc6"/>
+<polygon points="32,25.584 39.174,29 32,32.416" fill="#4a5a6b"/>
+<!-- pause, normal and pressed -->
+<g clip-path="url(#c5)">
+<g transform="translate(-16 -88)">
+<rect x="62" y="88" width="23" height="18" fill="url(#g6)"/>
+</g>
+</g>
+<rect x="46" y="0" width="22" height="17" fill="#bdced6"/>
+<rect x="46" y="0" width="21" height="1" fill="#adb5c6"/>
+<rect x="46" y="0" width="1" height="16" fill="#adb5c6"/>
+<rect x="47" y="1" width="19" height="1" fill="#efffff"/>
+<rect x="47" y="1" width="1" height="14" fill="#efffff"/>
+<rect x="66" y="1" width="1" height="1" fill="#adb5c6"/>
+<rect x="65" y="2" width="1" height="13" fill="#adb5c6"/>
+<rect x="48" y="14" width="18" height="1" fill="#adb5c6"/>
+<rect x="66" y="2" width="1" height="14" fill="#7b8494"/>
+<rect x="66" y="2" width="1" height="2" fill="#8494a5"/>
+<rect x="49" y="15" width="18" height="1" fill="#7b8494"/>
+<rect x="48" y="15" width="1" height="1" fill="#8494a5"/>
+<rect x="67" y="2" width="1" height="15" fill="#4a5a6b"/>
+<rect x="67" y="0" width="1" height="1" fill="#8494a5"/>
+<rect x="67" y="1" width="1" height="1" fill="#526373"/>
+<rect x="48" y="16" width="20" height="1" fill="#4a5a6b"/>
+<rect x="46" y="16" width="1" height="1" fill="#8494a5"/>
+<rect x="47" y="16" width="1" height="1" fill="#526373"/>
+<polygon points="51,4 55,4 55,14 51,14" fill="#4a5a6b"/>
+<polygon points="55,4 55,14 53.5,12.5 53.5,5.5" fill="#efffff"/>
+<polygon points="55,14 51,14 52.5,12.5 53.5,12.5" fill="#efffff"/>
+<polygon points="52,5 54,5 54,13 52,13" fill="#97a8b9"/>
+<polygon points="58,4 62,4 62,14 58,14" fill="#4a5a6b"/>
+<polygon points="62,4 62,14 60.5,12.5 60.5,5.5" fill="#efffff"/>
+<polygon points="62,14 58,14 59.5,12.5 60.5,12.5" fill="#efffff"/>
+<polygon points="59,5 61,5 61,13 59,13" fill="#97a8b9"/>
+<rect x="46" y="18" width="23" height="18" fill="#080810"/>
+<rect x="48" y="20" width="20" height="15" fill="#7b8c9c"/>
+<rect x="49" y="21" width="18" height="1" fill="#adbdc6"/>
+<rect x="49" y="21" width="1" height="14" fill="#adbdc6"/>
+<rect x="48" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="66" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="67" y="20" width="1" height="1" fill="#526b73"/>
+<rect x="48" y="34" width="1" height="1" fill="#637b84"/>
+<rect x="48" y="35" width="1" height="1" fill="#526b73"/>
+<polygon points="53,24 57,24 57,34 53,34" fill="#080810"/>
+<polygon points="57,24 57,34 55.5,32.5 55.5,25.5" fill="#adbdc6"/>
+<polygon points="57,34 53,34 54.5,32.5 55.5,32.5" fill="#adbdc6"/>
+<polygon points="54,25 56,25 56,33 54,33" fill="#4a5a6b"/>
+<polygon points="60,24 64,24 64,34 60,34" fill="#080810"/>
+<polygon points="64,24 64,34 62.5,32.5 62.5,25.5" fill="#adbdc6"/>
+<polygon points="64,34 60,34 61.5,32.5 62.5,32.5" fill="#adbdc6"/>
+<polygon points="61,25 63,25 63,33 61,33" fill="#4a5a6b"/>
+<!-- stop, normal and pressed -->
+<g clip-path="url(#c7)">
+<g transform="translate(-16 -88)">
+<rect x="85" y="88" width="23" height="18" fill="url(#g8)"/>
+</g>
+</g>
+<rect x="69" y="0" width="22" height="17" fill="#bdced6"/>
+<rect x="69" y="0" width="21" height="1" fill="#adb5c6"/>
+<rect x="69" y="0" width="1" height="16" fill="#adb5c6"/>
+<rect x="70" y="1" width="19" height="1" fill="#efffff"/>
+<rect x="70" y="1" width="1" height="14" fill="#efffff"/>
+<rect x="89" y="1" width="1" height="1" fill="#adb5c6"/>
+<rect x="88" y="2" width="1" height="13" fill="#adb5c6"/>
+<rect x="71" y="14" width="18" height="1" fill="#adb5c6"/>
+<rect x="89" y="2" width="1" height="14" fill="#7b8494"/>
+<rect x="89" y="2" width="1" height="2" fill="#8494a5"/>
+<rect x="72" y="15" width="18" height="1" fill="#7b8494"/>
+<rect x="71" y="15" width="1" height="1" fill="#8494a5"/>
+<rect x="90" y="2" width="1" height="15" fill="#4a5a6b"/>
+<rect x="90" y="0" width="1" height="1" fill="#8494a5"/>
+<rect x="90" y="1" width="1" height="1" fill="#526373"/>
+<rect x="71" y="16" width="20" height="1" fill="#4a5a6b"/>
+<rect x="69" y="16" width="1" height="1" fill="#8494a5"/>
+<rect x="70" y="16" width="1" height="1" fill="#526373"/>
+<polygon points="75,4 85,4 85,14 75,14" fill="#4a5a6b"/>
+<polygon points="85,4 85,14 83.5,12.5 83.5,5.5" fill="#efffff"/>
+<polygon points="85,14 75,14 76.5,12.5 83.5,12.5" fill="#efffff"/>
+<polygon points="76,5 84,5 84,13 76,13" fill="#97a8b9"/>
+<rect x="69" y="18" width="23" height="18" fill="#080810"/>
+<rect x="71" y="20" width="20" height="15" fill="#7b8c9c"/>
+<rect x="72" y="21" width="18" height="1" fill="#adbdc6"/>
+<rect x="72" y="21" width="1" height="14" fill="#adbdc6"/>
+<rect x="71" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="89" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="90" y="20" width="1" height="1" fill="#526b73"/>
+<rect x="71" y="34" width="1" height="1" fill="#637b84"/>
+<rect x="71" y="35" width="1" height="1" fill="#526b73"/>
+<polygon points="77,24 87,24 87,34 77,34" fill="#080810"/>
+<polygon points="87,24 87,34 85.5,32.5 85.5,25.5" fill="#adbdc6"/>
+<polygon points="87,34 77,34 78.5,32.5 85.5,32.5" fill="#adbdc6"/>
+<polygon points="78,25 86,25 86,33 78,33" fill="#4a5a6b"/>
+<!-- next, normal and pressed -->
+<g clip-path="url(#c9)">
+<g transform="translate(-16 -88)">
+<rect x="108" y="88" width="23" height="18" fill="url(#g10)"/>
+</g>
+</g>
+<rect x="92" y="0" width="22" height="17" fill="#bdced6"/>
+<rect x="92" y="0" width="21" height="1" fill="#adb5c6"/>
+<rect x="92" y="0" width="1" height="16" fill="#adb5c6"/>
+<rect x="93" y="1" width="19" height="1" fill="#efffff"/>
+<rect x="93" y="1" width="1" height="14" fill="#efffff"/>
+<rect x="112" y="1" width="1" height="1" fill="#adb5c6"/>
+<rect x="111" y="2" width="1" height="13" fill="#adb5c6"/>
+<rect x="94" y="14" width="18" height="1" fill="#adb5c6"/>
+<rect x="112" y="2" width="1" height="14" fill="#7b8494"/>
+<rect x="112" y="2" width="1" height="2" fill="#8494a5"/>
+<rect x="95" y="15" width="18" height="1" fill="#7b8494"/>
+<rect x="94" y="15" width="1" height="1" fill="#8494a5"/>
+<rect x="113" y="2" width="1" height="15" fill="#4a5a6b"/>
+<rect x="113" y="0" width="1" height="1" fill="#8494a5"/>
+<rect x="113" y="1" width="1" height="1" fill="#526373"/>
+<rect x="94" y="16" width="20" height="1" fill="#4a5a6b"/>
+<rect x="92" y="16" width="1" height="1" fill="#8494a5"/>
+<rect x="93" y="16" width="1" height="1" fill="#526373"/>
+<polygon points="98,4 99.5,4 104.5,9 99.5,14 98,14" fill="#4a5a6b"/>
+<polygon points="104.5,9 99.5,14 98.879,12.5 102.379,9" fill="#efffff"/>
+<polygon points="99.5,14 98,14 99.5,12.5 98.879,12.5" fill="#efffff"/>
+<polygon points="99,5 99.086,5 103.086,9 99.086,13 99,13" fill="#97a8b9"/>
+<polygon points="105,4 108,4 108,14 105,14" fill="#4a5a6b"/>
+<polygon points="108,4 108,14 106.5,12.5 106.5,5.5" fill="#efffff"/>
+<polygon points="108,14 105,14 106.5,12.5 106.5,12.5" fill="#efffff"/>
+<polygon points="106,5 107,5 107,13 106,13" fill="#97a8b9"/>
+<rect x="92" y="18" width="22" height="18" fill="#080810"/>
+<rect x="94" y="20" width="19" height="15" fill="#7b8c9c"/>
+<rect x="95" y="21" width="17" height="1" fill="#adbdc6"/>
+<rect x="95" y="21" width="1" height="14" fill="#adbdc6"/>
+<rect x="94" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="111" y="20" width="1" height="1" fill="#637b84"/>
+<rect x="112" y="20" width="1" height="1" fill="#526b73"/>
+<rect x="94" y="34" width="1" height="1" fill="#637b84"/>
+<rect x="94" y="35" width="1" height="1" fill="#526b73"/>
+<polygon points="100,24 101.5,24 106.5,29 101.5,34 100,34" fill="#080810"/>
+<polygon points="106.5,29 101.5,34 100.879,32.5 104.379,29" fill="#adbdc6"/>
+<polygon points="101.5,34 100,34 101.5,32.5 100.879,32.5" fill="#adbdc6"/>
+<polygon points="101,25 101.086,25 105.086,29 101.086,33 101,33" fill="#4a5a6b"/>
+<polygon points="107,24 110,24 110,34 107,34" fill="#080810"/>
+<polygon points="110,24 110,34 108.5,32.5 108.5,25.5" fill="#adbdc6"/>
+<polygon points="110,34 107,34 108.5,32.5 108.5,32.5" fill="#adbdc6"/>
+<polygon points="108,25 109,25 109,33 108,33" fill="#4a5a6b"/>
+<!-- eject, normal and pressed -->
+<g clip-path="url(#c11)">
+<g transform="translate(-22 -89)">
+<rect x="136" y="89" width="22" height="16" fill="url(#g12)"/>
+</g>
+</g>
+<rect x="114" y="0" width="22" height="15" fill="#bdced6"/>
+<rect x="114" y="0" width="21" height="1" fill="#adb5c6"/>
+<rect x="114" y="0" width="1" height="15" fill="#adb5c6"/>
+<rect x="115" y="1" width="19" height="1" fill="#efffff"/>
+<rect x="115" y="1" width="1" height="13" fill="#efffff"/>
+<rect x="134" y="1" width="1" height="1" fill="#adb5c6"/>
+<rect x="133" y="2" width="1" height="12" fill="#adb5c6"/>
+<rect x="116" y="13" width="18" height="1" fill="#adb5c6"/>
+<rect x="134" y="2" width="1" height="13" fill="#7b8494"/>
+<rect x="117" y="14" width="18" height="1" fill="#7b8494"/>
+<rect x="116" y="14" width="1" height="1" fill="#8494a5"/>
+<rect x="135" y="2" width="1" height="13" fill="#4a5a6b"/>
+<rect x="135" y="0" width="1" height="1" fill="#8494a5"/>
+<rect x="135" y="1" width="1" height="1" fill="#526373"/>
+<polygon points="124.5,3 130.5,9 118.5,9" fill="#4a5a6b"/>
+<polygon points="130.5,9 118.5,9 122.121,7.5 126.879,7.5" fill="#efffff"/>
+<polygon points="124.5,4.414 128.086,8 120.914,8" fill="#97a8b9"/>
+<polygon points="119,10 130,10 130,13 119,13" fill="#4a5a6b"/>
+<polygon points="130,10 130,13 128.5,11.5 128.5,11.5" fill="#efffff"/>
+<polygon points="130,13 119,13 120.5,11.5 128.5,11.5" fill="#efffff"/>
+<polygon points="120,11 129,11 129,12 120,12" fill="#97a8b9"/>
+<rect x="114" y="16" width="22" height="16" fill="#080810"/>
+<rect x="116" y="18" width="19" height="13" fill="#7b8c9c"/>
+<rect x="117" y="19" width="17" height="1" fill="#adbdc6"/>
+<rect x="117" y="19" width="1" height="12" fill="#adbdc6"/>
+<rect x="116" y="18" width="1" height="1" fill="#637b84"/>
+<rect x="133" y="18" width="1" height="1" fill="#637b84"/>
+<rect x="134" y="18" width="1" height="1" fill="#526b73"/>
+<rect x="116" y="30" width="1" height="1" fill="#637b84"/>
+<rect x="116" y="31" width="1" height="1" fill="#526b73"/>
+<polygon points="126.5,20 132.5,26 120.5,26" fill="#080810"/>
+<polygon points="132.5,26 120.5,26 124.121,24.5 128.879,24.5" fill="#adbdc6"/>
+<polygon points="126.5,21.414 130.086,25 122.914,25" fill="#4a5a6b"/>
+<polygon points="121,27 132,27 132,30 121,30" fill="#080810"/>
+<polygon points="132,27 132,30 130.5,28.5 130.5,28.5" fill="#adbdc6"/>
+<polygon points="132,30 121,30 122.5,28.5 130.5,28.5" fill="#adbdc6"/>
+<polygon points="122,28 131,28 131,29 122,29" fill="#4a5a6b"/>
+</svg>

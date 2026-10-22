@@ -152,6 +152,25 @@ program does the same:
   working together), and the HTTP client and internet radio, against small
   servers the tests run on the computer itself.
 
+### The NeoAmp skin
+
+`skins/NeoAmp.wsz` is a skin drawn entirely as SVG
+([SVG_SKINS.md](SVG_SKINS.md)): the base skin's layout and colours, traced,
+with NeoAmp's name and icon in place of Winamp's. `skins/neo/make.py` draws
+it. It needs only Python 3 and its standard library (`py` instead of
+`python3` on Windows), and nothing else in the build uses it:
+
+```bash
+python3 skins/neo/make.py
+```
+
+It writes an SVG for every sheet but the optional `nums_ex` (which the base
+skin lacks too), `viscolor.txt` and `pledit.txt` into `skins/neo/`, and packs
+them into `skins/NeoAmp.wsz`. Change the script rather
+than the SVGs, and commit the script, the SVGs and the `.wsz` together. The
+skin has no bitmaps, so Winamp and Webamp, which ignore SVG sheets, show their
+own base skin instead.
+
 ### Audio
 
 Playback follows Winamp's own input plugin, DSP, output plugin chain, spread

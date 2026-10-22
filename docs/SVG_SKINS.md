@@ -88,3 +88,7 @@ classic ones reach, is drawn less finely and enlarged the rest of the way.
 
 To keep the skin working in Winamp, leave the bitmaps in the archive, or
 export each SVG at its own size and save it as the bitmap.
+
+NeoAmp's own skin, `skins/NeoAmp.wsz` in the source repository, is an example
+with every sheet as SVG and no bitmaps. A script draws it rather than an
+editor; see [The NeoAmp skin](DEVELOPMENT.md#the-neoamp-skin).
