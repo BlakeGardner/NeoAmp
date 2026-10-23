@@ -285,7 +285,8 @@ surface made, so the renderer is rebuilt with the window.
 The built-in presets are the `.milk` files in `milkdrop/presets`, each named
 in `src/milkdrop/built_in.rs`, which embeds them, and credited in
 `milkdrop/README.md`. To add one, copy the file in unchanged (it must be
-UTF-8), add its line to both, and run the tests: they compile every
+UTF-8), add its line to both, with the category it goes under in the
+presets menu, and run the tests: they compile every
 built-in preset's equations and shaders, and check that it needs no
 pictures of its own and that its file name suits every platform's file
 system.

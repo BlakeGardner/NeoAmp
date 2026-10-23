@@ -775,21 +775,25 @@ blends into the next preset, H cuts to it at once, Backspace goes back
 through the presets shown before (in random order) or to the one listed
 before, and Scroll Lock keeps the preset showing until you change it.
 Right-click the picture for MilkDrop's menu, whose Presets submenu (also L)
-lists every preset, the one showing marked. The preset showing, the order and
-the time between presets are remembered (see [SETTINGS.md](SETTINGS.md)).
+lists every preset: the built-in ones in a submenu for each of the
+collection's categories (Dancer, Drawing, Fractal, Geometric, Hypnotic,
+Particles, Reaction, Sparkle, Supernova and Waveform), and yours under Your
+presets. The preset showing is marked, and so is the submenu it is in. The
+preset showing, the order and the time between presets are remembered (see
+[SETTINGS.md](SETTINGS.md)).
 
 NeoAmp has 98 presets built in, picked from projectM's "cream of the crop"
 collection; [milkdrop/README.md](../milkdrop/README.md) says who made each.
-None of them needs pictures of its own. Your own `.milk` files go in the MilkDrop folder
-in the settings folder (`milkdrop/`, `MilkDrop\` on Windows and macOS; see
-[Saved settings](#saved-settings)), or in folders inside it; NeoAmp makes the
-folder when MilkDrop's window first opens, and lists what is in it after the
-built-in presets each time the window opens. More than 40 of your presets are
-grouped in the menu by their first letter. The pictures presets use
-(`sampler_worms`, or a random one for `sampler_rand00` and the like) are
-looked for there too, by name, as JPEG, PNG, BMP or TGA files: projectM's
-texture pack can be unpacked into the folder as it is. A missing picture
-shows noise instead.
+None of them needs pictures of its own. Your own `.milk` files go in the
+MilkDrop folder in the settings folder (`milkdrop/`, `MilkDrop\` on Windows
+and macOS; see [Saved settings](#saved-settings)), or in folders inside it;
+NeoAmp makes the folder when MilkDrop's window first opens, and lists what is
+in it after the built-in presets each time the window opens. More than 40 of
+your presets are grouped under Your presets by their first letter. The
+pictures presets use (`sampler_worms`, or a random one for `sampler_rand00`
+and the like) are looked for there too, by name, as JPEG, PNG, BMP or TGA
+files: projectM's texture pack can be unpacked into the folder as it is. A
+missing picture shows noise instead.
 
 MilkDrop hears the music after the equalizer but before the volume and
 balance, so it keeps moving with the volume down.

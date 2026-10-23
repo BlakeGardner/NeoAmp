@@ -6,6 +6,7 @@ use crate::audio::OutputDevice;
 use crate::eqf;
 use crate::library::Entry;
 use crate::menu::{Item, escape};
+use crate::milkdrop::built_in::Category;
 use crate::milkdrop::visualizer::Change;
 use crate::playlist::SortKey;
 use crate::settings::SkinChoice;
@@ -506,8 +507,9 @@ fn milkdrop(ui: &Ui) -> Vec<Item<Command>> {
 /// More of the user's presets than this are grouped by their first letter.
 const UNGROUPED_PRESETS: usize = 40;
 
-/// The presets to choose from: the built-in ones, then the user's, grouped by first letter
-/// when there are many. The one showing is marked.
+/// The presets to choose from: the built-in ones in a submenu for each of their categories,
+/// then the user's in one of their own, grouped by first letter when there are many. The one
+/// showing is marked, and so is the submenu it is in.
 fn milkdrop_presets(ui: &Ui) -> Vec<Item<Command>> {
     let presets = ui.milkdrop.presets();
     let current = ui.milkdrop.current();
@@ -518,30 +520,52 @@ fn milkdrop_presets(ui: &Ui) -> Vec<Item<Command>> {
         )
         .chosen(current == Some(i))
     };
-    let built_in = presets.built_in_count();
-    let mut items: Vec<Item<Command>> = presets
-        .names()
-        .take(built_in)
-        .enumerate()
-        .map(|(i, name)| item(i, name))
+    let showing_category = current.and_then(|i| presets.category(i));
+    let mut items: Vec<Item<Command>> = Category::ALL
+        .into_iter()
+        .filter_map(|c| {
+            let group: Vec<Item<Command>> = presets
+                .names()
+                .enumerate()
+                .filter(|&(i, _)| presets.category(i) == Some(c))
+                .map(|(i, name)| item(i, name))
+                .collect();
+            (!group.is_empty()).then(|| {
+                Item::submenu(format!("&{}", c.name()), group).chosen(showing_category == Some(c))
+            })
+        })
         .collect();
+    let built_in = presets.built_in_count();
     let users: Vec<(usize, &str)> = presets.names().enumerate().skip(built_in).collect();
     if users.is_empty() {
         return items;
     }
-    items.push(Item::separator());
-    if users.len() <= UNGROUPED_PRESETS {
-        items.extend(users.iter().map(|&(i, name)| item(i, name)));
-        return items;
+    if !items.is_empty() {
+        items.push(Item::separator());
     }
-    // Sorted by name, so each letter's presets are together.
+    let showing_users = current.is_some_and(|i| i >= built_in);
+    items.push(Item::submenu("&Your presets", users_presets(&users, item)).chosen(showing_users));
+    items
+}
+
+/// The user's presets, given with their places in the list: as they are, or grouped by
+/// first letter when there are more than [`UNGROUPED_PRESETS`].
+fn users_presets(
+    users: &[(usize, &str)],
+    item: impl Fn(usize, &str) -> Item<Command>,
+) -> Vec<Item<Command>> {
+    if users.len() <= UNGROUPED_PRESETS {
+        return users.iter().map(|&(i, name)| item(i, name)).collect();
+    }
     let letter = |name: &str| {
         name.chars()
             .next()
             .filter(char::is_ascii_alphabetic)
             .map_or('#', |c| c.to_ascii_uppercase())
     };
-    let mut rest = users.as_slice();
+    // Sorted by name, so each letter's presets are together.
+    let mut items = Vec::new();
+    let mut rest = users;
     while let Some(&(_, first)) = rest.first() {
         let l = letter(first);
         let n = rest
@@ -794,17 +818,34 @@ mod tests {
                 Change::HardCut
             ))))
         );
+        // The presets come in a submenu for each category; the one showing is marked, and so
+        // is its category's submenu, alone.
         let presets = submenu(&items, "Pre&sets");
-        let shown = ui.milkdrop.current().unwrap();
-        let name = escape(ui.milkdrop.presets().name(shown).unwrap());
-        assert_eq!(find(presets, &name).mark(), Mark::Bullet);
+        let labels: Vec<&str> = presets.iter().map(Item::label).collect();
+        let categories: Vec<String> = Category::ALL
+            .iter()
+            .map(|c| format!("&{}", c.name()))
+            .collect();
         assert_eq!(
-            presets
-                .iter()
-                .filter(|it| it.mark() == Mark::Bullet)
-                .count(),
-            1
+            labels, categories,
+            "no presets of the user's, so no submenu for them"
         );
+        let shown = ui.milkdrop.current().unwrap();
+        let category = ui.milkdrop.presets().category(shown).unwrap();
+        let label = format!("&{}", category.name());
+        assert_eq!(find(presets, &label).mark(), Mark::Bullet);
+        let bullets =
+            |items: &[Item<Command>]| items.iter().filter(|it| it.mark() == Mark::Bullet).count();
+        assert_eq!(bullets(presets), 1);
+        let group = submenu(presets, &label);
+        let name = escape(ui.milkdrop.presets().name(shown).unwrap());
+        assert_eq!(find(group, &name).mark(), Mark::Bullet);
+        assert_eq!(bullets(group), 1);
+        let listed: usize = Category::ALL
+            .iter()
+            .map(|c| submenu(presets, &format!("&{}", c.name())).len())
+            .sum();
+        assert_eq!(listed, crate::milkdrop::built_in::PRESETS.len());
     }
 
     #[test]
@@ -825,12 +866,15 @@ mod tests {
         ui.milkdrop.set_presets(presets);
         let items = build(MenuKind::MilkdropPresets, &ui, &Library::default());
         let built_in = crate::milkdrop::built_in::PRESETS.len();
-        assert_eq!(items[built_in].kind(), &Kind::Separator);
-        let groups: Vec<&str> = items[built_in + 1..].iter().map(Item::label).collect();
+        let n = Category::ALL.len();
+        assert_eq!(items[n].kind(), &Kind::Separator);
+        assert_eq!(items.len(), n + 2);
+        let users = submenu(&items, "&Your presets");
+        let groups: Vec<&str> = users.iter().map(Item::label).collect();
         assert_eq!(groups, ["&#", "&A", "&B"]);
-        assert_eq!(submenu(&items, "&B").len(), UNGROUPED_PRESETS);
+        assert_eq!(submenu(users, "&B").len(), UNGROUPED_PRESETS);
         assert_eq!(
-            find(submenu(&items, "&A"), "a00").kind(),
+            find(submenu(users, "&A"), "a00").kind(),
             &Kind::Command(Command::Key(KeyCmd::Milkdrop(MilkdropCmd::Change(
                 Change::Select(built_in + UNGROUPED_PRESETS)
             ))))
