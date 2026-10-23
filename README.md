@@ -5,7 +5,7 @@
 <h1 align="center">NeoAmp</h1>
 
 <p align="center">
-  <strong>Classic Winamp, rebuilt for today's Windows, Mac and Linux.</strong>
+  <strong>Classic Winamp, rebuilt for modern Windows, Mac and Linux.</strong>
 </p>
 
 <p align="center">

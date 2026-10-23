@@ -6,7 +6,8 @@ setting controls, what values it takes and what happens to a value NeoAmp
 cannot use. The code behind it is [src/settings.rs](../src/settings.rs) and
 [src/m3u.rs](../src/m3u.rs). The same folder also holds your skins and
 equalizer presets; see [Skins, presets and auto-load
-presets](#skins-presets-and-auto-load-presets).
+presets](#skins-presets-and-auto-load-presets). The [environment
+variables](#environment-variables) NeoAmp reads are listed at the end.
 
 ## Where the files are
 
@@ -60,7 +61,7 @@ Whole numbers work wherever a decimal is expected (`volume = 1` is the same as
 `volume = 1.0`). Booleans are `true` or `false`, in lowercase.
 
 Run NeoAmp from a terminal to see the warnings; `RUST_LOG=neoamp=debug` shows
-more.
+more (see [Environment variables](#environment-variables)).
 
 ## Example
 
@@ -467,3 +468,82 @@ replace its playlist and play, or join it with `--enqueue`) and saves them as
 usual; the new start then ends. `--scale` is not handed over. A config folder
 of its own (`NEOAMP_CONFIG_DIR`) makes a NeoAmp of its own, which runs beside
 the others.
+
+## Environment variables
+
+NeoAmp reads these when it starts. They are not saved, so set them each time,
+in a terminal, a launcher or a script. In the Flatpak, give them with
+`flatpak run --env=NAME=value io.github.BlakeGardner.NeoAmp`.
+
+| Variable | Values | What it controls |
+| --- | --- | --- |
+| `NEOAMP_CONFIG_DIR` | a folder | Where the settings, playlist, skins, presets and downloads are kept, instead of the platform's folders. |
+| `NEOAMP_BACKEND` | `x11`, `wayland` | Which window system NeoAmp uses on Linux. |
+| `NEOAMP_UNMANAGED` | `1`, `true`, `yes` / `0`, `false`, `no` | Whether NeoAmp uses override-redirect windows on X11, instead of finding out at startup. |
+| `RUST_LOG` | a log filter | Which messages the log shows. Default `info,sctk_adwaita=error`. |
+| `RUST_LOG_STYLE` | `auto`, `always`, `never` | Whether the log is coloured. Default `auto`. |
+
+- **`NEOAMP_CONFIG_DIR`** is described under [Where the files
+  are](#where-the-files-are). An empty value counts as unset. Give a full
+  path: a relative one is taken from the folder NeoAmp starts in, which a
+  launcher may choose differently. Each config folder makes a NeoAmp of its
+  own, so starting NeoAmp with another folder runs a second copy beside the
+  first rather than handing it the files.
+- **`NEOAMP_BACKEND`** matters only on Linux and the BSDs. Docking needs to
+  place windows, which Wayland forbids, so without it NeoAmp uses X11
+  (XWayland on a Wayland desktop) whenever `DISPLAY` is set. `x11` asks for
+  X11 even when `DISPLAY` is not set; if no X server answers, NeoAmp logs a
+  warning and uses Wayland, where windows do not dock. `wayland` drops the
+  preference for X11, so NeoAmp uses Wayland whenever `WAYLAND_DISPLAY` is
+  set. Case does not matter, and any other value counts as unset. The
+  Flatpak has no access to Wayland, so `wayland` changes nothing there. See
+  [Windows, docking and zoom](GUIDE.md#windows-docking-and-zoom) in the user
+  guide for what each one can do.
+- **`NEOAMP_UNMANAGED`**: some X11 window managers, COSMIC among them,
+  ignore requests to move windows. NeoAmp checks for this at startup and, if
+  so, recreates its windows as override-redirect windows, which the window
+  manager leaves where NeoAmp puts them. Such windows have no taskbar entry
+  and stay above other windows. `1` uses them from the start and `0` never
+  does; either way the check is skipped. Only X11 has such windows. The
+  values are lowercase, and any other value counts as unset.
+- **`RUST_LOG`** takes [env_logger's
+  filters](https://docs.rs/env_logger/0.11/env_logger/#enabling-logging): a
+  level (`error`, `warn`, `info`, `debug` or `trace`) for every message, or
+  `target=level` pairs separated by commas. NeoAmp's own targets are
+  `neoamp` and its source files below it, so `neoamp=debug` shows NeoAmp's
+  messages down to debug level and no other library's, and
+  `info,neoamp::http=debug` keeps the usual messages and adds internet
+  radio's debug ones. Setting it replaces the default entirely. The log goes
+  to standard error: the terminal on Linux, and on macOS when the program
+  inside the app is started from Terminal (see [macOS](GUIDE.md#macos)).
+  Windows opens no console for NeoAmp, so redirect it there:
+  `neoamp.exe 2> neoamp.log` (see [Windows](GUIDE.md#windows)).
+- **`RUST_LOG_STYLE`**: `auto` colours the log only when it goes to a
+  terminal.
+
+### The platform's variables
+
+The platform's own variables change some of the same things:
+
+| Variable | Platform | What it controls |
+| --- | --- | --- |
+| `HOME` | Linux, macOS | The home folder that the config and cache folders are in. |
+| `XDG_CONFIG_HOME` | Linux | The config folder: `$XDG_CONFIG_HOME/neoamp/` instead of `~/.config/neoamp/`. |
+| `XDG_CACHE_HOME` | Linux | The Skin Museum's downloads: `$XDG_CACHE_HOME/neoamp/museum/` instead of `~/.cache/neoamp/museum/`. |
+| `XDG_RUNTIME_DIR` | Linux | Where the running NeoAmp listens for a second start's files (without it, in the config folder). |
+| `TMPDIR` | macOS | The same, on macOS. The system sets it to a folder of the user's own. |
+| `DISPLAY` | Linux | Whether X11 is there, which NeoAmp prefers (see `NEOAMP_BACKEND` above). |
+| `WAYLAND_DISPLAY` | Linux | Whether Wayland is there, for when NeoAmp does not use X11. |
+| `WINIT_X11_SCALE_FACTOR` | Linux, on X11 | The desktop's scale factor, which multiplies the zoom: a number above `0`, or `randr` to work it out from the monitor's size. Any other value crashes NeoAmp. |
+
+- The `XDG_` folders are used only when given as full paths; relative ones
+  are ignored. The Flatpak sets `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` to
+  folders inside `~/.var/app/io.github.BlakeGardner.NeoAmp/`, which is why
+  its files are there.
+- On Windows the folders come from the system's known folders, not from
+  `%APPDATA%` and `%LOCALAPPDATA%`, so changing those variables does not
+  move them. Use `NEOAMP_CONFIG_DIR` instead.
+- NeoAmp reads no proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`): internet
+  radio and the Skin Museum connect to their servers directly.
+- The sound server, D-Bus and window system libraries read variables of their
+  own, which this page does not list.
