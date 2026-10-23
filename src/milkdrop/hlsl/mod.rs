@@ -1,10 +1,10 @@
 //! MilkDrop 2's pixel shaders, which presets write in Direct3D 9's HLSL, translated to WGSL
-//! for wgpu: the C preprocessor ([`pre`]), the parser ([`syntax`]), and type checking and
+//! for wgpu: the C preprocessor (`pre`), the parser (`syntax`), and type checking and
 //! writing WGSL (`emit`).
 //!
 //! A preset's shader is a header of declarations and functions, then `shader_body { ... }`,
 //! which sets `ret` (the colour) from `uv` and the rest. MilkDrop compiled it after its
-//! `include.fx`, whose definitions ([`prelude`]) are given here the same way, so presets'
+//! `include.fx`, whose definitions (`prelude`) are given here the same way, so presets'
 //! `GetBlur1(uv)`, `q1` or `time` mean what they meant to MilkDrop.
 //!
 //! The WGSL reads its inputs from one uniform block (see [`INPUTS_SIZE`] for its layout) and

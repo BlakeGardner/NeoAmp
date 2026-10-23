@@ -21,7 +21,8 @@ pub enum Texture {
     NoiseHq,
     NoiseVolLq,
     NoiseVolHq,
-    /// A texture from the presets' textures, by its index in [`Used::user`].
+    /// A texture from the presets' textures, by its index in the shader's list of them
+    /// ([`Translated::user_textures`](super::Translated::user_textures)).
     User(usize),
 }
 
