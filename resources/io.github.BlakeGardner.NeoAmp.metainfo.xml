@@ -20,6 +20,7 @@
       <li>Plays MP3, MP2, AAC, M4A (AAC and Apple Lossless), WAV, AIFF, FLAC and Ogg Vorbis files without gaps between tracks</li>
       <li>Plays SHOUTcast and Icecast internet radio</li>
       <li>Ten-band equalizer with Winamp's presets, spectrum analyzer and oscilloscope</li>
+      <li>MilkDrop, the visualizer Winamp came with, with 98 presets built in and a folder for your own</li>
       <li>M3U and PLS playlists, Jump to file and File info</li>
       <li>Windows that dock and snap together, and fold down to windowshade bars</li>
       <li>Media keys and the desktop's "now playing" controls</li>
@@ -55,6 +56,7 @@
 
   <!-- Each release adds its version here, newest first; the release workflow checks it. -->
   <releases>
+    <release version="0.2.0" date="2026-10-23"/>
     <release version="0.1.0" date="2026-10-22"/>
   </releases>
 </component>
