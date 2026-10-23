@@ -88,7 +88,8 @@ Get NeoAmp from the
 | System | Download |
 | --- | --- |
 | Windows 10 and 11 | an installer, or a zip to run without installing |
-| macOS 11 or newer | a disk image, for Apple silicon or Intel |
+| macOS 11 or newer (Apple silicon) | a disk image |
+| macOS 10.12.2 or newer (Intel) | a disk image |
 | Linux (x86-64) | a Flatpak bundle, or the program in a `.tar.gz` |
 
 The Windows build isn't signed yet, so Windows asks before running it the

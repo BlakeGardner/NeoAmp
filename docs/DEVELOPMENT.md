@@ -348,6 +348,17 @@ releases' are signed and notarized (below). The `macOS` workflow
 (`.github/workflows/macos.yml`) builds, signs and notarizes both on GitHub
 for each release, and only then.
 
+`build-app.sh` builds each app for the oldest macOS it can run on and writes
+that into its `Info.plist` as `LSMinimumSystemVersion`: macOS 11 for Apple
+silicon, the first macOS those Macs had, and 10.12.2 for Intel. Rust builds
+for Intel Macs back to 10.12, and souvlaki links Apple's MediaPlayer
+framework, which came in 10.12.2. Anything newer that a dependency uses
+stops NeoAmp on an older macOS: a newer function, constant or framework
+keeps it from starting at all, and a newer Objective-C method crashes it
+when called. So check a new or updated macOS dependency for any it uses
+without first checking the macOS version, as wgpu does before using newer
+Metal features.
+
 #### Signing and notarizing
 
 The Release workflow signs the app and its disk image with the Apple

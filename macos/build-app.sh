@@ -22,9 +22,13 @@ if [[ "$(uname -s)" != Darwin ]]; then
     exit 1
 fi
 arch=${1:-$(uname -m)}
+# The oldest macOS the app runs on, for each kind of Mac.
 case $arch in
-    arm64) target=aarch64-apple-darwin ;;
-    x86_64) target=x86_64-apple-darwin ;;
+    # Apple silicon Macs came with macOS 11.
+    arm64) target=aarch64-apple-darwin minimum=11.0 ;;
+    # Rust builds for Intel Macs back to macOS 10.12, and souvlaki (the Now Playing display)
+    # links the MediaPlayer framework, which came in 10.12.2.
+    x86_64) target=x86_64-apple-darwin minimum=10.12.2 ;;
     *)
         echo "usage: macos/build-app.sh [arm64|x86_64]" >&2
         exit 1
@@ -40,9 +44,8 @@ icon=resources/icons/neoamp-macos.svg
 # "path+file:///…/NeoAmp#neoamp@0.2.0", or "…#0.2.0" when the folder is named neoamp.
 pkgid=$(cargo pkgid)
 version=${pkgid##*[#@]}
-# The compiler builds for the oldest macOS the Info.plist names.
-MACOSX_DEPLOYMENT_TARGET=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist")
-export MACOSX_DEPLOYMENT_TARGET
+# The compiler builds for that macOS, and the Info.plist names it.
+export MACOSX_DEPLOYMENT_TARGET=$minimum
 
 out=target/macos/$arch
 app=$out/NeoAmp.app
@@ -56,6 +59,7 @@ cp "$plist" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy \
     -c "Set :CFBundleShortVersionString $version" \
     -c "Set :CFBundleVersion $version" \
+    -c "Set :LSMinimumSystemVersion $minimum" \
     "$app/Contents/Info.plist"
 
 # The icon, drawn at each size macOS uses.
