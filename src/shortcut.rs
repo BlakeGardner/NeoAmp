@@ -10,6 +10,8 @@ const COMMAND: char = '⌘';
 const LEFT: char = '←';
 const RIGHT: char = '→';
 const FORWARD_DELETE: char = '⌦';
+const BACKSPACE: char = '⌫';
+const RETURN: char = '↩';
 
 /// How shortcuts are written.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,7 +35,16 @@ impl Style {
     pub const fn symbols(self) -> &'static [char] {
         match self {
             Style::Windows => &[],
-            Style::Mac => &[OPTION, SHIFT, COMMAND, LEFT, RIGHT, FORWARD_DELETE],
+            Style::Mac => &[
+                OPTION,
+                SHIFT,
+                COMMAND,
+                LEFT,
+                RIGHT,
+                FORWARD_DELETE,
+                BACKSPACE,
+                RETURN,
+            ],
         }
     }
 }
@@ -47,6 +58,14 @@ pub enum Key {
     Right,
     /// Delete, which is forward delete on a Mac.
     Delete,
+    Space,
+    Backspace,
+    /// Enter, Return on a Mac.
+    Enter,
+    Escape,
+    ScrollLock,
+    /// A function key: F1 to F24.
+    F(u8),
 }
 
 /// A key and the modifiers held with it.
@@ -141,6 +160,12 @@ impl fmt::Display for Written {
                     Key::Left => f.write_str("Left"),
                     Key::Right => f.write_str("Right"),
                     Key::Delete => f.write_str("Del"),
+                    Key::Space => f.write_str("Space"),
+                    Key::Backspace => f.write_str("Backspace"),
+                    Key::Enter => f.write_str("Enter"),
+                    Key::Escape => f.write_str("Esc"),
+                    Key::ScrollLock => f.write_str("Scroll Lock"),
+                    Key::F(n) => write!(f, "F{n}"),
                 }
             }
             Style::Mac => {
@@ -150,12 +175,19 @@ impl fmt::Display for Written {
                         f.write_char(symbol)?;
                     }
                 }
-                f.write_char(match key {
-                    Key::Char(ch) => ch,
-                    Key::Left => LEFT,
-                    Key::Right => RIGHT,
-                    Key::Delete => FORWARD_DELETE,
-                })
+                match key {
+                    Key::Char(ch) => f.write_char(ch),
+                    Key::Left => f.write_char(LEFT),
+                    Key::Right => f.write_char(RIGHT),
+                    Key::Delete => f.write_char(FORWARD_DELETE),
+                    Key::Space => f.write_str("Space"),
+                    Key::Backspace => f.write_char(BACKSPACE),
+                    Key::Enter => f.write_char(RETURN),
+                    // The built-in symbol font has no ⎋.
+                    Key::Escape => f.write_str("Esc"),
+                    Key::ScrollLock => f.write_str("Scroll Lock"),
+                    Key::F(n) => write!(f, "F{n}"),
+                }
             }
         }
     }
@@ -193,11 +225,36 @@ mod tests {
         assert_eq!(mac(Shortcut::new(Key::Right)), "→");
         assert_eq!(mac(Shortcut::char('=').ctrl()), "⌘=");
         assert_eq!(mac(Shortcut::char('Z')), "Z");
+        assert_eq!(mac(Shortcut::new(Key::Enter).alt()), "⌥↩");
+        assert_eq!(mac(Shortcut::new(Key::Backspace)), "⌫");
+        assert_eq!(mac(Shortcut::new(Key::Space)), "Space");
+        assert_eq!(mac(Shortcut::char('K').ctrl().shift()), "⇧⌘K");
+    }
+
+    #[test]
+    fn named_keys_are_spelt_out_the_windows_way() {
+        assert_eq!(windows(Shortcut::new(Key::Enter).alt()), "Alt+Enter");
+        assert_eq!(windows(Shortcut::new(Key::Space)), "Space");
+        assert_eq!(windows(Shortcut::new(Key::Backspace)), "Backspace");
+        assert_eq!(windows(Shortcut::new(Key::Escape)), "Esc");
+        assert_eq!(windows(Shortcut::new(Key::ScrollLock)), "Scroll Lock");
+        assert_eq!(windows(Shortcut::new(Key::F(14))), "F14");
     }
 
     #[test]
     fn the_symbols_cover_everything_a_style_writes_beyond_ascii() {
-        let keys = [Key::Char('A'), Key::Left, Key::Right, Key::Delete];
+        let keys = [
+            Key::Char('A'),
+            Key::Left,
+            Key::Right,
+            Key::Delete,
+            Key::Space,
+            Key::Backspace,
+            Key::Enter,
+            Key::Escape,
+            Key::ScrollLock,
+            Key::F(14),
+        ];
         for style in [Style::Windows, Style::Mac] {
             for key in keys {
                 let all = Shortcut::new(key)

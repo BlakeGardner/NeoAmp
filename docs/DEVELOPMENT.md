@@ -112,8 +112,14 @@ program does the same:
   8 MB and 32 MB together, refuses archives listing over 4096 files, and
   reads a bitmap's size before decoding it.
 - `src/main_window.rs`, `src/eq_window.rs`, `src/playlist_window.rs` draw the
-  three windows and their windowshade bars; `src/ui.rs` holds state, hit
-  testing and input.
+  three windows and their windowshade bars, and `src/gen_window.rs` the frame
+  of Winamp's generic windows (`gen.bmp`), which MilkDrop's wears; `src/ui.rs`
+  holds state, hit testing and input.
+- `src/milkdrop/` is MilkDrop (see [MilkDrop](GUIDE.md#milkdrop)): its
+  expression language, presets, sound analysis and frame-by-frame engine, the
+  HLSL-to-WGSL translator for presets' shaders, the wgpu renderer, and the
+  presets and pictures it chooses from. `src/milkdrop_view.rs` draws it on
+  its window's own GPU device and lays the picture over the window.
 - `src/app.rs` runs one borderless `winit` window per NeoAmp window, presents
   each framebuffer through `pixels` (wgpu) and drives the title-bar drags and
   docking; `src/dock.rs` holds the docking geometry. `src/upscale.rs` draws

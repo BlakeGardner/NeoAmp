@@ -4,8 +4,8 @@ NeoAmp remembers how it was left in two files: `settings.toml`, described key
 by key below, and `playlist.m3u8`, the playlist. This page says what each
 setting controls, what values it takes and what happens to a value NeoAmp
 cannot use. The code behind it is [src/settings.rs](../src/settings.rs) and
-[src/m3u.rs](../src/m3u.rs). The same folder also holds your skins and
-equalizer presets; see [Skins, presets and auto-load
+[src/m3u.rs](../src/m3u.rs). The same folder also holds your skins,
+equalizer presets and MilkDrop presets; see [Skins, presets and auto-load
 presets](#skins-presets-and-auto-load-presets). The [environment
 variables](#environment-variables) NeoAmp reads are listed at the end.
 
@@ -70,7 +70,7 @@ A first start writes this (the window positions depend on the screen):
 ```toml
 # NeoAmp settings, rewritten whenever they change. Edit them while NeoAmp is closed.
 # volume: 0 to 1. balance: -1 (left) to 1 (right). eq: decibels, -12 to 12.
-# windows: screen pixels; eq and playlist offsets are from the main window's corner.
+# windows: screen pixels; the other windows' offsets are from the main window's corner.
 
 volume = 0.78
 balance = 0.0
@@ -100,6 +100,10 @@ bands = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 [playlist]
 current = 0
 
+[milkdrop]
+random = true
+seconds = 16.0
+
 [windows]
 scale = 1.0
 main = [64, 64]
@@ -115,10 +119,16 @@ open = true
 shade = false
 offset = [0, 232]
 size = [275, 116]
+
+[windows.milkdrop]
+open = false
+shade = false
+size = [275, 232]
 ```
 
-`zoom`, `skin` and the `[output]` table are written only once they differ
-from the defaults. Choosing the Winamp base skin, for one, adds this line
+`zoom`, `skin`, MilkDrop's `preset` and the `[output]` table are written
+only once they differ from the defaults, and MilkDrop's `offset` once its
+window has been open. Choosing the Winamp base skin, for one, adds this line
 under `always_on_top`:
 
 ```toml
@@ -244,12 +254,31 @@ command line replace the playlist and start playing from their first file, so
 this key does not apply then (it does with `--enqueue`, which adds them to the
 end).
 
+## `[milkdrop]`: MilkDrop's presets
+
+| Key | Values | Default | What it controls |
+| --- | --- | --- | --- |
+| `preset` | a preset's name | none | The preset MilkDrop shows, which it starts with next time. |
+| `random` | `true` / `false` | `true` | Whether presets come in random order or in the order they are listed (**R** in MilkDrop's window). |
+| `seconds` | `1.0` to `3600.0` | `16.0` | How long each preset runs before the next blends in. |
+
+- **`preset`** is a built-in preset's title, or one of your files' names
+  without `.milk` (see [Skins, presets and auto-load
+  presets](#skins-presets-and-auto-load-presets)). Without it, or when no
+  preset has that name (a file deleted since, say), MilkDrop starts with any
+  preset, and the one it shows is saved instead. A value that is not text is
+  ignored, with a warning in the log.
+- **`seconds`**: each preset also runs a random extra of up to 62.5% more,
+  then blends into the next over 2.7 seconds. The default gives MilkDrop's own
+  16 seconds plus up to 10. Values outside the range are brought into it;
+  `nan` and `inf` keep the default. Only the settings file changes it.
+
 ## `[windows]`: where the windows are
 
 Window positions are kept in **screen pixels** (physical pixels, not the
 desktop's scaled ones). The main window has an absolute position. The
-equalizer and playlist are kept **relative to the main window**, so windows
-docked to it stay docked when it moves between runs.
+equalizer, playlist and MilkDrop are kept **relative to the main window**, so
+windows docked to it stay docked when it moves between runs.
 
 | Key | Values | Default | What it controls |
 | --- | --- | --- | --- |
@@ -270,33 +299,36 @@ docked to it stay docked when it moves between runs.
   of the main window's title bar would land off every connected screen (a
   monitor unplugged since, say), so the window can always be grabbed.
 
-### `[windows.eq]` and `[windows.playlist]`
+### `[windows.eq]`, `[windows.playlist]` and `[windows.milkdrop]`
 
 | Key | Values | Default | What it controls |
 | --- | --- | --- | --- |
-| `open` | `true` / `false` | `true` | Whether the window is shown (**Alt+G** for the equalizer, **Alt+E** for the playlist). |
-| `shade` | `true` / `false` | `false` | Whether the window is in windowshade mode, collapsed to a bar (its shade button, a double-click on its title bar, or for the playlist **Ctrl+W**). |
+| `open` | `true` / `false` | `true` (MilkDrop: `false`) | Whether the window is shown (**Alt+G** for the equalizer, **Alt+E** for the playlist, **Ctrl+Shift+K** for MilkDrop). |
+| `shade` | `true` / `false` | `false` | Whether the window is in windowshade mode, collapsed to a bar (its shade button, a double-click on its title bar, or for the playlist **Ctrl+W**). MilkDrop's window has no such mode, and ignores it. |
 | `offset` | `[dx, dy]` | none | From the main window's top-left corner to this window's, in screen pixels at `scale`. |
-| `size` | `[width, height]` (playlist only) | `[275, 116]` | The playlist's size, in skin pixels. |
+| `size` | `[width, height]` (playlist and MilkDrop only) | `[275, 116]` (MilkDrop: `[275, 232]`) | The window's size, in skin pixels. |
 
 - **`offset`** is remembered for a closed window too, so it reopens where it
-  was. Without it, the equalizer docks under the main window, and the
-  playlist under the equalizer (or under the main window when the equalizer
-  is elsewhere or closed). At 1x, docked under the main window is `[0, 116]`
-  and under the equalizer `[0, 232]`; at 1.5x these are `[0, 174]` and
-  `[0, 348]`. A window in windowshade mode is 14 skin pixels high, so under a
-  shaded main window at 1x is `[0, 14]`. At startup, an offset that would put
-  the window's title bar off every screen is ignored.
+  was. Without it, the equalizer docks under the main window, the playlist
+  under the equalizer (or under the main window when the equalizer is
+  elsewhere or closed), and MilkDrop to the right of the main window. At 1x,
+  docked under the main window is `[0, 116]`, under the equalizer `[0, 232]`
+  and to the right of the main window `[275, 0]`; at 1.5x these are
+  `[0, 174]`, `[0, 348]` and `[413, 0]`. A window in windowshade mode is 14
+  skin pixels high, so under a shaded main window at 1x is `[0, 14]`. MilkDrop
+  closed while it fills the screen keeps the offset its window had. At
+  startup, an offset that would put the window's title bar off every screen
+  is ignored.
 - **`shade`**: a window collapsed to its bar keeps its width. The windows
   docked below it follow when it is shaded or opened out (see
   [Windowshade](GUIDE.md#windowshade) in the user guide), so the offsets saved are those of the windows as they are.
 - **`size`** is in skin pixels, so it does not change with the zoom. The
-  playlist grows in steps of 25 by 29 pixels from its smallest size, 275 by
-  116, as when resized from its grip. Other values are moved to the nearest
-  step, and anything smaller becomes the smallest size. In windowshade mode
-  `size` keeps the height the playlist opens out to; the bar's own grip
-  changes only the width. The equalizer has a fixed size and ignores this
-  key.
+  playlist and MilkDrop grow in steps of 25 by 29 pixels from their smallest
+  size, 275 by 116, as when resized from the grip. Other values are moved to
+  the nearest step, and anything smaller becomes the smallest size. In
+  windowshade mode `size` keeps the height the playlist opens out to; the
+  bar's own grip changes only the width. The equalizer has a fixed size and
+  ignores this key. MilkDrop filling the screen keeps the size of its window.
 
 ### Platform notes
 
@@ -391,6 +423,7 @@ Beside the two files, the folder holds:
 | `skins/` (`Skins\` on Windows and macOS) | The skins the Skins menu lists: every `.wsz` file in it. |
 | `presets/` (`Presets\` on Windows and macOS) | The equalizer presets listed under EQ presets > Load: every `.eqf` file in it. |
 | `autoload.eqf` | Auto-load presets, one per file name. |
+| `milkdrop/` (`MilkDrop\` on Windows and macOS) | Your MilkDrop presets, every `.milk` file in it and in the folders inside it, and the pictures they use. |
 
 - **Skins** opened through the menu, dropped onto a window or given on the
   command line are copied into the skins folder, so the menu lists them from
@@ -408,6 +441,14 @@ Beside the two files, the folder holds:
   preset forgets them. With **AUTO** on, a file's preset loads as the file
   starts. Names match regardless of case. A file NeoAmp cannot read as
   presets is renamed `autoload.eqf.bad`, and NeoAmp starts without any.
+
+- **MilkDrop's folder** is made when MilkDrop's window first opens, and read
+  each time it opens: its `.milk` files, eight folders deep, are listed after
+  the built-in presets, by file name without `.milk`. A file over 1 MB is
+  not read. The pictures presets name (`sampler_worms` is `worms.jpg`, say)
+  are found there too, by name regardless of case, as `.jpg`, `.jpeg`,
+  `.png`, `.bmp` or `.tga` files up to 4096 pixels a side; where two have the
+  same name, the first in alphabetical order of path is used.
 
 Preset names are written in UTF-8. Winamp wrote them in the Windows code page,
 so names with accents from Winamp's files show correctly in NeoAmp, but
@@ -441,6 +482,9 @@ stays when the cache is cleared.
   entry's title. The Open URL dialog keeps no list of recent addresses.
 - Which playlist rows were selected, and how far the playlist was scrolled
   (it scrolls to the current entry).
+- Whether MilkDrop filled the screen or had its preset locked, and the
+  presets it showed before the current one (what Backspace goes back
+  through).
 - The Skin Museum's list and searches, which are kept only while NeoAmp runs,
   and a skin being tried on that was not installed: `skin` keeps naming the
   one chosen before, which comes back when the dialog closes and at the next

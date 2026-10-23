@@ -1,5 +1,5 @@
 //! The desktop application: one borderless OS window per NeoAmp window (main, equalizer,
-//! playlist), each presented through `pixels`, with Winamp-style magnetic docking.
+//! playlist, MilkDrop), each presented through `pixels`, with Winamp-style magnetic docking.
 //!
 //! Docking needs to read and set window positions. X11 (including XWayland) allows that, so
 //! the X11 backend is preferred whenever `DISPLAY` is set; pure Wayland forbids it, in which
@@ -25,7 +25,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::monitor::MonitorHandle;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
-use winit::window::{Cursor, CursorIcon, CustomCursor, Window, WindowId, WindowLevel};
+use winit::window::{Cursor, CursorIcon, CustomCursor, Fullscreen, Window, WindowId, WindowLevel};
 
 use crate::audio::{self, Location, OutputDevice, Player, Scanner};
 use crate::canvas::{Canvas, Density, Rect};
@@ -42,11 +42,17 @@ use crate::jump_window::JumpWindow;
 use crate::library::{self, Entry};
 use crate::menu::{self, Anchor};
 use crate::menus::{self, AppCommand, Command, Library};
+use crate::milkdrop::built_in;
+use crate::milkdrop::gpu::TextureLoader;
+use crate::milkdrop::presets::Presets;
+use crate::milkdrop::textures::Textures;
+use crate::milkdrop::visualizer::Change;
+use crate::milkdrop_view::MilkdropView;
 use crate::museum::{self, Cache};
 use crate::museum_dialog::Listings;
 use crate::museum_window::{Event as MuseumEvent, MuseumWindow, Tried};
 use crate::now_playing::{self, NowPlaying};
-use crate::playlist::SortKey;
+use crate::playlist::{Rng, SortKey};
 use crate::playlist_file;
 use crate::popup::Popups;
 use crate::settings::{Saver, Settings, SkinChoice, Store, WindowLayout};
@@ -54,8 +60,8 @@ use crate::shortcut::Shortcut;
 use crate::skin::Skin;
 use crate::sprites::pl::TRACK_H;
 use crate::ui::{
-    Action, CursorMove, InfoOf, KeyCmd, ListCmd, MenuRequest, Mods, OutputChoice, PlayState, Track,
-    Transport, Ui, WindowKind,
+    Action, CursorMove, InfoOf, KeyCmd, ListCmd, MenuRequest, MilkdropCmd, Mods, OutputChoice,
+    PlayState, Track, Transport, Ui, WindowKind,
 };
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::url_dialog::{Outcome as UrlOutcome, Purpose as UrlPurpose};
@@ -70,6 +76,10 @@ pub const BASE_SKIN: &[u8] = include_bytes!("../skins/base-2.91.wsz");
 /// chosen. Its pointers come from [`BASE_SKIN`].
 pub const NEOAMP_SKIN: &[u8] = include_bytes!("../skins/NeoAmp.wsz");
 const FRAME: Duration = Duration::from_millis(33);
+/// MilkDrop's window is drawn 60 times a second.
+const MD_FRAME: Duration = Duration::from_micros(16_667);
+/// The windows placed relative to the main window, which remember where they were.
+const DOCKED: [WindowKind; 3] = [WindowKind::Eq, WindowKind::Playlist, WindowKind::Milkdrop];
 /// Where the main window first appears, relative to the primary monitor.
 const INITIAL_OFFSET: (i32, i32) = (64, 64);
 /// Window managers may override a new window's position when mapping it; dock again after this.
@@ -91,7 +101,7 @@ const FOCUS_GRACE: Duration = Duration::from_millis(150);
 struct FrameStats {
     since: Instant,
     wakeups: u32,
-    frames: [u32; 3],
+    frames: [u32; 4],
     slowest_present: Duration,
 }
 
@@ -100,7 +110,7 @@ impl FrameStats {
         Self {
             since: now,
             wakeups: 0,
-            frames: [0; 3],
+            frames: [0; 4],
             slowest_present: Duration::ZERO,
         }
     }
@@ -111,6 +121,7 @@ fn kind_index(kind: WindowKind) -> usize {
         WindowKind::Main => 0,
         WindowKind::Eq => 1,
         WindowKind::Playlist => 2,
+        WindowKind::Milkdrop => 3,
     }
 }
 
@@ -166,6 +177,31 @@ fn scaled_size((w, h): (i32, i32), scale: f64) -> PhysicalSize<u32> {
 /// pixels so docked edges land where the rounded window sizes put them.
 fn rescale_offset(offset: i32, from: f64, to: f64) -> i32 {
     round_px((f64::from(offset) / from).round() * to)
+}
+
+/// Where MilkDrop's picture goes in its window, `window` screen pixels big for a canvas
+/// `canvas` skin pixels big: inside the frame, or the whole window when it fills the screen.
+fn md_area(window: PhysicalSize<u32>, canvas: (i32, i32), fullscreen: bool) -> Rect {
+    let (w, h) = (
+        i32::try_from(window.width).unwrap_or(i32::MAX),
+        i32::try_from(window.height).unwrap_or(i32::MAX),
+    );
+    if fullscreen {
+        return Rect::new(0, 0, w, h);
+    }
+    let inner = crate::gen_window::inner(canvas);
+    // Skin pixels to screen pixels along each axis, rounded as the upscaler draws them.
+    let to_x = |v: i32| round_px(f64::from(v) * f64::from(w) / f64::from(canvas.0.max(1)));
+    let to_y = |v: i32| round_px(f64::from(v) * f64::from(h) / f64::from(canvas.1.max(1)));
+    let (x0, y0) = (to_x(inner.x), to_y(inner.y));
+    Rect::new(x0, y0, to_x(inner.right()) - x0, to_y(inner.bottom()) - y0)
+}
+
+/// Where MilkDrop's presets get their pictures: `textures`, with random ones chosen afresh
+/// each run.
+fn texture_loader(textures: Textures) -> TextureLoader {
+    let mut rng = Rng::new();
+    Box::new(move |name| textures.load(name, &mut rng))
 }
 
 /// Whether the modifier of Winamp's Ctrl shortcuts is held. On macOS that is Cmd, as in Mac
@@ -292,6 +328,7 @@ pub fn run(opts: Options) -> Result<()> {
     let player = match Player::new(ui.output.as_ref().map(|o| o.id.clone())) {
         Ok(p) => {
             ui.vis.set_sample_rate(p.sample_rate());
+            ui.milkdrop.set_sample_rate(p.sample_rate());
             Some(p)
         }
         Err(e) => {
@@ -322,7 +359,8 @@ pub fn run(opts: Options) -> Result<()> {
         startup_zoom: opts.zoom.or(settings.zoom),
         applied_scale: 1.0,
         layout: settings.windows,
-        offsets: [None; 3],
+        offsets: [None; 4],
+        md_restore: None,
         restored_main: None,
         saver: None,
         store: store.clone(),
@@ -330,6 +368,7 @@ pub fn run(opts: Options) -> Result<()> {
         next_save: Instant::now() + SAVE_CHECK,
         modifiers: ModifiersState::empty(),
         next_frame: Instant::now(),
+        next_md_frame: Instant::now(),
         stats: FrameStats::new(Instant::now()),
         dialog: None,
         popups: Popups::default(),
@@ -599,6 +638,8 @@ fn pointer_scale(scale_factor: f64) -> u16 {
 struct Pane {
     kind: WindowKind,
     upscaler: Upscaler,
+    /// MilkDrop's picture, in its window.
+    milkdrop: Option<MilkdropView>,
     /// Declared before `window` so the GPU surface is dropped first.
     pixels: Pixels<'static>,
     window: Arc<Window>,
@@ -678,12 +719,13 @@ struct Drag {
     followers: Vec<(WindowKind, i32, i32)>,
 }
 
-/// A playlist resize from its grip in progress.
+/// A resize of the playlist or MilkDrop from its grip in progress.
 struct Resize {
-    /// Where the grip was pressed, in physical pixels from the playlist window's top-left
-    /// corner, which stays put while the window changes size.
+    kind: WindowKind,
+    /// Where the grip was pressed, in physical pixels from the window's top-left corner,
+    /// which stays put while the window changes size.
     start: PhysicalPosition<f64>,
-    /// The playlist's size in skin pixels at that moment.
+    /// The window's size in skin pixels at that moment.
     size: (i32, i32),
 }
 
@@ -724,10 +766,12 @@ struct App {
     /// Where the windows were last known to be: loaded from the settings, then brought up to
     /// date at every save. Positions the backend cannot report keep their saved values.
     layout: WindowLayout,
-    /// For the equalizer and playlist (by `kind_index`), the offset from the main window's
-    /// top-left corner to theirs, in physical pixels at `applied_scale`. Taken from the
-    /// settings at startup and whenever a window closes, so that it reopens where it was.
-    offsets: [Option<(i32, i32)>; 3],
+    /// For the equalizer, playlist and MilkDrop (by `kind_index`), the offset from the main
+    /// window's top-left corner to theirs, in physical pixels at `applied_scale`. Taken from
+    /// the settings at startup and whenever a window closes, so that it reopens where it was.
+    offsets: [Option<(i32, i32)>; 4],
+    /// Where MilkDrop's window was before it filled the screen.
+    md_restore: Option<PhysicalPosition<i32>>,
     /// The saved position the main window was opened at, if it was. Applied again once the
     /// window manager has mapped the window, and kept if the windows are recreated.
     restored_main: Option<PhysicalPosition<i32>>,
@@ -741,6 +785,8 @@ struct App {
     next_save: Instant,
     modifiers: ModifiersState,
     next_frame: Instant,
+    /// When MilkDrop's window is next drawn, while it is open.
+    next_md_frame: Instant,
     stats: FrameStats,
     /// A file dialog, while one is showing.
     dialog: Option<FileDialog>,
@@ -1404,7 +1450,7 @@ impl App {
         // interface.
         let mut windows = self.layout.clone();
         windows.main_shade = settings.windows.main_shade;
-        for kind in [WindowKind::Eq, WindowKind::Playlist] {
+        for kind in DOCKED {
             if let (Some(to), Some(from)) =
                 (windows.window_mut(kind), settings.windows.window(kind))
             {
@@ -1428,10 +1474,12 @@ impl App {
         };
         self.layout.scale = self.applied_scale;
         self.layout.main = Some([main.x, main.y]);
-        for kind in [WindowKind::Eq, WindowKind::Playlist] {
+        for kind in DOCKED {
             let i = kind_index(kind);
-            // A window waiting to be re-docked is not where it is going yet.
+            // A window waiting to be re-docked is not where it is going yet, and MilkDrop
+            // filling the screen is not where its window goes back to.
             if !self.redock.contains(&kind)
+                && !self.is_fullscreen(kind)
                 && let Some(r) = self.pane(kind).and_then(Pane::placed_rect)
             {
                 self.offsets[i] = Some((r.x - main.x, r.y - main.y));
@@ -1593,9 +1641,11 @@ impl App {
             self.ui.set_track_info(i, &path, &info);
         }
         let mut actions = self.ui.advance_fade(now);
+        let mut sample_rate_changed = false;
         if let Some(player) = self.player.as_mut() {
             if player.maintain(now) {
                 self.ui.vis.set_sample_rate(player.sample_rate());
+                sample_rate_changed = true;
             }
             while let Some(event) = player.poll() {
                 self.ui.audio_event(event, &mut actions);
@@ -1607,6 +1657,9 @@ impl App {
         let Some(player) = self.player.as_mut() else {
             return;
         };
+        if sample_rate_changed {
+            self.ui.milkdrop.set_sample_rate(player.sample_rate());
+        }
         player.preload(self.ui.upcoming());
         player.set_volume(self.ui.output_volume(now));
         player.set_balance(self.ui.balance);
@@ -1619,8 +1672,22 @@ impl App {
                 self.ui.kbps = kbps;
             }
         }
-        let vis = &mut self.ui.vis;
-        player.drain_vis(|samples| vis.push_stereo(samples));
+        self.drain_vis();
+    }
+
+    /// Hand the samples played since the last call to the visualizer and to MilkDrop.
+    fn drain_vis(&mut self) {
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        let (vis, milkdrop) = (&mut self.ui.vis, &mut self.ui.milkdrop);
+        let md_open = self.ui.md_open;
+        player.drain_vis(|samples| {
+            vis.push_stereo(samples);
+            if md_open {
+                milkdrop.push_audio(samples);
+            }
+        });
     }
 
     /// Bring the windows back from the taskbar, and the main window to the front.
@@ -1724,7 +1791,7 @@ impl App {
             return;
         };
         let scale = self.applied_scale;
-        for kind in [WindowKind::Eq, WindowKind::Playlist] {
+        for kind in DOCKED {
             let (w, _) = self.ui.window_size(kind);
             self.offsets[kind_index(kind)] = self
                 .layout
@@ -1753,6 +1820,7 @@ impl App {
             WindowKind::Main => self.title.as_str(),
             WindowKind::Eq => "NeoAmp Equalizer",
             WindowKind::Playlist => "NeoAmp Playlist",
+            WindowKind::Milkdrop => "NeoAmp MilkDrop",
         };
         // The desktop's scale factor is only known once the window exists; `sync_panes`
         // then trims the size to exactly what `scaled_size` asks for.
@@ -1806,9 +1874,15 @@ impl App {
                     .build()
             })
             .context("creating the GPU surface")?;
+        let milkdrop = (kind == WindowKind::Milkdrop).then(|| {
+            let (presets, textures) = self.scan_milkdrop();
+            self.ui.milkdrop.set_presets(presets);
+            MilkdropView::new(&pixels, texture_loader(textures))
+        });
         self.panes.push(Pane {
             kind,
             upscaler: Upscaler::new(&pixels),
+            milkdrop,
             pixels,
             window,
             canvas,
@@ -1830,22 +1904,105 @@ impl App {
         if self.drag.as_ref().is_some_and(|d| d.kind == kind) {
             self.drag = None;
         }
-        if kind == WindowKind::Playlist {
+        if self.resize.as_ref().is_some_and(|r| r.kind == kind) {
             self.resize = None;
+        }
+        if kind == WindowKind::Milkdrop {
+            self.ui.md_fullscreen = false;
+            self.md_restore = None;
         }
     }
 
-    /// Note where the equalizer or playlist sits relative to the main window, so that it
-    /// reopens there.
+    /// Note where the equalizer, playlist or MilkDrop sits relative to the main window, so
+    /// that it reopens there. MilkDrop filling the screen reopens where its window was.
     fn remember_offset(&mut self, kind: WindowKind) {
         if kind == WindowKind::Main || !self.docking || self.redock.contains(&kind) {
             return;
         }
         let main = self.pane(WindowKind::Main).and_then(Pane::placed_rect);
-        let this = self.pane(kind).and_then(Pane::placed_rect);
-        if let (Some(main), Some(r)) = (main, this) {
-            self.offsets[kind_index(kind)] = Some((r.x - main.x, r.y - main.y));
+        let this = if self.is_fullscreen(kind) {
+            self.md_restore.map(|p| (p.x, p.y))
+        } else {
+            self.pane(kind)
+                .and_then(Pane::placed_rect)
+                .map(|r| (r.x, r.y))
+        };
+        if let (Some(main), Some((x, y))) = (main, this) {
+            self.offsets[kind_index(kind)] = Some((x - main.x, y - main.y));
         }
+    }
+
+    /// Whether `kind` is MilkDrop's window filling the screen.
+    fn is_fullscreen(&self, kind: WindowKind) -> bool {
+        kind == WindowKind::Milkdrop && self.ui.md_fullscreen
+    }
+
+    /// Fill the screen MilkDrop's window is on with its picture, or put the window back.
+    /// Windows that bypass the window manager are moved and sized by hand, since nothing
+    /// else would; the others ask the system for a borderless fullscreen window.
+    fn set_fullscreen(&mut self, on: bool, el: &ActiveEventLoop) {
+        if on == self.ui.md_fullscreen {
+            return;
+        }
+        let Some(pane) = self.pane(WindowKind::Milkdrop) else {
+            return;
+        };
+        let window = pane.window.clone();
+        let before = pane.rect().map(|r| PhysicalPosition::new(r.x, r.y));
+        let after;
+        if on {
+            let monitor = window.current_monitor();
+            after = monitor.as_ref().map(MonitorHandle::position);
+            self.md_restore = before;
+            if self.unmanaged {
+                let Some(m) = monitor else {
+                    return;
+                };
+                window.set_outer_position(m.position());
+                let _ = window.request_inner_size(m.size());
+            } else {
+                window.set_fullscreen(Some(Fullscreen::Borderless(monitor)));
+            }
+            window.focus_window();
+        } else {
+            after = self.md_restore.take();
+            if self.unmanaged {
+                if let Some(at) = after {
+                    window.set_outer_position(at);
+                }
+            } else {
+                window.set_fullscreen(None);
+            }
+        }
+        // The window moves under the pointer, which reports nothing if it stays still: keep
+        // its position within the window up to date by hand.
+        if let (Some(b), Some(a), Some(pane)) = (before, after, self.pane_mut(WindowKind::Milkdrop))
+        {
+            pane.cursor.x += f64::from(b.x - a.x);
+            pane.cursor.y += f64::from(b.y - a.y);
+        }
+        self.ui.md_fullscreen = on;
+        self.sync_panes(el);
+    }
+
+    /// MilkDrop's presets, built in and in the presets folder, and the pictures in that
+    /// folder. The folder is made if it is missing, for the user to find.
+    fn scan_milkdrop(&self) -> (Presets, Textures) {
+        let Some(dir) = self.store.as_ref().map(Store::milkdrop_dir) else {
+            return (Presets::new(built_in::PRESETS), Textures::default());
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("cannot make {}: {e}", dir.display());
+        }
+        let presets = Presets::with_folder(built_in::PRESETS, &dir);
+        let textures = Textures::scan(&dir);
+        log::info!(
+            "milkdrop: {} presets of your own and {} pictures in {}",
+            presets.len() - presets.built_in_count(),
+            textures.len(),
+            dir.display()
+        );
+        (presets, textures)
     }
 
     /// Re-apply docked positions to windows the window manager has had time to map.
@@ -1924,6 +2081,8 @@ impl App {
         self.redock.clear();
         self.drag = None;
         self.resize = None;
+        self.ui.md_fullscreen = false;
+        self.md_restore = None;
         if let Err(e) = self.open_pane(el, WindowKind::Main, main_at) {
             log::error!("cannot reopen the main window: {e:#}");
             el.exit();
@@ -1942,7 +2101,8 @@ impl App {
     /// Where a newly opened window goes with the main window at `main`: the main window to its
     /// saved position, if it was opened at one; the equalizer and playlist back to where they
     /// last were relative to the main window. Without such a place, the equalizer docks under
-    /// the main window and the playlist under the lowest of the two.
+    /// the main window, the playlist under the lowest of the two, and MilkDrop to the right of
+    /// the main window.
     fn docked_to(&self, kind: WindowKind, main: Rect) -> Option<PhysicalPosition<i32>> {
         if !self.docking {
             return None;
@@ -1960,6 +2120,7 @@ impl App {
         match kind {
             WindowKind::Main => None,
             WindowKind::Eq => Some(below(main)),
+            WindowKind::Milkdrop => Some(PhysicalPosition::new(main.right(), main.y)),
             WindowKind::Playlist => {
                 // Hang under the equalizer when it is docked to the main window, or is about
                 // to be (its move may not have been applied yet).
@@ -2007,13 +2168,14 @@ impl App {
 
         for kind in WindowKind::ALL {
             let (w, h) = self.ui.window_size(kind);
+            let fullscreen = self.is_fullscreen(kind);
             let Some(pane) = self.pane_mut(kind) else {
                 continue;
             };
             let scale = pane.scale(ui_scale);
             pane.fit_canvas((w, h), Density::covering(scale));
             let wanted = scaled_size((w, h), scale);
-            if pane.window.inner_size() != wanted {
+            if !fullscreen && pane.window.inner_size() != wanted {
                 let _ = pane.window.request_inner_size(wanted);
             }
             pane.window.request_redraw();
@@ -2025,7 +2187,7 @@ impl App {
             self.applied_scale = main_scale;
             // Closed windows reopen where they were at the new scale. Open ones have their
             // offsets taken afresh when they close.
-            for kind in [WindowKind::Eq, WindowKind::Playlist] {
+            for kind in DOCKED {
                 let i = kind_index(kind);
                 if self.pane(kind).is_none()
                     && let Some((dx, dy)) = self.offsets[i]
@@ -2056,6 +2218,7 @@ impl App {
         let rects: Vec<(WindowKind, Rect)> = self
             .panes
             .iter()
+            .filter(|p| !self.is_fullscreen(p.kind))
             .filter_map(|p| Some((p.kind, p.rect()?)))
             .collect();
         let Some(root) = rects.iter().position(|(k, _)| *k == WindowKind::Main) else {
@@ -2208,6 +2371,7 @@ impl App {
             .panes
             .iter()
             .filter(|p| p.kind != kind && !followers.iter().any(|(fk, ..)| *fk == p.kind))
+            .filter(|p| !self.is_fullscreen(p.kind))
             .filter_map(Pane::rect)
             .collect();
         let (nx, ny) = dock::drag_target(rect, &offsets, pointer, grab, &statics, screen, snap);
@@ -2224,19 +2388,24 @@ impl App {
         }
     }
 
-    /// Start resizing the playlist from the grip under the pointer.
-    fn begin_resize(&mut self) {
-        let Some(pane) = self.pane(WindowKind::Playlist) else {
+    /// Start resizing the playlist or MilkDrop from the grip under the pointer.
+    fn begin_resize(&mut self, kind: WindowKind) {
+        let Some(pane) = self.pane(kind) else {
             return;
         };
+        let size = match kind {
+            WindowKind::Milkdrop => self.ui.md_size,
+            _ => self.ui.pl_size,
+        };
         self.resize = Some(Resize {
+            kind,
             start: pane.cursor,
-            size: self.ui.pl_size,
+            size,
         });
     }
 
-    /// Resize the playlist so its grip follows the pointer, a whole grid step at a time. Other
-    /// windows stay where they are, even those docked to it, as in Webamp.
+    /// Resize the playlist or MilkDrop so its grip follows the pointer, a whole grid step at a
+    /// time. Other windows stay where they are, even those docked to it, as in Webamp.
     ///
     /// This measures how far the pointer has travelled in screen pixels instead of mapping it
     /// onto the canvas: the pointer leaves the window as it grows, and the canvas changes size
@@ -2245,7 +2414,8 @@ impl App {
         let Some(resize) = self.resize.as_ref() else {
             return;
         };
-        let Some(pane) = self.pane(WindowKind::Playlist) else {
+        let kind = resize.kind;
+        let Some(pane) = self.pane(kind) else {
             return;
         };
         let scale = pane.scale(self.ui.scale());
@@ -2254,13 +2424,13 @@ impl App {
         // The windowshade bar keeps its height, and the height the playlist opens out to.
         let size = (
             w.saturating_add(travel(pointer.x, resize.start.x)),
-            if self.ui.pl_shade {
+            if self.ui.is_shaded(kind) {
                 h
             } else {
                 h.saturating_add(travel(pointer.y, resize.start.y))
             },
         );
-        if self.ui.resize_playlist(size) {
+        if self.ui.resize_window(kind, size) {
             self.sync_panes(el);
         }
     }
@@ -2329,7 +2499,8 @@ impl App {
         for a in actions {
             match a {
                 Action::DragWindow(kind) => self.begin_drag(kind),
-                Action::ResizePlaylist => self.begin_resize(),
+                Action::Resize(kind) => self.begin_resize(kind),
+                Action::Fullscreen(on) => self.set_fullscreen(on, el),
                 Action::Close => el.exit(),
                 Action::Minimize => {
                     for p in &self.panes {
@@ -2402,11 +2573,17 @@ impl App {
     /// What a key pressed in window `kind` does. The playlist has keys of its own, as in
     /// Winamp: there the arrows move through the entries rather than change the volume,
     /// Ctrl+A selects every entry rather than keeping the windows on top, and Ctrl+W shades
-    /// the playlist rather than the main window. On macOS, Cmd takes Ctrl's place (see
+    /// the playlist rather than the main window. So does MilkDrop, whose R and L change the
+    /// order of its presets and list them. On macOS, Cmd takes Ctrl's place (see
     /// [`ctrl_held`]).
     fn key_cmd(&self, kind: WindowKind, event: &KeyEvent) -> Option<KeyCmd> {
         if kind == WindowKind::Playlist
             && let Some(cmd) = self.playlist_key(event)
+        {
+            return Some(cmd);
+        }
+        if kind == WindowKind::Milkdrop
+            && let Some(cmd) = self.milkdrop_key(event)
         {
             return Some(cmd);
         }
@@ -2432,6 +2609,7 @@ impl App {
                 }
                 ("f", _, true) => KeyCmd::MainMenu,
                 ("s", _, true) => KeyCmd::SkinsMenu,
+                ("k", true, false) if shift && !event.repeat => KeyCmd::ToggleMilkdrop,
                 ("l", false, false) if shift => KeyCmd::OpenFolder,
                 ("l", true, false) => KeyCmd::OpenUrl,
                 ("=" | "+", true, _) => KeyCmd::ZoomIn,
@@ -2510,6 +2688,35 @@ impl App {
         }
     }
 
+    /// MilkDrop's own keys, in its window, as MilkDrop had them: Space blends into the next
+    /// preset, H cuts to it at once and Backspace goes back; R switches between random and
+    /// listed order, Scroll Lock (F14 on macOS) keeps the preset, L lists the presets, and
+    /// Alt+Enter fills the screen, which Esc leaves.
+    fn milkdrop_key(&self, event: &KeyEvent) -> Option<KeyCmd> {
+        let ctrl = ctrl_held(self.modifiers);
+        let alt = self.modifiers.alt_key();
+        let md = |cmd| Some(KeyCmd::Milkdrop(cmd));
+        let change = |c| md(MilkdropCmd::Change(c));
+        // Toggles held down toggle once rather than flickering.
+        let once = |cmd| if event.repeat { None } else { md(cmd) };
+        match &shortcut_key(event, self.modifiers) {
+            Key::Named(NamedKey::Enter) if alt && !ctrl => once(MilkdropCmd::ToggleFullscreen),
+            _ if ctrl || alt => None,
+            Key::Named(NamedKey::Space) => change(Change::Next),
+            Key::Named(NamedKey::Backspace) => change(Change::Previous),
+            Key::Named(NamedKey::Escape) => md(MilkdropCmd::LeaveFullscreen),
+            Key::Named(NamedKey::ScrollLock) => once(MilkdropCmd::ToggleLock),
+            Key::Named(NamedKey::F14) if cfg!(target_os = "macos") => once(MilkdropCmd::ToggleLock),
+            Key::Character(s) => match s.to_ascii_lowercase().as_str() {
+                "h" => change(Change::HardCut),
+                "r" => once(MilkdropCmd::ToggleRandom),
+                "l" => once(MilkdropCmd::PresetMenu),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The mouse wheel over window `kind`: the playlist scrolls a row per step, three steps a
     /// notch; over the main window the volume moves a step a notch.
     fn wheel(&mut self, kind: WindowKind, delta: MouseScrollDelta) {
@@ -2555,7 +2762,7 @@ impl App {
 
     fn render(&mut self, kind: WindowKind, now: Instant) {
         let skin = drawn(self.tried.as_ref(), &self.shown, &self.neo, &self.base);
-        let ui = &self.ui;
+        let ui = &mut self.ui;
         let font = Some(&self.font);
         let Some(pane) = self.panes.iter_mut().find(|p| p.kind == kind) else {
             return;
@@ -2571,7 +2778,25 @@ impl App {
             frame.copy_from_slice(drawn);
         }
         let started = Instant::now();
-        if let Err(e) = pane.upscaler.render(&pane.pixels) {
+        let rendered = match pane.milkdrop.as_mut() {
+            Some(view) => {
+                let area = md_area(
+                    pane.window.inner_size(),
+                    pane.canvas.size(),
+                    ui.md_fullscreen,
+                );
+                let size = (area.w.unsigned_abs(), area.h.unsigned_abs());
+                view.draw(&mut ui.milkdrop, now, size);
+                let (upscaler, view) = (&pane.upscaler, &*view);
+                pane.pixels.render_with(|encoder, target, _| {
+                    upscaler.draw(encoder, target);
+                    view.present(encoder, target, area);
+                    Ok(())
+                })
+            }
+            None => pane.upscaler.render(&pane.pixels),
+        };
+        if let Err(e) = rendered {
             log::error!("render: {e}");
         }
         let took = started.elapsed();
@@ -2585,10 +2810,11 @@ impl App {
         }
         let s = &self.stats;
         log::debug!(
-            "frames/s main={} eq={} pl={} wakeups={} slowest_present={:.1}ms",
+            "frames/s main={} eq={} pl={} md={} wakeups={} slowest_present={:.1}ms",
             s.frames[0],
             s.frames[1],
             s.frames[2],
+            s.frames[3],
             s.wakeups,
             s.slowest_present.as_secs_f64() * 1000.0
         );
@@ -2735,7 +2961,7 @@ impl ApplicationHandler for App {
                 let (x, y) = p.canvas_pos();
                 if self.drag.as_ref().is_some_and(|d| d.kind == kind) {
                     self.drag_to(kind, position);
-                } else if kind == WindowKind::Playlist && self.resize.is_some() {
+                } else if self.resize.as_ref().is_some_and(|r| r.kind == kind) {
                     self.resize_to(position, el);
                 } else {
                     let actions = self.ui.mouse_move(kind, x, y);
@@ -2798,7 +3024,17 @@ impl ApplicationHandler for App {
                     info.update_stream(url, details);
                 }
             }
-            for p in &self.panes {
+            // MilkDrop's window is drawn on its own schedule, below.
+            for p in self.panes.iter().filter(|p| p.kind != WindowKind::Milkdrop) {
+                p.window.request_redraw();
+            }
+        }
+        let md_open = self.pane(WindowKind::Milkdrop).is_some();
+        if md_open && now >= self.next_md_frame {
+            // Late frames are dropped rather than caught up with.
+            self.next_md_frame = (self.next_md_frame + MD_FRAME).max(now);
+            self.drain_vis();
+            if let Some(p) = self.pane(WindowKind::Milkdrop) {
                 p.window.request_redraw();
             }
         }
@@ -2806,7 +3042,12 @@ impl ApplicationHandler for App {
             self.next_save = now + SAVE_CHECK;
             self.save();
         }
-        el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+        let wake = if md_open {
+            self.next_frame.min(self.next_md_frame)
+        } else {
+            self.next_frame
+        };
+        el.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 }
 

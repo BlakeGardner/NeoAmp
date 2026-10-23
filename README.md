@@ -104,6 +104,7 @@ Start NeoAmp and drop music onto it: files, folders or playlists. Or:
 - **Z X C V B** are previous, play, pause, stop and next.
 - **J** finds a track in the playlist as you type.
 - **Alt+S** opens the Skins menu, or drop a `.wsz` skin onto any window.
+- **Ctrl+Shift+K** opens MilkDrop, the visualizer Winamp came with.
 
 On macOS, use ⌘ for Ctrl and ⌥ for Alt. [SHORTCUTS.md](docs/SHORTCUTS.md)
 lists every key, and the [user guide](docs/GUIDE.md) covers everything

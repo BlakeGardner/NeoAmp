@@ -995,16 +995,12 @@ impl Gpu {
             self.resize(canvas.size);
         }
         // Compile shaders for presets seen for the first time; forget presets gone.
-        let presets: Vec<(PresetId, Preset)> = [engine.current(), engine.previous()]
-            .into_iter()
-            .flatten()
-            .map(|(id, p)| (id, p.clone()))
-            .collect();
-        for (id, p) in &presets {
+        let presets = [engine.current(), engine.previous()];
+        for (id, p) in presets.iter().flatten() {
             self.prepare(*id, p);
         }
         self.programs
-            .retain(|(id, _), _| presets.iter().any(|(p, _)| p == id));
+            .retain(|(id, _), _| presets.iter().flatten().any(|(p, _)| p == id));
 
         let mut encoder = self
             .device

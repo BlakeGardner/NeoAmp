@@ -18,6 +18,7 @@ with SVG pictures in [SVG_SKINS.md](SVG_SKINS.md).
 - [File info](#file-info)
 - [Playback](#playback)
 - [Media keys and "now playing"](#media-keys-and-now-playing)
+- [MilkDrop](#milkdrop)
 - [Skin Museum](#skin-museum)
 - [SVG skins](#svg-skins)
 - [Skin fonts and pointers](#skin-fonts-and-pointers)
@@ -286,6 +287,11 @@ travel byte for byte, so names that are not valid Unicode arrive intact.
 | Shuffle / Repeat | toggle buttons | S / R |
 | Elapsed vs. remaining time | click the time display | Ctrl+T |
 | Equalizer / Playlist windows | EQ / PL buttons, window close buttons | Alt+G / Alt+E |
+| MilkDrop's window | MilkDrop in the main menu, its close button | Ctrl+Shift+K |
+| Next / previous MilkDrop preset, or cut to the next at once | MilkDrop's menu (right-click it) | Space / Backspace / H (MilkDrop) |
+| Choose a MilkDrop preset | Presets in MilkDrop's menu | L (MilkDrop) |
+| MilkDrop's presets in random order; keep the preset | MilkDrop's menu | R / Scroll Lock (MilkDrop) |
+| Fill the screen with MilkDrop | double-click the picture | Alt+Enter, Esc to leave (MilkDrop) |
 | Windowshade (collapse a window to a bar, or open it out) | the shade button beside a window's close button, or double-click its title bar | Ctrl+W: the main window, or the playlist (playlist) |
 | Main menu | the options button at the left of the title bar, or right-click | Alt+F |
 | Options menu | the `O` in the clutter bar | |
@@ -303,20 +309,24 @@ travel byte for byte, so names that are not valid Unicode arrive intact.
 | Find, try on and install skins from the Winamp Skin Museum | Skins > Skin Museum... | |
 | Move a window (docked ones follow the main window) | drag its title bar | |
 | Resize the playlist | drag the grip in its bottom-right corner (in its windowshade bar, the grip beside the shade button changes the width) | |
+| Resize MilkDrop | drag the grip in its bottom-right corner | |
 | Playlist menus | hold ADD / REM / SEL / MISC / LIST OPTS, let go over an item | |
 
-Keys marked "(playlist)" work while the playlist window has the focus.
+Keys marked "(playlist)" work while the playlist window has the focus, and
+those marked "(MilkDrop)" while MilkDrop's does.
 [SHORTCUTS.md](SHORTCUTS.md) lists every key, including those of the menus
 and the dialogs.
 
 On macOS, Cmd takes Ctrl's place in every shortcut above (Cmd+A, Cmd+Shift+1,
-...) and Option is Alt; the menus show them as ⌘A, ⇧⌘1, ⌥E. There are two
+...) and Option is Alt; the menus show them as ⌘A, ⇧⌘1, ⌥E. There are three
 differences on macOS:
 
 - macOS keeps Cmd+Shift+3 for screenshots, so sorting the playlist by path is
   only in the MISC > SORT LIST menu there.
 - Delete is the forward-delete key (fn+Delete on a laptop keyboard). The key
-  labelled "delete" on a Mac is Backspace, which removes nothing.
+  labelled "delete" on a Mac is Backspace, which removes nothing (but goes
+  back a preset in MilkDrop).
+- Mac keyboards have no Scroll Lock: F14 locks MilkDrop's preset instead.
 
 Cmd+W shades a window, as Ctrl+W does in Winamp, rather than closing it as in
 most Mac apps. The media keys are F7 to F9 on a Mac keyboard, which has no
@@ -326,9 +336,10 @@ Stop key.
 
 Each NeoAmp window is its own borderless OS window. Grab a title bar to
 drag one away; the main window carries whatever is docked to it, while the
-equalizer and playlist leave on their own. Windows snap to each other's
-edges and to the screen edges when they come within 10 pixels, like the
-original. Resizing the playlist from its grip leaves the other windows where
+equalizer, playlist and MilkDrop leave on their own. Windows snap to each
+other's edges and to the screen edges when they come within 10 pixels, like
+the original. Resizing the playlist or MilkDrop from its grip leaves the
+other windows where
 they are, even ones docked to it, as Webamp does (how Winamp itself behaved
 here is undocumented). Shading a window (see [Windowshade](#windowshade)) is
 different: the windows docked below it move up or down with its bottom edge.
@@ -742,6 +753,62 @@ artist. Play/pause never starts a playing track over, as Winamp's Play button
   the volume keys bring up, tied to the main window.
 - **macOS:** Now Playing in Control Center, and the media keys (F7 to F9).
 
+## MilkDrop
+
+MilkDrop is the visualizer that came with Winamp: presets of equations and
+pixel shaders that warp each frame into the next in time with the music.
+NeoAmp runs MilkDrop 2's presets itself, with no plug-in, in a window framed
+by the skin's generic window (`gen.bmp`), as Webamp does.
+
+**Opening it.** Press Ctrl+Shift+K, or choose MilkDrop in the main menu. The
+window first opens docked to the right of the main window, as tall as the
+main window and equalizer together. It docks and snaps like the other
+windows, resizes from the grip in its bottom-right corner in Winamp's 25 by
+29 pixel steps, and reopens where and as big as it was; it has no
+windowshade mode. Double-click the picture, or press Alt+Enter, to fill the
+screen with it; Esc or another double-click puts the window back.
+
+**Presets.** A preset runs for 16 seconds plus up to 10 more chosen at random,
+then blends into the next over 2.7 seconds, as in MilkDrop. Presets come in
+random order; R switches to the order they are listed in, and back. Space
+blends into the next preset, H cuts to it at once, Backspace goes back
+through the presets shown before (in random order) or to the one listed
+before, and Scroll Lock keeps the preset showing until you change it.
+Right-click the picture for MilkDrop's menu, whose Presets submenu (also L)
+lists every preset, the one showing marked. The preset showing, the order and
+the time between presets are remembered (see [SETTINGS.md](SETTINGS.md)).
+
+A few presets are built in. Your own `.milk` files go in the MilkDrop folder
+in the settings folder (`milkdrop/`, `MilkDrop\` on Windows and macOS; see
+[Saved settings](#saved-settings)), or in folders inside it; NeoAmp makes the
+folder when MilkDrop's window first opens, and lists what is in it after the
+built-in presets each time the window opens. More than 40 of your presets are
+grouped in the menu by their first letter. The pictures presets use
+(`sampler_worms`, or a random one for `sampler_rand00` and the like) are
+looked for there too, by name, as JPEG, PNG, BMP or TGA files: projectM's
+texture pack can be unpacked into the folder as it is. A missing picture
+shows noise instead.
+
+MilkDrop hears the music after the equalizer but before the volume and
+balance, so it keeps moving with the volume down.
+
+Where the platforms differ:
+
+- **Drawing** uses the GPU through wgpu: Vulkan or OpenGL on Linux, Direct3D
+  12 or Vulkan on Windows, Metal on macOS. Only Linux (X11) has been tried.
+- **Filling the screen:** where NeoAmp's windows bypass the window manager
+  (override-redirect, see [Windows, docking and zoom](#windows-docking-and-zoom)),
+  NeoAmp moves and sizes the window over the screen itself, since nothing
+  else would. Elsewhere it asks the system for a borderless fullscreen
+  window.
+- **COSMIC** redraws override-redirect XWayland windows only about once a
+  second (see [Menus](#menus)), which MilkDrop shows most. Starting NeoAmp
+  with `NEOAMP_UNMANAGED=0` gives it ordinary windows that animate smoothly,
+  but COSMIC then places them itself, so they do not dock.
+- **macOS:** Mac keyboards have no Scroll Lock. F14, where Apple's full-size
+  keyboards have Scroll Lock, locks the preset instead, as does Lock preset
+  in MilkDrop's menu.
+
 ## Skin Museum
 
 **Skins > Skin Museum...** browses the [Winamp Skin
@@ -858,8 +925,9 @@ it.
 
 NeoAmp starts the way it was left: volume, balance, the equalizer, shuffle,
 repeat, the time display, the visualizer and its options, which windows are
-open, where and which are shaded, the playlist's size, the skin, the zoom,
-double size and always on top, and the playlist with its current entry. The
+open, where and which are shaded, the sizes of the playlist and MilkDrop,
+MilkDrop's preset and the order of its presets, the skin, the zoom, double
+size and always on top, and the playlist with its current entry. The
 playlist comes back stopped, as in Winamp. NeoAmp saves within a couple of
 seconds of a change and again on exit, so a crash loses little.
 
@@ -888,6 +956,8 @@ Two files share one folder, with the skins and presets the menus list:
 - `autoload.eqf` holds the auto-load presets: equalizer settings kept for one
   file name each (EQ presets > Save > Auto-load preset). With AUTO on, a
   file's preset loads as it starts.
+- `milkdrop/` (`MilkDrop\`) holds your MilkDrop presets and the pictures they
+  use (see [MilkDrop](#milkdrop)).
 
 [SETTINGS.md](SETTINGS.md) describes every setting: what it controls, the
 values it takes and its default.
@@ -900,10 +970,11 @@ them to it instead). The output device chosen in the Options menu is
 remembered too; one that is not connected when NeoAmp starts stays chosen,
 and plays once it is.
 
-The equalizer and playlist positions are kept relative to the main window, so
-docked windows stay docked, and they are converted when the zoom or the
-desktop's scale has changed since. Closing either window also remembers where
-it was, and it reopens there, as in Winamp. A window whose title bar would land
+The positions of the equalizer, playlist and MilkDrop are kept relative to
+the main window, so docked windows stay docked, and they are converted when
+the zoom or the desktop's scale has changed since. Closing one of them also
+remembers where it was, and it reopens there, as in Winamp; MilkDrop closed
+while it fills the screen reopens where its window was. A window whose title bar would land
 off every screen (a monitor unplugged since, say) is placed the default way
 instead. Each file is written beside the old one under a temporary name and
 then renamed over it, so a crash during a save leaves the old file whole.
@@ -951,6 +1022,14 @@ Where the platforms differ:
   each file opened together, and NeoAmp would keep only the last (see
   [Windows](#windows)).
 - The "now playing" display shows no cover art.
+- MilkDrop shows no song titles or other text over the picture, and has no
+  preset editor, mash-ups or desktop mode. A few presets' shaders (5 of the
+  15,895 in projectM's "cream of the crop" collection) cannot be translated,
+  and those presets draw with MilkDrop's plain shaders instead. A preset's
+  random pictures are chosen once each time MilkDrop's window opens, rather
+  than for each preset.
+- NeoAmp's own skin has no generic-window frame yet, so MilkDrop's window wears
+  the Winamp base skin's.
 - Output devices, media controls and handing files to the running NeoAmp
   have been tried on Linux only. On Windows and macOS they follow what cpal
   and souvlaki document.

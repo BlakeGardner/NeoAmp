@@ -14,7 +14,9 @@ doctest = false
 winit = "0.30"
 pixels = "0.17"
 zip = { version = "9", default-features = false, features = ["deflate"] }
-image = { version = "0.25", default-features = false, features = ["bmp", "png", "ico"] }
+# Skins' bitmaps; JPEG and TGA for the pictures MilkDrop presets use (src/milkdrop/textures.rs).
+# Pure Rust decoders.
+image = { version = "0.25", default-features = false, features = ["bmp", "png", "ico", "jpeg", "tga"] }
 # SVG sheets in skins (src/skin.rs), rasterised at the windows' density. Pure Rust (usvg parses,
 # tiny-skia draws); without default features it reads no fonts, decodes no embedded raster
 # images and loads no files an SVG names.

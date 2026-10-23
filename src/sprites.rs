@@ -23,6 +23,9 @@ pub enum Sheet {
     /// The equalizer's windowshade bar and its pressed title-bar buttons.
     EqEx,
     PlEdit,
+    /// The frame of Winamp's "generic" windows, which plug-ins such as MilkDrop drew in, and
+    /// the letters of their titles.
+    Gen,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -503,4 +506,69 @@ pub mod pl_shade {
     pub const TITLE_SPARE: i32 = 70;
     /// The track's length ends this far from the right edge.
     pub const TIME_FROM_RIGHT: i32 = 30;
+}
+
+/// A generic window (gen.bmp), as plug-ins like MilkDrop had: a title bar of tiles around a
+/// title spelled in gen.bmp's own letters, thin sides, and a bottom with a resize grip. It
+/// resizes in the playlist's steps. After Webamp's `GenWindow` and its `skinSprites`.
+pub mod generic {
+    use super::*;
+    pub const MIN_W: i32 = 275;
+    pub const MIN_H: i32 = 116;
+    pub const STEP_W: i32 = 25;
+    pub const STEP_H: i32 = 29;
+    pub const TOP_H: i32 = 20;
+    pub const BOTTOM_H: i32 = 14;
+    pub const LEFT_W: i32 = 11;
+    pub const RIGHT_W: i32 = 8;
+
+    const fn top(x: i32, active: bool) -> Sprite {
+        sp(Sheet::Gen, x, if active { 0 } else { 21 }, 25, 20)
+    }
+    pub const fn top_left(active: bool) -> Sprite {
+        top(0, active)
+    }
+    /// Beside the title on its left.
+    pub const fn top_left_end(active: bool) -> Sprite {
+        top(26, active)
+    }
+    /// Tiled under the whole title bar; it shows behind the title.
+    pub const fn top_center_fill(active: bool) -> Sprite {
+        top(52, active)
+    }
+    /// Beside the title on its right.
+    pub const fn top_right_end(active: bool) -> Sprite {
+        top(78, active)
+    }
+    /// Tiled between the corners and the ends.
+    pub const fn top_fill(active: bool) -> Sprite {
+        top(104, active)
+    }
+    pub const fn top_right(active: bool) -> Sprite {
+        top(130, active)
+    }
+    pub const BOTTOM_LEFT: Sprite = sp(Sheet::Gen, 0, 42, 125, 14);
+    pub const BOTTOM_RIGHT: Sprite = sp(Sheet::Gen, 0, 57, 125, 14);
+    pub const BOTTOM_FILL: Sprite = sp(Sheet::Gen, 127, 72, 25, 14);
+    pub const MIDDLE_LEFT: Sprite = sp(Sheet::Gen, 127, 42, 11, 29);
+    pub const MIDDLE_LEFT_BOTTOM: Sprite = sp(Sheet::Gen, 158, 42, 11, 24);
+    pub const MIDDLE_RIGHT: Sprite = sp(Sheet::Gen, 139, 42, 8, 29);
+    pub const MIDDLE_RIGHT_BOTTOM: Sprite = sp(Sheet::Gen, 170, 42, 8, 24);
+    pub const CLOSE_PRESSED: Sprite = sp(Sheet::Gen, 148, 42, 9, 9);
+    /// The close button, from the window's right edge and top.
+    pub const CLOSE_FROM_RIGHT: i32 = 11;
+    pub const CLOSE_Y: i32 = 3;
+    pub const CLOSE_SIZE: i32 = 9;
+    /// The resize grip in the bottom-right corner.
+    pub const RESIZE_SIZE: i32 = 20;
+    /// The title's letters: rows of A to Z, the active window's first, each letter as wide
+    /// as the gap before the next stripe of background colour.
+    pub const LETTERS_Y_ACTIVE: i32 = 88;
+    pub const LETTERS_Y: i32 = 96;
+    pub const LETTER_H: i32 = 7;
+    pub const SPACE_W: i32 = 5;
+    /// Where the title's letters start down from the top, and the gaps either side of it.
+    pub const TITLE_Y: i32 = 2;
+    pub const TITLE_PAD_LEFT: i32 = 4;
+    pub const TITLE_PAD_RIGHT: i32 = 3;
 }
