@@ -9,8 +9,9 @@
 </p>
 
 <p align="center">
-  Every button, skin and shortcut you remember, plus what Winamp never had:
-  media keys, sharp high-res screens, and Bluetooth headphones that come and go.
+  Every button, menu and shortcut you remember, plus what Winamp never had:
+  media keys, sharp high-res screens, and a built-in browser to try on and
+  install over 100,000 classic skins.
 </p>
 
 <p align="center">
@@ -76,8 +77,6 @@ devices.
   losing its place.
 - **Remembers everything.** Volume, equalizer, skin, window positions and the
   playlist are saved as you go.
-- **One NeoAmp at a time.** Opening another file hands it to the NeoAmp
-  already running instead of starting a second one.
 - **Looks the same everywhere.** Fonts are built in, so a skin looks
   identical on Linux, Windows and macOS.
 
