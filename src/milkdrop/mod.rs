@@ -5,5 +5,9 @@
 //! names and constants follow it, and through it MilkDrop's own.
 //!
 //! - [`sound`]: the waveforms, spectra and bass, mid and treble levels presets react to.
+//! - [`eel`]: the expression language of presets' equations.
+//! - [`preset`]: reading `.milk` presets.
 
+pub mod eel;
+pub mod preset;
 pub mod sound;
