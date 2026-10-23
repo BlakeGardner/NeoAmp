@@ -95,23 +95,9 @@ Open the disk image and drag NeoAmp onto the Applications folder beside it.
 It then opens from Launchpad, Spotlight or the Applications folder, with its
 icon in the Dock. A later release's app replaces it the same way.
 
-The app is not signed with an Apple Developer ID or notarized by Apple, so
-macOS will not open it the first time, saying it could not verify that
-NeoAmp is free of malware. To open it anyway:
-
-- **macOS 15 (Sequoia) and later:** click Done, then in System Settings >
-  Privacy & Security click Open Anyway beside the note about NeoAmp, and
-  Open.
-- **macOS 14 (Sonoma) and earlier:** Control-click NeoAmp in Applications,
-  choose Open, and click Open.
-
-Or clear the quarantine flag the browser set on it, in a terminal:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/NeoAmp.app
-```
-
-macOS remembers the choice until the next release's app replaces it.
+The app is signed with NeoAmp's Apple Developer ID and notarized by Apple, so
+the first time it opens macOS only asks whether to open an app downloaded
+from the internet.
 
 The app works as NeoAmp does otherwise, with these differences:
 

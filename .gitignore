@@ -6,3 +6,6 @@
 /flatpak_app
 /repo
 *.flatpak
+# Signing keys (see "Signing and notarizing" in docs/DEVELOPMENT.md), never to be committed
+*.p12
+*.p8

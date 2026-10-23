@@ -1,13 +1,30 @@
-# Builds NeoAmp for macOS: NeoAmp.app in a disk image, made by macos/build-dmg.sh, once for
-# Apple silicon and once for Intel Macs.
+# Builds NeoAmp for macOS: NeoAmp.app in a disk image, once for Apple silicon and once for Intel
+# Macs, signed with the Developer ID and notarized by Apple so that it opens without warnings.
 #
-# It runs only for releases: release.yml calls it for every GitHub release and attaches the
-# disk images to the release with the other builds.
+# Two jobs for each: `build` makes the app with macos/build-app.sh, and `package` signs it, puts
+# it in a disk image and has Apple notarize that, with macos/build-dmg.sh. Only `package` is
+# handed the certificate and the notary key: `build` runs every crate's build script, and
+# anything one of them left running on its machine could read them there.
+#
+# It runs only for releases: release.yml calls it for every GitHub release, passing it the
+# secrets below, and attaches the disk images to the release with the other builds. How to make
+# the secrets is in "Signing and notarizing" in docs/DEVELOPMENT.md.
 
 name: macOS
 
 on:
   workflow_call:
+    secrets:
+      MACOS_CERTIFICATE:
+        description: The "Developer ID Application" certificate and its private key, as a .p12 file in base64
+      MACOS_CERTIFICATE_PASSWORD:
+        description: The password the .p12 file was exported with
+      APPLE_API_KEY:
+        description: The text of an App Store Connect API key's .p8 file, for the notary service
+      APPLE_API_KEY_ID:
+        description: That key's ID
+      APPLE_API_ISSUER:
+        description: The issuer ID of the account's App Store Connect API keys
 
 permissions:
   contents: read
@@ -44,7 +61,84 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Install resvg
         run: cargo install --locked "resvg@$RESVG_VERSION"
-      - name: Build the disk image
+      - name: Build the app
+        run: macos/build-app.sh ${{ matrix.arch }}
+      # In a tar file, which keeps the program's executable bit; an artifact alone loses it.
+      - name: Pack the app
+        run: tar -cf NeoAmp-${{ matrix.arch }}.tar -C target/macos/${{ matrix.arch }} NeoAmp.app
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-app-${{ matrix.arch }}
+          path: NeoAmp-${{ matrix.arch }}.tar
+          if-no-files-found: error
+
+  package:
+    name: Sign and notarize (macos-${{ matrix.arch }})
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos-app-${{ matrix.arch }}
+      - name: Unpack the app
+        run: |
+          mkdir -p target/macos/${{ matrix.arch }}
+          tar -xf NeoAmp-${{ matrix.arch }}.tar -C target/macos/${{ matrix.arch }}
+      - name: Import the certificate and the notary key
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The repository has no $name secret: see \"Signing and notarizing\" in docs/DEVELOPMENT.md."
+              exit 1
+            fi
+          done
+
+          # A keychain of its own, with a random password, kept unlocked for the rest of the job
+          # and put in the search list, where codesign looks for the certificate.
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -base64 32)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          base64 --decode <<<"$MACOS_CERTIFICATE" >"$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -f pkcs12 -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          # Lets codesign use the private key without asking.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application: / { print $2; exit }')
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE holds no Developer ID Application certificate with its private key."
+            exit 1
+          fi
+
+          # Checked with Apple before it is saved.
+          printf '%s\n' "$APPLE_API_KEY" >"$RUNNER_TEMP/notary-key.p8"
+          xcrun notarytool store-credentials neoamp --key "$RUNNER_TEMP/notary-key.p8" \
+            --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --keychain "$keychain"
+          rm "$RUNNER_TEMP/notary-key.p8"
+
+          {
+            echo "SIGN_IDENTITY=$identity"
+            echo "NOTARY_PROFILE=neoamp"
+            echo "NOTARY_KEYCHAIN=$keychain"
+          } >>"$GITHUB_ENV"
+      - name: Sign the app, build the disk image and notarize it
         run: macos/build-dmg.sh ${{ matrix.arch }}
       - uses: actions/upload-artifact@v7
         with:
@@ -53,3 +147,6 @@ jobs:
           if-no-files-found: error
           # Already compressed.
           compression-level: 0
+      - name: Delete the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
