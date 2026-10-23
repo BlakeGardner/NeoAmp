@@ -241,6 +241,22 @@ mod tests {
         assert_eq!(inner(size), Rect::new(11, 20, 256, 82));
     }
 
+    /// NeoAmp's skin draws its letters as SVG, which must still leave the gaps between them
+    /// in the background colour at 1x for them to be found.
+    #[test]
+    fn neoamps_skin_has_every_letter() {
+        let mut skin = Skin::from_wsz(crate::app::NEOAMP_SKIN, "NeoAmp").unwrap();
+        skin.fill_missing_from(&base());
+        assert!(skin.has_own_sheet(Sheet::Gen));
+        for row in [g::LETTERS_Y_ACTIVE, g::LETTERS_Y] {
+            let l = letters(&skin, row);
+            assert!(l.iter().all(|(_, w)| (3..=10).contains(w)), "{l:?}");
+            assert!(l[25].0 + l[25].1 < skin.sheet(Sheet::Gen).size().0, "{l:?}");
+        }
+        let w = draw_title(None, &skin, "MILKDROP", true, 0, 0);
+        assert!((40..70).contains(&w), "{w}");
+    }
+
     #[test]
     fn the_base_skin_has_every_letter() {
         let skin = base();

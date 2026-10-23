@@ -49,8 +49,15 @@ template is the bitmap itself: these are the sizes of the Winamp base skin's.
 | `eqmain.svg` | 275 x 315 | The equalizer |
 | `eq_ex.svg` | 275 x 82 | The equalizer's windowshade bar |
 | `pledit.svg` | 280 x 186 | The playlist editor |
+| `gen.svg` | 194 x 109 | The frame of generic windows, which MilkDrop's window wears, and its title's letters |
 
-NeoAmp draws nothing from `gen`, `genex`, `mb` or `video`, in either form.
+NeoAmp draws nothing from `genex`, `mb` or `video`, in either form.
+
+`gen` holds its title's letters as Winamp's `gen.bmp` does: A to Z in a row
+7 pixels high at y = 88 for the focused window and another at y = 96, each
+letter as wide as the gap before the next column of the colour at the row's
+left end (x = 0). Keep that colour solid in the columns between letters, and
+the letters off them, so that the gaps are still found at 1x.
 
 ## Rules
 
