@@ -5,10 +5,11 @@ Every key NeoAmp responds to, by where it works. The mouse controls are in
 
 The keys are Winamp 2.x's. On macOS, Cmd takes Ctrl's place and Option is Alt,
 as in Mac apps. The macOS column writes them the way the menus do there:
-⌘ Cmd, ⌥ Option, ⇧ Shift, ⌦ forward delete (fn+Delete on a laptop keyboard).
+⌘ Cmd, ⌥ Option, ⇧ Shift, ⌦ forward delete (fn+Delete on a laptop keyboard),
+⌫ Delete (the key Windows calls Backspace) and ↩ Return.
 See [macOS differences](#macos-differences).
 
-The code is `App::key_cmd` and `App::playlist_key` in
+The code is `App::key_cmd`, `App::playlist_key` and `App::milkdrop_key` in
 [src/app.rs](../src/app.rs), with the menus' keys in
 [src/menu.rs](../src/menu.rs), the Jump to file dialog's in
 [src/jump.rs](../src/jump.rs) and [src/jump_window.rs](../src/jump_window.rs),
@@ -20,8 +21,9 @@ boxes' in [src/text_box.rs](../src/text_box.rs) and the File info dialog's in
 
 ## Main, equalizer and playlist windows
 
-These work in whichever of the three windows has the focus. The playlist has
-[keys of its own](#playlist-window) that come first.
+These work in whichever of NeoAmp's windows has the focus. The playlist and
+MilkDrop have keys of their own ([playlist](#playlist-window),
+[MilkDrop](#milkdrop-window)) that come first.
 
 ### Playback
 
@@ -56,6 +58,7 @@ These work in whichever of the three windows has the focus. The playlist has
 | --- | --- | --- |
 | Alt+E | ⌥E | Show or hide the playlist |
 | Alt+G | ⌥G | Show or hide the equalizer |
+| Ctrl+Shift+K | ⇧⌘K | Open or close MilkDrop's window |
 | Ctrl+T | ⌘T | Time display: elapsed or remaining |
 | Ctrl+W | ⌘W | Windowshade the main window: collapse it to a bar, or open it out again (in the playlist, the playlist) |
 | Ctrl+A | ⌘A | Always on top on or off (not in the playlist, where it selects every entry) |
@@ -135,6 +138,24 @@ layouts where Shift turns 1 into another character or 3 needs Shift.
 | Ctrl+Shift-click | ⇧⌘-click | Add a range to the selection |
 
 On macOS, Ctrl-click means right-click, so Cmd-click is the one that selects.
+
+## MilkDrop window
+
+While MilkDrop's window has the focus, these come before the keys above. The
+other keys above still work there, except R (which changes the order of the
+presets instead of turning repeat on or off) and L (which lists the presets
+instead of opening files). They are MilkDrop's own keys.
+
+| Key | macOS | Action |
+| --- | --- | --- |
+| Space | Space | Blend into the next preset |
+| H | H | Cut to the next preset at once |
+| Backspace | ⌫ | Go back to the preset before, at once |
+| R | R | Presets in random order, or in the order listed |
+| Scroll Lock | F14 | Lock the preset: it stays until you change it |
+| L | L | List the presets, to choose one |
+| Alt+Enter | ⌥↩ | Fill the screen with MilkDrop, or go back to the window (as a double-click on the picture does) |
+| Escape | Esc | Go back to the window from filling the screen |
 
 ## In an open menu
 
@@ -222,6 +243,9 @@ The dialog only shows a file's tags and details; its one button is Close.
   search and the Open URL address.
 - ⌘W shades a window, as Ctrl+W does in Winamp, rather than closing it as in
   most Mac apps.
+- Mac keyboards have no Scroll Lock. F14, which sits where Scroll Lock does
+  on Apple's full-size keyboards, locks MilkDrop's preset instead; on other
+  keyboards, use Lock preset in MilkDrop's menu.
 
 ## Not implemented yet
 

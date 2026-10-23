@@ -108,6 +108,7 @@ const SHEET_FILES: &[(Sheet, &str)] = &[
     (Sheet::EqMain, "eqmain"),
     (Sheet::EqEx, "eq_ex"),
     (Sheet::PlEdit, "pledit"),
+    (Sheet::Gen, "gen"),
 ];
 
 /// A loaded classic skin: decoded sprite sheets plus the parsed text configuration.
@@ -700,11 +701,13 @@ mod tests {
         let mut skin = Skin::from_wsz(crate::app::NEOAMP_SKIN, "NeoAmp").unwrap();
         skin.fill_missing_from(&base);
         for (sheet, _) in SHEET_FILES {
-            if *sheet != Sheet::NumsEx {
+            // MilkDrop's frame comes from the base skin until NeoAmp's has one of its own.
+            if *sheet != Sheet::NumsEx && *sheet != Sheet::Gen {
                 assert!(skin.has_svg(*sheet), "{sheet:?} is not SVG");
                 assert!(skin.has_own_sheet(*sheet), "{sheet:?} is borrowed");
             }
         }
+        assert!(skin.has_sheet(Sheet::Gen) && !skin.has_own_sheet(Sheet::Gen));
         assert!(!skin.has_sheet(Sheet::NumsEx));
         assert_eq!(skin.sheet(Sheet::Main).size(), (main::W, main::H));
         for which in SkinCursor::ALL {

@@ -3,7 +3,8 @@
 //! - `settings.toml`: volume, equalizer, windows, skin, zoom and the like ([`Settings`]).
 //! - `playlist.m3u8`: the playlist, as an extended M3U file (see [`crate::m3u`]).
 //! - `autoload.eqf`: the equalizer's auto-load presets (see [`crate::eqf::AutoLoad`]).
-//! - The skins and presets folders, which the menus list (see [`crate::library`]).
+//! - The skins and presets folders, which the menus list (see [`crate::library`]), and
+//!   MilkDrop's presets folder (see [`crate::milkdrop::presets`]).
 //!
 //! The folder is `~/.config/neoamp` on Linux (following `XDG_CONFIG_HOME`),
 //! `%APPDATA%\NeoAmp` on Windows and `~/Library/Application Support/NeoAmp` on macOS.
@@ -29,8 +30,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::audio::{BANDS, EQ_RANGE_DB};
 use crate::eqf::{self, AutoLoad};
 use crate::m3u;
+use crate::milkdrop::visualizer;
 use crate::sprites::pl as p;
-use crate::ui::{DEFAULT_VOLUME, OutputChoice, Track, Ui, WindowKind, db_slider, slider_db};
+use crate::ui::{
+    DEFAULT_VOLUME, MD_DEFAULT_SIZE, OutputChoice, Track, Ui, WindowKind, db_slider, slider_db,
+};
 use crate::vis::{AnalyzerOptions, ScopeOptions, VisMode};
 use crate::zoom::Zoom;
 
@@ -55,6 +59,10 @@ const SKINS_DIR: &str = "skins";
 const PRESETS_DIR: &str = "Presets";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const PRESETS_DIR: &str = "presets";
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const MILKDROP_DIR: &str = "MilkDrop";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const MILKDROP_DIR: &str = "milkdrop";
 /// The downloads' folder, where it is inside another of NeoAmp's.
 const CACHE_DIR: &str = "cache";
 
@@ -89,6 +97,7 @@ pub struct Settings {
     pub oscilloscope: ScopeOptions,
     pub eq: EqConfig,
     pub playlist: PlaylistConfig,
+    pub milkdrop: MilkdropConfig,
     pub windows: WindowLayout,
     /// The output device chosen in the Options menu. `None` plays through the system's
     /// default.
@@ -116,6 +125,7 @@ impl Default for Settings {
             oscilloscope: ScopeOptions::default(),
             eq: EqConfig::default(),
             playlist: PlaylistConfig::default(),
+            milkdrop: MilkdropConfig::default(),
             windows: WindowLayout::default(),
             output: None,
         }
@@ -207,6 +217,33 @@ pub struct PlaylistConfig {
     pub current: usize,
 }
 
+/// MilkDrop's presets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MilkdropConfig {
+    /// The preset showing, by name; `None` starts with any.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub preset: Option<String>,
+    /// Presets come in random order rather than the order they are listed in.
+    pub random: bool,
+    /// How long each preset runs before the next blends in, before a random extra of up to
+    /// 62.5% more.
+    pub seconds: f64,
+}
+
+impl Default for MilkdropConfig {
+    fn default() -> Self {
+        MilkdropConfig {
+            preset: None,
+            random: true,
+            seconds: visualizer::DEFAULT_SECONDS,
+        }
+    }
+}
+
 /// Where the windows were, in screen (physical) pixels.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -222,6 +259,7 @@ pub struct WindowLayout {
     pub main_shade: bool,
     pub eq: WindowConfig,
     pub playlist: WindowConfig,
+    pub milkdrop: WindowConfig,
 }
 
 impl Default for WindowLayout {
@@ -235,27 +273,34 @@ impl Default for WindowLayout {
                 size: Some([p::MIN_W, p::MIN_H]),
                 ..WindowConfig::default()
             },
+            milkdrop: WindowConfig {
+                open: false,
+                size: Some([MD_DEFAULT_SIZE.0, MD_DEFAULT_SIZE.1]),
+                ..WindowConfig::default()
+            },
         }
     }
 }
 
 impl WindowLayout {
-    /// The equalizer's or the playlist's entry; `None` for the main window.
+    /// The entry of the equalizer, the playlist or MilkDrop; `None` for the main window.
     #[must_use]
     pub fn window(&self, kind: WindowKind) -> Option<&WindowConfig> {
         match kind {
             WindowKind::Main => None,
             WindowKind::Eq => Some(&self.eq),
             WindowKind::Playlist => Some(&self.playlist),
+            WindowKind::Milkdrop => Some(&self.milkdrop),
         }
     }
 
-    /// The equalizer's or the playlist's entry; `None` for the main window.
+    /// The entry of the equalizer, the playlist or MilkDrop; `None` for the main window.
     pub fn window_mut(&mut self, kind: WindowKind) -> Option<&mut WindowConfig> {
         match kind {
             WindowKind::Main => None,
             WindowKind::Eq => Some(&mut self.eq),
             WindowKind::Playlist => Some(&mut self.playlist),
+            WindowKind::Milkdrop => Some(&mut self.milkdrop),
         }
     }
 
@@ -266,19 +311,19 @@ impl WindowLayout {
     }
 }
 
-/// The equalizer or playlist window.
+/// The equalizer, playlist or MilkDrop window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowConfig {
     pub open: bool,
-    /// In windowshade mode, collapsed to a bar.
+    /// In windowshade mode, collapsed to a bar. MilkDrop's window has no such mode.
     pub shade: bool,
     /// From the main window's top-left corner to this window's. `None` docks it below the
     /// main window.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<[i32; 2]>,
-    /// In skin pixels. Only the playlist can be resized. In windowshade mode it keeps the
-    /// height it opens out to.
+    /// In skin pixels. Only the playlist and MilkDrop can be resized. In windowshade mode the
+    /// playlist keeps the height it opens out to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<[i32; 2]>,
 }
@@ -351,7 +396,7 @@ impl Settings {
             "# NeoAmp settings, rewritten whenever they change. Edit them while NeoAmp is closed.\n\
              # volume: 0 to 1. balance: -1 (left) to 1 (right). eq: decibels, -{EQ_RANGE_DB} \
              to {EQ_RANGE_DB}.\n\
-             # windows: screen pixels; eq and playlist offsets are from the main window's \
+             # windows: screen pixels; the other windows' offsets are from the main window's \
              corner.\n\n{body}"
         ))
     }
@@ -384,6 +429,11 @@ impl Settings {
             playlist: PlaylistConfig {
                 current: ui.current,
             },
+            milkdrop: MilkdropConfig {
+                preset: ui.milkdrop.current_name().map(str::to_owned),
+                random: ui.milkdrop.random(),
+                seconds: ui.milkdrop.seconds(),
+            },
             windows: WindowLayout {
                 main_shade: ui.main_shade,
                 eq: WindowConfig {
@@ -395,6 +445,12 @@ impl Settings {
                     open: ui.pl_open,
                     shade: ui.pl_shade,
                     size: Some([ui.pl_size.0, ui.pl_size.1]),
+                    offset: None,
+                },
+                milkdrop: WindowConfig {
+                    open: ui.md_open,
+                    shade: false,
+                    size: Some([ui.md_size.0, ui.md_size.1]),
                     offset: None,
                 },
                 ..WindowLayout::default()
@@ -437,6 +493,14 @@ impl Settings {
             // Snaps to the resize grid and keeps the minimum size.
             ui.resize_playlist((w, h));
         }
+        ui.md_open = self.windows.milkdrop.open;
+        if let Some([w, h]) = self.windows.milkdrop.size {
+            ui.resize_milkdrop((w, h));
+        }
+        ui.milkdrop.start_with(self.milkdrop.preset.clone());
+        ui.milkdrop.set_random(self.milkdrop.random);
+        // Out of range, it is brought into range; not a number, it is ignored.
+        ui.milkdrop.set_seconds(self.milkdrop.seconds);
         ui.output = self
             .output
             .as_ref()
@@ -503,6 +567,13 @@ impl Store {
     #[must_use]
     pub fn presets_dir(&self) -> PathBuf {
         self.dir.join(PRESETS_DIR)
+    }
+
+    /// Where MilkDrop finds the user's presets, and the pictures they use, in it and the
+    /// folders inside it.
+    #[must_use]
+    pub fn milkdrop_dir(&self) -> PathBuf {
+        self.dir.join(MILKDROP_DIR)
     }
 
     /// Where the Skin Museum's screenshots and skins are kept once fetched.
@@ -755,6 +826,11 @@ mod tests {
                 bands: [1.0, 2.0, 3.0, 4.0, 5.0, -5.0, -4.0, -3.0, -2.0, -1.0],
             },
             playlist: PlaylistConfig { current: 4 },
+            milkdrop: MilkdropConfig {
+                preset: Some("Flexi - jellyfish jam".into()),
+                random: false,
+                seconds: 30.0,
+            },
             windows: WindowLayout {
                 scale: 1.5,
                 main: Some([-100, 64]),
@@ -771,6 +847,12 @@ mod tests {
                     shade: true,
                     offset: Some([413, 0]),
                     size: Some([300, 145]),
+                },
+                milkdrop: WindowConfig {
+                    open: true,
+                    shade: false,
+                    offset: Some([413, 145]),
+                    size: Some([350, 261]),
                 },
             },
             output: Some(OutputConfig {
@@ -984,6 +1066,7 @@ mod tests {
         expected.windows.main = None;
         expected.windows.eq.offset = None;
         expected.windows.playlist.offset = None;
+        expected.windows.milkdrop.offset = None;
         // Decibels go through the slider and back.
         for (got, want) in back.eq.bands.iter().zip(expected.eq.bands) {
             assert!((got - want).abs() < 1e-4, "{got} vs {want}");
@@ -992,6 +1075,41 @@ mod tests {
         expected.eq.bands = back.eq.bands;
         expected.eq.preamp = back.eq.preamp;
         assert_eq!(back, expected);
+    }
+
+    #[test]
+    fn milkdrop_values_fall_back_one_at_a_time() {
+        let mut ui = Ui::new();
+        Settings::from_toml(
+            "[milkdrop]
+preset = 5
+seconds = nan
+random = false
+",
+        )
+        .unwrap()
+        .apply(&mut ui);
+        assert_eq!(ui.milkdrop.current_name(), None);
+        assert_eq!(ui.milkdrop.seconds(), visualizer::DEFAULT_SECONDS);
+        assert!(!ui.milkdrop.random());
+        Settings::from_toml(
+            "[milkdrop]
+seconds = 0
+[windows.milkdrop]
+size = [1, 1000]
+",
+        )
+        .unwrap()
+        .apply(&mut ui);
+        assert_eq!(ui.milkdrop.seconds(), visualizer::SECONDS_RANGE.0);
+        assert_eq!(ui.md_size.0, crate::sprites::generic::MIN_W);
+        assert_eq!(
+            (ui.md_size.1 - crate::sprites::generic::MIN_H) % crate::sprites::generic::STEP_H,
+            0,
+            "on the resize grid"
+        );
+        // MilkDrop's window starts closed.
+        assert!(!Settings::default().windows.milkdrop.open);
     }
 
     #[test]

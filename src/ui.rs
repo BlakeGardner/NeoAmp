@@ -1,7 +1,9 @@
 //! UI state, hit testing and input handling, expressed per NeoAmp window so each window can
 //! live in its own OS window.
 
+use std::collections::hash_map::RandomState;
 use std::fmt::Write as _;
+use std::hash::BuildHasher as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -11,16 +13,20 @@ use crate::canvas::{Canvas, Rect};
 use crate::cursor::SkinCursor;
 use crate::eqf::{self, Preset};
 use crate::font::TtfFont;
+use crate::gen_window::GenPart;
 use crate::info::StreamDetails;
 use crate::menus::{AppCommand, Command, MenuKind};
+use crate::milkdrop::built_in;
+use crate::milkdrop::presets::Presets;
+use crate::milkdrop::visualizer::{Change, Visualizer};
 use crate::playlist::{self, Rng, Shuffle, SortKey};
 use crate::skin::{Polygons, Skin, cover_row};
 use crate::sprites::{
-    eq as e, eq_shade as es, main as m, main_shade as ms, pl as p, pl_shade as ps,
+    eq as e, eq_shade as es, generic as g, main as m, main_shade as ms, pl as p, pl_shade as ps,
 };
 use crate::vis::Vis;
 use crate::zoom::Zoom;
-use crate::{eq_window, main_window, playlist_window};
+use crate::{eq_window, gen_window, main_window, playlist_window};
 
 /// The marquee advances one character this often, like Winamp 2.x.
 pub const MARQUEE_STEP_MS: u128 = 220;
@@ -38,6 +44,10 @@ pub const DEFAULT_VOLUME: f32 = 0.78;
 const VOLUME_STEP: f32 = 0.02;
 /// How long Shift+V takes to fade the music out before it stops.
 pub const FADE_OUT: Duration = Duration::from_secs(3);
+/// MilkDrop's window at first: as high as the main window and equalizer together.
+pub const MD_DEFAULT_SIZE: (i32, i32) = (g::MIN_W, g::MIN_H + 4 * g::STEP_H);
+/// MilkDrop's window title, spelled in the skin's letters.
+const MD_TITLE: &str = "MilkDrop";
 
 /// An output device chosen by name, which plays even when other devices become the system's
 /// default.
@@ -49,16 +59,22 @@ pub struct OutputChoice {
     pub name: String,
 }
 
-/// The three classic windows.
+/// The three classic windows, and MilkDrop's.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum WindowKind {
     Main,
     Eq,
     Playlist,
+    Milkdrop,
 }
 
 impl WindowKind {
-    pub const ALL: [WindowKind; 3] = [WindowKind::Main, WindowKind::Eq, WindowKind::Playlist];
+    pub const ALL: [WindowKind; 4] = [
+        WindowKind::Main,
+        WindowKind::Eq,
+        WindowKind::Playlist,
+        WindowKind::Milkdrop,
+    ];
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,6 +143,12 @@ pub enum Control {
     PlMiniStop,
     PlMiniNext,
     PlMiniEject,
+    /// MilkDrop's title bar and the rest of its frame, which move the window.
+    MdFrame,
+    MdClose,
+    MdResize,
+    /// MilkDrop's picture.
+    MdPicture,
 }
 
 /// The draggable value controls.
@@ -197,6 +219,7 @@ impl Control {
             | PlMiniPlay | PlMiniPause | PlMiniStop | PlMiniNext | PlMiniEject => {
                 WindowKind::Playlist
             }
+            MdFrame | MdClose | MdResize | MdPicture => WindowKind::Milkdrop,
         }
     }
 }
@@ -338,9 +361,11 @@ impl PlMenu {
 pub enum Action {
     /// The user grabbed this window's title bar: start moving it.
     DragWindow(WindowKind),
-    /// The user grabbed the playlist's resize grip: resize it as the pointer moves, through
-    /// [`Ui::resize_playlist`].
-    ResizePlaylist,
+    /// The user grabbed the resize grip of the playlist or MilkDrop: resize the window as the
+    /// pointer moves, through [`Ui::resize_window`].
+    Resize(WindowKind),
+    /// Fill the screen with MilkDrop (`true`), or put its window back.
+    Fullscreen(bool),
     Close,
     Minimize,
     /// Window visibility, size or scale changed: re-sync the OS windows.
@@ -469,6 +494,27 @@ pub enum KeyCmd {
     SaveList,
     /// Edit the playlist.
     List(ListCmd),
+    /// Open or close MilkDrop's window.
+    ToggleMilkdrop,
+    /// Tell MilkDrop.
+    Milkdrop(MilkdropCmd),
+}
+
+/// What MilkDrop's keys and menu ask of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MilkdropCmd {
+    /// Another preset.
+    Change(Change),
+    /// Presets in random order, or in the order listed.
+    ToggleRandom,
+    /// Keep the preset until the user changes it.
+    ToggleLock,
+    /// Fill the screen, or go back to the window.
+    ToggleFullscreen,
+    /// Go back to the window from filling the screen.
+    LeaveFullscreen,
+    /// List the presets to choose from.
+    PresetMenu,
 }
 
 /// Playlist editing, from the playlist's menus and keys.
@@ -625,6 +671,12 @@ pub struct Ui {
     pub remaining_mode: bool,
     pub pressed: Option<Control>,
     pub pl_size: (i32, i32),
+    pub md_open: bool,
+    pub md_size: (i32, i32),
+    /// MilkDrop fills the screen; its window's frame is not shown.
+    pub md_fullscreen: bool,
+    /// MilkDrop's presets, which run while its window is open.
+    pub milkdrop: Visualizer,
     pub tracks: Vec<Track>,
     /// The current entry. While the playing track's entry has been removed (see `orphan`), the
     /// entry that followed it, which may be one past the end.
@@ -735,6 +787,13 @@ impl Ui {
             remaining_mode: false,
             pressed: None,
             pl_size: (p::MIN_W, p::MIN_H),
+            md_open: false,
+            md_size: MD_DEFAULT_SIZE,
+            md_fullscreen: false,
+            milkdrop: Visualizer::new(
+                Presets::new(built_in::PRESETS),
+                RandomState::new().hash_one(0x4D11_u32),
+            ),
             tracks: Vec::new(),
             current: 0,
             selected: Vec::new(),
@@ -821,6 +880,7 @@ impl Ui {
             (WindowKind::Eq, true) => (e::W, es::H),
             (WindowKind::Playlist, false) => self.pl_size,
             (WindowKind::Playlist, true) => (self.pl_size.0, ps::H),
+            (WindowKind::Milkdrop, _) => self.md_size,
         }
     }
 
@@ -831,15 +891,17 @@ impl Ui {
             WindowKind::Main => self.main_shade,
             WindowKind::Eq => self.eq_shade,
             WindowKind::Playlist => self.pl_shade,
+            WindowKind::Milkdrop => false,
         }
     }
 
-    /// Collapse a window to its windowshade bar, or open it out again.
+    /// Collapse a window to its windowshade bar, or open it out again. MilkDrop's has none.
     fn toggle_shade(&mut self, kind: WindowKind, actions: &mut Vec<Action>) {
         let shade = match kind {
             WindowKind::Main => &mut self.main_shade,
             WindowKind::Eq => &mut self.eq_shade,
             WindowKind::Playlist => &mut self.pl_shade,
+            WindowKind::Milkdrop => return,
         };
         *shade = !*shade;
         actions.push(Action::Reshade(kind));
@@ -851,15 +913,17 @@ impl Ui {
             WindowKind::Main => true,
             WindowKind::Eq => self.eq_open,
             WindowKind::Playlist => self.pl_open,
+            WindowKind::Milkdrop => self.md_open,
         }
     }
 
-    /// Open or close the equalizer or playlist (the main window is always open).
+    /// Open or close the equalizer, playlist or MilkDrop (the main window is always open).
     pub fn set_open(&mut self, kind: WindowKind, open: bool) {
         match kind {
             WindowKind::Main => {}
             WindowKind::Eq => self.eq_open = open,
             WindowKind::Playlist => self.pl_open = open,
+            WindowKind::Milkdrop => self.md_open = open,
         }
     }
 
@@ -1692,9 +1756,13 @@ impl Ui {
         }
     }
 
-    /// Advance the visualiser. Call once per frame before drawing.
+    /// Advance the visualizer, and MilkDrop's presets while its window is open. Call once per
+    /// frame before drawing.
     pub fn tick(&mut self, now: Instant) {
         self.vis.update(now, self.state == PlayState::Playing);
+        if self.md_open {
+            self.milkdrop.tick(now);
+        }
         if std::mem::take(&mut self.title_moved) {
             self.title_from = now;
         }
@@ -1887,6 +1955,14 @@ impl Ui {
                 playlist_window::draw_shade(self, c, skin, r);
                 None
             }
+            // The picture is drawn over the black inside by the window layer, on the GPU.
+            (WindowKind::Milkdrop, _) => {
+                let close_pressed = self.pressed == Some(Control::MdClose);
+                gen_window::draw(c, skin, r, MD_TITLE, self.active, close_pressed);
+                let inside = gen_window::inner((r.w, r.h)).offset(r.x, r.y);
+                c.fill_rect(inside, [0, 0, 0, 255]);
+                None
+            }
         };
         if let Some(polys) = shape {
             cut_to_shape(c, r, polys);
@@ -1909,6 +1985,14 @@ impl Ui {
             (WindowKind::Eq, true) => Some(Self::hit_eq_shade(x, y)),
             (WindowKind::Playlist, false) => self.hit_pl(x, y, w, h),
             (WindowKind::Playlist, true) => Some(Self::hit_pl_shade(x, y, w)),
+            // Filling the screen, MilkDrop is all picture.
+            (WindowKind::Milkdrop, _) if self.md_fullscreen => Some(Control::MdPicture),
+            (WindowKind::Milkdrop, _) => gen_window::hit((w, h), x, y).map(|part| match part {
+                GenPart::Frame => Control::MdFrame,
+                GenPart::Close => Control::MdClose,
+                GenPart::Resize => Control::MdResize,
+                GenPart::Inside => Control::MdPicture,
+            }),
         }
     }
 
@@ -1964,6 +2048,12 @@ impl Ui {
                 Some(PlShade) => SkinCursor::PWinBut,
                 Some(PlResize) => SkinCursor::PWsSize,
                 _ => SkinCursor::PWsNorm,
+            },
+            // Skins have no pointers of their own for generic windows; Webamp shows the
+            // ordinary one, and the playlist's grip pointer suits the grip.
+            (WindowKind::Milkdrop, _) => match hit {
+                Some(MdResize) => SkinCursor::PSize,
+                _ => SkinCursor::Normal,
             },
         }
     }
@@ -2270,21 +2360,32 @@ impl Ui {
     /// never below the minimum. The window layer works `size` out from the grip's travel, since
     /// the pointer leaves the window as it grows. True if the size changed.
     pub fn resize_playlist(&mut self, size: (i32, i32)) -> bool {
-        // Rounds to the nearest step (the steps are odd, so there are no ties).
-        let snap = |v: i32, min: i32, step: i32| {
-            let steps = v.saturating_sub(min).max(0).saturating_add(step / 2) / step;
-            min.saturating_add(steps.saturating_mul(step))
-        };
-        let new = (
-            snap(size.0, p::MIN_W, p::STEP_W),
-            snap(size.1, p::MIN_H, p::STEP_H),
-        );
+        let new = snap_size(size, (p::MIN_W, p::MIN_H), (p::STEP_W, p::STEP_H));
         if new == self.pl_size {
             return false;
         }
         self.pl_size = new;
         self.pl_scroll = self.pl_scroll.min(self.max_scroll());
         true
+    }
+
+    /// Resize MilkDrop's window as [`Ui::resize_playlist`] resizes the playlist, on the same
+    /// grid. True if the size changed.
+    pub fn resize_milkdrop(&mut self, size: (i32, i32)) -> bool {
+        let new = snap_size(size, (g::MIN_W, g::MIN_H), (g::STEP_W, g::STEP_H));
+        let changed = new != self.md_size;
+        self.md_size = new;
+        changed
+    }
+
+    /// Resize the playlist or MilkDrop's window from its grip (see [`Ui::resize_playlist`]).
+    /// True if the size changed.
+    pub fn resize_window(&mut self, kind: WindowKind, size: (i32, i32)) -> bool {
+        match kind {
+            WindowKind::Playlist => self.resize_playlist(size),
+            WindowKind::Milkdrop => self.resize_milkdrop(size),
+            WindowKind::Main | WindowKind::Eq => false,
+        }
     }
 
     // ----- input (all coordinates are local to the window of `kind`) ----------------------
@@ -2325,8 +2426,17 @@ impl Ui {
                     self.pressed = Some(ctl);
                     self.drag_scroll(y);
                 }
-                PlResize => actions.push(Action::ResizePlaylist),
+                PlResize => actions.push(Action::Resize(WindowKind::Playlist)),
                 PlTrack(i) => self.click_row(i, y, double, &mut actions),
+                MdFrame => actions.push(Action::DragWindow(kind)),
+                MdResize => actions.push(Action::Resize(WindowKind::Milkdrop)),
+                // A double-click on the picture fills the screen with it, or goes back.
+                MdPicture if double => {
+                    actions.push(Action::Fullscreen(!self.md_fullscreen));
+                    self.last_click = None;
+                    return actions;
+                }
+                MdPicture => {}
                 // Every other control is a button, the playlist's menu buttons included: show
                 // it pressed (or its menu) until release.
                 _ => self.pressed = Some(ctl),
@@ -2422,7 +2532,7 @@ impl Ui {
                 };
             }
             WindowKind::Main => self.change_volume(steps),
-            WindowKind::Eq => {}
+            WindowKind::Eq | WindowKind::Milkdrop => {}
         }
     }
 
@@ -2461,7 +2571,7 @@ impl Ui {
             }
             // Other drags finish silently.
             Volume | Balance | EqPreamp | EqBand(_) | EqVolume | EqBalance | PlScroll
-            | PlResize => {}
+            | PlResize | MdResize => {}
             // Releasing outside the pressed button cancels it, as in Win32.
             _ if !still_over => {}
             MainClose => actions.push(Action::Close),
@@ -2503,6 +2613,10 @@ impl Ui {
                 self.pl_open = false;
                 actions.push(Action::Relayout);
             }
+            MdClose => {
+                self.set_open(WindowKind::Milkdrop, false);
+                actions.push(Action::Relayout);
+            }
             EqOn => self.eq_on = !self.eq_on,
             EqAuto => self.eq_auto = !self.eq_auto,
             MainOptions => actions.push(Self::menu(MenuKind::Main, kind, Some(m::OPTIONS))),
@@ -2512,7 +2626,8 @@ impl Ui {
             ClutterA => self.toggle_always_on_top(&mut actions),
             ClutterI => actions.push(Action::App(AppCommand::FileInfo(InfoOf::Current))),
             // Title bars only drag; the playlist's menu buttons were handled above.
-            MainTitle | EqTitle | PlTitle | PlAdd | PlRem | PlSel | PlMisc | PlListOpts => {}
+            MainTitle | EqTitle | PlTitle | PlAdd | PlRem | PlSel | PlMisc | PlListOpts
+            | MdFrame | MdPicture => {}
         }
         actions
     }
@@ -2563,7 +2678,9 @@ impl Ui {
             // In the middle of a left-button drag.
             return Vec::new();
         }
-        let menu = if kind == WindowKind::Main && self.hit(kind, x, y) == Some(Control::Vis) {
+        let menu = if kind == WindowKind::Milkdrop {
+            MenuKind::Milkdrop
+        } else if kind == WindowKind::Main && self.hit(kind, x, y) == Some(Control::Vis) {
             MenuKind::Vis
         } else {
             MenuKind::Main
@@ -2674,9 +2791,44 @@ impl Ui {
             KeyCmd::LoadList => actions.push(Action::App(AppCommand::LoadList)),
             KeyCmd::SaveList => actions.push(Action::App(AppCommand::SaveList)),
             KeyCmd::List(cmd) => self.list_command(cmd, &mut actions),
+            KeyCmd::ToggleMilkdrop => {
+                self.set_open(WindowKind::Milkdrop, !self.md_open);
+                actions.push(Action::Relayout);
+            }
+            KeyCmd::Milkdrop(cmd) => self.milkdrop_command(cmd, &mut actions),
         }
         actions
     }
+
+    fn milkdrop_command(&mut self, cmd: MilkdropCmd, actions: &mut Vec<Action>) {
+        let md = &mut self.milkdrop;
+        match cmd {
+            MilkdropCmd::Change(change) => md.change(change),
+            MilkdropCmd::ToggleRandom => md.set_random(!md.random()),
+            MilkdropCmd::ToggleLock => md.set_locked(!md.locked()),
+            MilkdropCmd::ToggleFullscreen => actions.push(Action::Fullscreen(!self.md_fullscreen)),
+            MilkdropCmd::LeaveFullscreen if self.md_fullscreen => {
+                actions.push(Action::Fullscreen(false));
+            }
+            MilkdropCmd::LeaveFullscreen => {}
+            MilkdropCmd::PresetMenu => actions.push(Action::OpenMenu(MenuRequest {
+                kind: MenuKind::MilkdropPresets,
+                window: WindowKind::Milkdrop,
+                below: None,
+                keyboard: true,
+            })),
+        }
+    }
+}
+
+/// The size on a resize grid nearest to `size`: `min` plus whole `step`s, never below `min`.
+fn snap_size(size: (i32, i32), min: (i32, i32), step: (i32, i32)) -> (i32, i32) {
+    // Rounds to the nearest step (the steps are odd, so there are no ties).
+    let snap = |v: i32, min: i32, step: i32| {
+        let steps = v.saturating_sub(min).max(0).saturating_add(step / 2) / step;
+        min.saturating_add(steps.saturating_mul(step))
+    };
+    (snap(size.0, min.0, step.0), snap(size.1, min.1, step.1))
 }
 
 /// Make every pixel of `r` outside `mask` fully transparent.
@@ -3159,7 +3311,7 @@ mod tests {
         let mut ui = Ui::new();
         let grip = (275 - 8, 116 - 8);
         let actions = ui.mouse_down(Playlist, grip.0, grip.1, Instant::now());
-        assert_eq!(actions, vec![Action::ResizePlaylist]);
+        assert_eq!(actions, vec![Action::Resize(WindowKind::Playlist)]);
         assert_eq!(ui.pressed, None);
         assert_eq!(ui.mouse_move(Playlist, grip.0 + 30, grip.1 + 40), vec![]);
         assert_eq!(ui.pl_size, (p::MIN_W, p::MIN_H));
@@ -3411,7 +3563,7 @@ mod tests {
     fn windowshade_collapses_each_window_to_a_bar_keeping_its_width() {
         let mut ui = Ui::new();
         assert!(ui.resize_playlist((300, 145)));
-        for kind in WindowKind::ALL {
+        for kind in [Main, Eq, Playlist] {
             assert_eq!(
                 ui.key(KeyCmd::ToggleShade(kind)),
                 vec![Action::Reshade(kind)]
@@ -3574,7 +3726,7 @@ mod tests {
             ui.draw_window(kind, &mut c, skin, None, now);
             c
         };
-        for kind in WindowKind::ALL {
+        for kind in [Main, Eq, Playlist] {
             let c = draw(&ui, &skin, kind);
             assert_eq!(c.size().1, 14);
             assert!(
@@ -4343,5 +4495,120 @@ mod tests {
             ui.marquee_text(ui.start)
                 .starts_with("[Connecting] 2. My Station")
         );
+    }
+
+    #[test]
+    fn milkdrops_window_opens_moves_resizes_and_closes() {
+        let mut ui = Ui::new();
+        assert!(!ui.is_open(WindowKind::Milkdrop));
+        assert_eq!(ui.key(KeyCmd::ToggleMilkdrop), vec![Action::Relayout]);
+        assert!(ui.md_open);
+        let md = WindowKind::Milkdrop;
+        let (w, h) = ui.window_size(md);
+        assert_eq!((w, h), MD_DEFAULT_SIZE);
+        let now = Instant::now();
+        assert_eq!(ui.mouse_down(md, 100, 5, now), vec![Action::DragWindow(md)]);
+        let _ = ui.mouse_up(md, 100, 5);
+        assert_eq!(
+            ui.mouse_down(md, w - 3, h - 3, now),
+            vec![Action::Resize(md)]
+        );
+        let _ = ui.mouse_up(md, w - 3, h - 3);
+        assert!(ui.resize_window(md, (310, 200)));
+        assert_eq!(ui.md_size, (300, 203), "on the 25x29 grid");
+        assert!(!ui.resize_window(md, (300, 200)));
+        assert!(ui.resize_window(md, (1, 1)));
+        assert_eq!(ui.md_size, (g::MIN_W, g::MIN_H), "never below the minimum");
+        // No windowshade mode.
+        assert!(ui.key(KeyCmd::ToggleShade(md)).is_empty());
+        assert!(!ui.is_shaded(md));
+        let (w, _) = ui.window_size(md);
+        assert_eq!(ui.hit(md, w - 7, 6), Some(Control::MdClose));
+        assert_eq!(
+            click(&mut ui, md, Rect::new(w - 9, 4, 1, 1)),
+            vec![Action::Relayout]
+        );
+        assert!(!ui.md_open);
+    }
+
+    #[test]
+    fn a_double_click_on_milkdrop_fills_the_screen() {
+        let mut ui = Ui::new();
+        ui.md_open = true;
+        let md = WindowKind::Milkdrop;
+        let now = Instant::now();
+        assert!(ui.mouse_down(md, 100, 60, now).is_empty());
+        let _ = ui.mouse_up(md, 100, 60);
+        let later = now + Duration::from_millis(100);
+        assert_eq!(
+            ui.mouse_down(md, 100, 60, later),
+            vec![Action::Fullscreen(true)]
+        );
+        // Filling the screen it is all picture, and the keys put it back.
+        ui.md_fullscreen = true;
+        assert_eq!(ui.hit(md, 2, 2), Some(Control::MdPicture));
+        let key = |cmd| KeyCmd::Milkdrop(cmd);
+        assert_eq!(
+            ui.key(key(MilkdropCmd::LeaveFullscreen)),
+            vec![Action::Fullscreen(false)]
+        );
+        assert_eq!(
+            ui.key(key(MilkdropCmd::ToggleFullscreen)),
+            vec![Action::Fullscreen(false)]
+        );
+        ui.md_fullscreen = false;
+        assert!(ui.key(key(MilkdropCmd::LeaveFullscreen)).is_empty());
+    }
+
+    #[test]
+    fn milkdrops_keys_change_its_presets() {
+        let mut ui = Ui::new();
+        ui.md_open = true;
+        ui.tick(Instant::now());
+        assert!(
+            ui.milkdrop.current().is_some(),
+            "a preset starts with the window"
+        );
+        let key = |cmd| KeyCmd::Milkdrop(cmd);
+        assert!(ui.milkdrop.random());
+        let _ = ui.key(key(MilkdropCmd::ToggleRandom));
+        assert!(!ui.milkdrop.random());
+        let _ = ui.key(key(MilkdropCmd::ToggleLock));
+        assert!(ui.milkdrop.locked());
+        let first = ui.milkdrop.current();
+        let _ = ui.key(key(MilkdropCmd::Change(Change::HardCut)));
+        assert_ne!(ui.milkdrop.current(), first);
+        let _ = ui.key(key(MilkdropCmd::Change(Change::Previous)));
+        assert_eq!(ui.milkdrop.current(), first);
+        assert_eq!(
+            ui.key(key(MilkdropCmd::PresetMenu)),
+            vec![Action::OpenMenu(MenuRequest {
+                kind: MenuKind::MilkdropPresets,
+                window: WindowKind::Milkdrop,
+                below: None,
+                keyboard: true,
+            })]
+        );
+        // A right-click anywhere in the window opens MilkDrop's menu.
+        assert_eq!(
+            ui.context_menu(WindowKind::Milkdrop, 100, 5),
+            menu(MenuKind::Milkdrop, WindowKind::Milkdrop, None)
+        );
+    }
+
+    #[test]
+    fn milkdrop_draws_the_generic_frame_around_a_black_picture() {
+        let skin = crate::skin::Skin::from_wsz(crate::app::BASE_SKIN, "base").unwrap();
+        let mut ui = Ui::new();
+        ui.md_open = true;
+        let (w, h) = ui.window_size(WindowKind::Milkdrop);
+        let mut c = Canvas::new(w, h, Density::ONE);
+        ui.draw_window(WindowKind::Milkdrop, &mut c, &skin, None, Instant::now());
+        assert_eq!(c.get(w / 2, h / 2), [0, 0, 0, 255]);
+        assert_eq!(
+            c.get(0, 0),
+            skin.sheet(crate::sprites::Sheet::Gen).get(0, 0)
+        );
+        assert!(c.image().data.chunks_exact(4).all(|px| px[3] == 255));
     }
 }

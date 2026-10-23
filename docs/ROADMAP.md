@@ -232,18 +232,20 @@ cream pack have them. They are written in Direct3D's HLSL, so NeoAmp
 translates them to WGSL itself. Webamp sends them to a web service to be
 converted to GLSL.
 
-- [ ] Stereo samples for the visualizers, and MilkDrop's sound analysis:
+- [x] Stereo samples for the visualizers, and MilkDrop's sound analysis:
       the 512-band spectrum and bass, mid and treble with their averages.
-- [ ] MilkDrop's equation language (per-frame, per-vertex, custom wave and
+- [x] MilkDrop's equation language (per-frame, per-vertex, custom wave and
       shape code), compiled once per preset.
-- [ ] Reading `.milk` presets.
-- [ ] The renderer: the warp mesh and feedback, motion vectors, the basic
+- [x] Reading `.milk` presets.
+- [x] The renderer: the warp mesh and feedback, motion vectors, the basic
       and custom waves, custom shapes, borders, video echo, and the
       default warp and composite shaders.
-- [ ] HLSL to WGSL, checked by compiling every shader in the cream pack.
-- [ ] Blur, noise and preset textures, and blended changes of preset.
-- [ ] The window: `gen.bmp` frame, docking, resizing, full screen, its
-      keys and menu, the preset list and song title, saved settings.
+- [x] HLSL to WGSL, checked by compiling every shader in the cream pack.
+- [x] Blur, noise and preset textures, and blended changes of preset.
+- [x] The window: `gen.bmp` frame, docking, resizing, full screen, its
+      keys and menu, the preset list, saved settings, and the user's presets
+      folder with the pictures presets use.
+- [ ] The song title drawn over the picture when a track starts.
 - [ ] The built-in presets, and the guide, shortcuts and settings pages.
 
 ## Optional

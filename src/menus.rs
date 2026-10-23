@@ -6,10 +6,11 @@ use crate::audio::OutputDevice;
 use crate::eqf;
 use crate::library::Entry;
 use crate::menu::{Item, escape};
+use crate::milkdrop::visualizer::Change;
 use crate::playlist::SortKey;
 use crate::settings::SkinChoice;
 use crate::shortcut::{Key, Shortcut};
-use crate::ui::{InfoOf, KeyCmd, ListCmd, Ui};
+use crate::ui::{InfoOf, KeyCmd, ListCmd, MilkdropCmd, Ui};
 use crate::vis::{AnalyzerStyle, Bands, Falloff, ScopeStyle, VisMode};
 use crate::zoom::Zoom;
 
@@ -30,6 +31,10 @@ pub enum MenuKind {
     PlaylistSort,
     /// The playlist's REM > MISC REM.
     PlaylistRemove,
+    /// A right-click in MilkDrop's window.
+    Milkdrop,
+    /// MilkDrop's L.
+    MilkdropPresets,
 }
 
 /// What a menu item does.
@@ -140,6 +145,8 @@ pub fn build(kind: MenuKind, ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
         MenuKind::Skins => skins(lib),
         MenuKind::PlaylistSort => playlist_sort(),
         MenuKind::PlaylistRemove => playlist_remove(),
+        MenuKind::Milkdrop => milkdrop(ui),
+        MenuKind::MilkdropPresets => milkdrop_presets(ui),
     }
 }
 
@@ -207,6 +214,12 @@ fn main_menu(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
         )
         .checked(ui.pl_open),
         key("E&qualizer", KeyCmd::ToggleEq, Shortcut::char('G').alt()).checked(ui.eq_open),
+        key(
+            "&MilkDrop",
+            KeyCmd::ToggleMilkdrop,
+            Shortcut::char('K').ctrl().shift(),
+        )
+        .checked(ui.md_open),
         Item::separator(),
         Item::submenu("&Skins", skins(lib)),
         Item::submenu("&Options", options(ui, lib)),
@@ -436,6 +449,115 @@ fn presets(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
     ]
 }
 
+fn md(label: &'static str, cmd: MilkdropCmd, shortcut: Shortcut) -> Item<Command> {
+    key(label, KeyCmd::Milkdrop(cmd), shortcut)
+}
+
+/// The key that locks the preset: Scroll Lock, or on macOS F14, which sits where Scroll Lock
+/// does on Apple's full-size keyboards.
+#[must_use]
+pub fn lock_key() -> Shortcut {
+    if cfg!(target_os = "macos") {
+        Shortcut::new(Key::F(14))
+    } else {
+        Shortcut::new(Key::ScrollLock)
+    }
+}
+
+fn milkdrop(ui: &Ui) -> Vec<Item<Command>> {
+    let v = &ui.milkdrop;
+    let change = |c| MilkdropCmd::Change(c);
+    vec![
+        md(
+            "&Next preset",
+            change(Change::Next),
+            Shortcut::new(Key::Space),
+        ),
+        md(
+            "&Previous preset",
+            change(Change::Previous),
+            Shortcut::new(Key::Backspace),
+        ),
+        md("&Hard cut", change(Change::HardCut), Shortcut::char('H')),
+        Item::submenu("Pre&sets", milkdrop_presets(ui)),
+        Item::separator(),
+        md(
+            "&Random order",
+            MilkdropCmd::ToggleRandom,
+            Shortcut::char('R'),
+        )
+        .checked(v.random()),
+        md("&Lock preset", MilkdropCmd::ToggleLock, lock_key()).checked(v.locked()),
+        Item::separator(),
+        md(
+            "&Fullscreen",
+            MilkdropCmd::ToggleFullscreen,
+            Shortcut::new(Key::Enter).alt(),
+        )
+        .checked(ui.md_fullscreen),
+        key(
+            "&Close",
+            KeyCmd::ToggleMilkdrop,
+            Shortcut::char('K').ctrl().shift(),
+        ),
+    ]
+}
+
+/// More of the user's presets than this are grouped by their first letter.
+const UNGROUPED_PRESETS: usize = 40;
+
+/// The presets to choose from: the built-in ones, then the user's, grouped by first letter
+/// when there are many. The one showing is marked.
+fn milkdrop_presets(ui: &Ui) -> Vec<Item<Command>> {
+    let presets = ui.milkdrop.presets();
+    let current = ui.milkdrop.current();
+    let item = |i: usize, name: &str| {
+        Item::new(
+            escape(name),
+            Command::Key(KeyCmd::Milkdrop(MilkdropCmd::Change(Change::Select(i)))),
+        )
+        .chosen(current == Some(i))
+    };
+    let built_in = presets.built_in_count();
+    let mut items: Vec<Item<Command>> = presets
+        .names()
+        .take(built_in)
+        .enumerate()
+        .map(|(i, name)| item(i, name))
+        .collect();
+    let users: Vec<(usize, &str)> = presets.names().enumerate().skip(built_in).collect();
+    if users.is_empty() {
+        return items;
+    }
+    items.push(Item::separator());
+    if users.len() <= UNGROUPED_PRESETS {
+        items.extend(users.iter().map(|&(i, name)| item(i, name)));
+        return items;
+    }
+    // Sorted by name, so each letter's presets are together.
+    let letter = |name: &str| {
+        name.chars()
+            .next()
+            .filter(char::is_ascii_alphabetic)
+            .map_or('#', |c| c.to_ascii_uppercase())
+    };
+    let mut rest = users.as_slice();
+    while let Some(&(_, first)) = rest.first() {
+        let l = letter(first);
+        let n = rest
+            .iter()
+            .take_while(|(_, name)| letter(name) == l)
+            .count();
+        let (group, after) = rest.split_at(n.max(1));
+        items.push(Item::submenu(
+            format!("&{l}"),
+            group.iter().map(|&(i, name)| item(i, name)).collect(),
+        ));
+        rest = after;
+    }
+    items
+}
+
 fn skins(lib: &Library<'_>) -> Vec<Item<Command>> {
     let mut items = vec![
         Item::new("&Open Skin...", Command::App(AppCommand::OpenSkin)),
@@ -651,5 +773,67 @@ mod tests {
         assert_eq!(find(&winamp, "<&NeoAmp Skin>").mark(), Mark::None);
         assert_eq!(find(&winamp, "<&Winamp Base Skin>").mark(), Mark::Bullet);
         assert_eq!(find(&winamp, "Other").mark(), Mark::None);
+    }
+
+    #[test]
+    fn milkdrops_menu_marks_its_options_and_the_preset_showing() {
+        let mut ui = Ui::new();
+        let main = build(MenuKind::Main, &ui, &Library::default());
+        assert_eq!(find(&main, "&MilkDrop").mark(), Mark::None);
+        ui.md_open = true;
+        ui.tick(std::time::Instant::now());
+        let main = build(MenuKind::Main, &ui, &Library::default());
+        assert_eq!(find(&main, "&MilkDrop").mark(), Mark::Check);
+        let items = build(MenuKind::Milkdrop, &ui, &Library::default());
+        assert_eq!(find(&items, "&Random order").mark(), Mark::Check);
+        assert_eq!(find(&items, "&Lock preset").mark(), Mark::None);
+        assert_eq!(find(&items, "&Fullscreen").mark(), Mark::None);
+        assert_eq!(
+            find(&items, "&Hard cut").kind(),
+            &Kind::Command(Command::Key(KeyCmd::Milkdrop(MilkdropCmd::Change(
+                Change::HardCut
+            ))))
+        );
+        let presets = submenu(&items, "Pre&sets");
+        let shown = ui.milkdrop.current().unwrap();
+        let name = escape(ui.milkdrop.presets().name(shown).unwrap());
+        assert_eq!(find(presets, &name).mark(), Mark::Bullet);
+        assert_eq!(
+            presets
+                .iter()
+                .filter(|it| it.mark() == Mark::Bullet)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn many_presets_of_the_users_are_grouped_by_letter() {
+        let mut ui = Ui::new();
+        let dir = std::env::temp_dir().join(format!("neoamp-menu-milk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..UNGROUPED_PRESETS {
+            for first in ["a", "B", "9"] {
+                std::fs::write(dir.join(format!("{first}{i:02}.milk")), "").unwrap();
+            }
+        }
+        let presets = crate::milkdrop::presets::Presets::with_folder(
+            crate::milkdrop::built_in::PRESETS,
+            &dir,
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        ui.milkdrop.set_presets(presets);
+        let items = build(MenuKind::MilkdropPresets, &ui, &Library::default());
+        let built_in = crate::milkdrop::built_in::PRESETS.len();
+        assert_eq!(items[built_in].kind(), &Kind::Separator);
+        let groups: Vec<&str> = items[built_in + 1..].iter().map(Item::label).collect();
+        assert_eq!(groups, ["&#", "&A", "&B"]);
+        assert_eq!(submenu(&items, "&B").len(), UNGROUPED_PRESETS);
+        assert_eq!(
+            find(submenu(&items, "&A"), "a00").kind(),
+            &Kind::Command(Command::Key(KeyCmd::Milkdrop(MilkdropCmd::Change(
+                Change::Select(built_in + UNGROUPED_PRESETS)
+            ))))
+        );
     }
 }

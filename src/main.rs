@@ -35,13 +35,17 @@ keys: Z/X/C/V/B transport, Shift+V fade out and stop, L open files, Shift+L open
       folder, Ctrl+L open a URL, S shuffle, R repeat, J jump to file, Alt+3 file info,
       Ctrl+T time mode, Ctrl+D double size, Ctrl+A always on top, Ctrl+W windowshade,
       Ctrl+= / Ctrl+- / Ctrl+0 zoom in / out / reset,
-      Alt+G equalizer, Alt+E playlist, Alt+F main menu (or right-click), Alt+S skins,
-      arrows volume/seek, media keys play/pause, next, previous, stop (system-wide)
+      Alt+G equalizer, Alt+E playlist, Ctrl+Shift+K MilkDrop, Alt+F main menu (or
+      right-click), Alt+S skins, arrows volume/seek, media keys play/pause, next,
+      previous, stop (system-wide)
 in the playlist: arrows, PgUp/PgDn, Home/End move (Shift selects), Enter plays,
       Ctrl+A / Ctrl+I select all / invert, Delete / Ctrl+Delete / Alt+Delete remove
       selected / crop / dead files, Alt+Up/Down move entries, Ctrl+Shift+1/2/3 sort,
       Ctrl+R reverse, Ctrl+Shift+R randomize, Ctrl+N / Ctrl+O / Ctrl+S new/load/save,
       Ctrl+W windowshade the playlist, Alt+3 file info for the selected entry
+in MilkDrop: Space next preset, H hard cut, Backspace previous, R random order,
+      Scroll Lock (F14 on macOS) lock the preset, L list the presets, Alt+Enter
+      fullscreen, Esc leave it
 on macOS, Cmd takes Ctrl's place and Option is Alt";
 
 /// Classic skins are `.wsz` files; any other path is audio for the playlist.

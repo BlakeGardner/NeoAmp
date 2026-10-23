@@ -12,7 +12,11 @@
 //! - [`engine`]: time, blending between presets, and each frame's work, for the GPU.
 //! - [`hlsl`]: presets' HLSL pixel shaders translated to WGSL.
 //! - [`gpu`]: drawing each frame with wgpu, with the noise textures from [`noise`].
+//! - [`presets`]: the presets to choose from, [`built_in`] and the user's own; [`visualizer`]
+//!   chooses among them and moves on from one to the next.
+//! - [`textures`]: the pictures presets use, found in the user's presets folder.
 
+pub mod built_in;
 pub mod draw;
 pub mod eel;
 pub mod engine;
@@ -20,5 +24,8 @@ pub mod gpu;
 pub mod hlsl;
 pub mod noise;
 pub mod preset;
+pub mod presets;
 pub mod sound;
 pub mod state;
+pub mod textures;
+pub mod visualizer;

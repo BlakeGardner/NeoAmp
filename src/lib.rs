@@ -14,7 +14,8 @@
 //! - [`skin`]: `.wsz` loading (zip, BMP/PNG, `viscolor.txt`, `pledit.txt`, `region.txt`, and
 //!   the mouse pointers in [`cursor`]), with sheets that come as SVG parsed and rasterised by
 //!   `svg`.
-//! - [`ui`]: state, layout, hit testing and input; the window modules draw.
+//! - [`ui`]: state, layout, hit testing and input; the window modules draw, `gen_window` the
+//!   frame of the generic windows that MilkDrop shows in.
 //! - [`menu`]: popup menus drawn like Windows 2000's; [`menus`] holds NeoAmp's own, and
 //!   [`shortcut`] writes their keyboard shortcuts the platform's way (⌘ on macOS).
 //! - [`eqf`]: equalizer presets, built in and in Winamp's `.eqf` files.
@@ -34,7 +35,8 @@
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
 //!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
 //!   `info_window`, `url_window` and `museum_window`), the platform's file dialogs (`file_dialog`), the
-//!   clipboard (`clipboard`) and the windows' icon on Windows (`window_icon`).
+//!   clipboard (`clipboard`), the windows' icon on Windows (`window_icon`) and MilkDrop's picture
+//!   in its window (`milkdrop_view`).
 
 pub mod app;
 pub mod audio;
@@ -49,6 +51,7 @@ mod eq_window;
 pub mod eqf;
 mod file_dialog;
 pub mod font;
+mod gen_window;
 pub mod http;
 pub mod info;
 mod info_window;
@@ -62,6 +65,7 @@ mod main_window;
 pub mod menu;
 pub mod menus;
 pub mod milkdrop;
+mod milkdrop_view;
 pub mod museum;
 pub mod museum_dialog;
 mod museum_window;
