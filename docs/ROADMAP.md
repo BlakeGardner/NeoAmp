@@ -216,7 +216,8 @@ on Windows.
 
 ## Phase 9: MilkDrop
 
-In progress on the `milkdrop` branch. MilkDrop came with Winamp from 2.9 and
+Done except the song title over the picture: see [MilkDrop](GUIDE.md#milkdrop)
+in the user guide. MilkDrop came with Winamp from 2.9 and
 5.0 on, MilkDrop 2 from 5.5; Webamp shows it through butterchurn, a port of
 MilkDrop to WebGL, which is the reference here. Before any code, the user
 chose: an engine of NeoAmp's own in Rust on wgpu, rather than binding the
