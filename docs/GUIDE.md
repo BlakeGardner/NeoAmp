@@ -2,7 +2,8 @@
 
 Everything NeoAmp does, and where it behaves differently on Linux, Windows
 and macOS. [SHORTCUTS.md](SHORTCUTS.md) lists every key, and
-[SETTINGS.md](SETTINGS.md) every setting it saves. Building NeoAmp, and how
+[SETTINGS.md](SETTINGS.md) every setting it saves and every [environment
+variable](SETTINGS.md#environment-variables) it reads. Building NeoAmp, and how
 it works inside, are in [DEVELOPMENT.md](DEVELOPMENT.md), and making skins
 with SVG pictures in [SVG_SKINS.md](SVG_SKINS.md).
 
@@ -344,6 +345,9 @@ Winamp's "always on top") and take keyboard focus when clicked.
   drags are handed to the compositor and nothing snaps.
 - `NEOAMP_UNMANAGED=1|0` forces or forbids override-redirect windows instead
   of probing.
+
+[Environment variables](SETTINGS.md#environment-variables) in SETTINGS.md
+describes these and the others NeoAmp reads.
 
 **The window title.** The main window's title names the current track, as
 Winamp's did in the taskbar: "3. Artist - Title - NeoAmp", with "[Paused]"
@@ -888,7 +892,8 @@ Two files share one folder, with the skins and presets the menus list:
 [SETTINGS.md](SETTINGS.md) describes every setting: what it controls, the
 values it takes and its default.
 
-`NEOAMP_CONFIG_DIR=<folder>` keeps all of it somewhere else. Files, a skin or
+`NEOAMP_CONFIG_DIR=<folder>` keeps all of it somewhere else (see
+[Environment variables](SETTINGS.md#environment-variables)). Files, a skin or
 `--scale` given on the command line take precedence over what was saved and
 are remembered in turn, so files replace the saved playlist (`--enqueue` adds
 them to it instead). The output device chosen in the Options menu is
