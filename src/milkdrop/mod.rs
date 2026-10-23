@@ -7,7 +7,13 @@
 //! - [`sound`]: the waveforms, spectra and bass, mid and treble levels presets react to.
 //! - [`eel`]: the expression language of presets' equations.
 //! - [`preset`]: reading `.milk` presets.
+//! - [`state`]: a preset while it runs: its tables of variables and compiled code.
+//! - [`draw`]: the shapes, waves, borders and motion vectors drawn over each frame.
+//! - [`engine`]: time, blending between presets, and each frame's work, for the GPU.
 
+pub mod draw;
 pub mod eel;
+pub mod engine;
 pub mod preset;
 pub mod sound;
+pub mod state;

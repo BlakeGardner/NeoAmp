@@ -15,10 +15,14 @@ use super::eel::Dialect;
 /// Custom waves and shapes a preset can have.
 pub const CUSTOM: usize = 4;
 
-/// A preset's starting values that it does not set itself, as MilkDrop chose them.
+/// A preset's starting values that it does not set itself, under the names its equations use,
+/// as MilkDrop's `CState::Default` and `Import` chose them. Two of MilkDrop's quirks are kept:
+/// a missing `wave_r` to `wave_y` reads as 0 (MilkDrop passed `rot` as their default), and
+/// `mv_a` defaults to `bMotionVectorsOn`, itself off by default.
 const BASE_DEFAULTS: &[(&str, f64)] = &[
+    ("rating", 3.0),
     ("decay", 0.98),
-    ("gammaadj", 2.0),
+    ("gamma", 2.0),
     ("echo_zoom", 2.0),
     ("echo_alpha", 0.0),
     ("echo_orient", 0.0),
@@ -29,18 +33,17 @@ const BASE_DEFAULTS: &[(&str, f64)] = &[
     ("darken_center", 0.0),
     ("solarize", 0.0),
     ("invert", 0.0),
-    ("bmotionvectorson", 1.0),
     ("fshader", 0.0),
-    ("b1n", 0.0),
-    ("b2n", 0.0),
-    ("b3n", 0.0),
-    ("b1x", 1.0),
-    ("b2x", 1.0),
-    ("b3x", 1.0),
-    ("b1ed", 0.25),
+    ("blur1_min", 0.0),
+    ("blur2_min", 0.0),
+    ("blur3_min", 0.0),
+    ("blur1_max", 1.0),
+    ("blur2_max", 1.0),
+    ("blur3_max", 1.0),
+    ("blur1_edge_darken", 0.25),
     ("wave_mode", 0.0),
-    ("additivewave", 0.0),
-    ("wave_dots", 0.0),
+    ("wave_additive", 0.0),
+    ("wave_usedots", 0.0),
     ("wave_thick", 0.0),
     ("wave_a", 0.8),
     ("wave_scale", 1.0),
@@ -49,11 +52,11 @@ const BASE_DEFAULTS: &[(&str, f64)] = &[
     ("modwavealphabyvolume", 0.0),
     ("modwavealphastart", 0.75),
     ("modwavealphaend", 0.95),
-    ("wave_r", 1.0),
-    ("wave_g", 1.0),
-    ("wave_b", 1.0),
-    ("wave_x", 0.5),
-    ("wave_y", 0.5),
+    ("wave_r", 0.0),
+    ("wave_g", 0.0),
+    ("wave_b", 0.0),
+    ("wave_x", 0.0),
+    ("wave_y", 0.0),
     ("wave_brighten", 1.0),
     ("mv_x", 12.0),
     ("mv_y", 9.0),
@@ -63,7 +66,7 @@ const BASE_DEFAULTS: &[(&str, f64)] = &[
     ("mv_r", 1.0),
     ("mv_g", 1.0),
     ("mv_b", 1.0),
-    ("mv_a", 1.0),
+    ("bmotionvectorson", 0.0),
     ("warpanimspeed", 1.0),
     ("warpscale", 1.0),
     ("zoomexp", 1.0),
@@ -110,7 +113,7 @@ const SHAPE_DEFAULTS: &[(&str, f64)] = &[
     ("enabled", 0.0),
     ("sides", 4.0),
     ("additive", 0.0),
-    ("thickoutline", 0.0),
+    ("thick", 0.0),
     ("textured", 0.0),
     ("num_inst", 1.0),
     ("tex_zoom", 1.0),
@@ -133,18 +136,19 @@ const SHAPE_DEFAULTS: &[(&str, f64)] = &[
     ("border_a", 0.1),
 ];
 
-/// The name the equations use for a key of the file, where it differs.
+/// The name the equations use for a key of the file, where it differs: MilkDrop's own
+/// per-frame variable names (`state.cpp`, `RegisterBuiltInVariables`).
 fn equation_name(key: &str) -> &str {
     match key {
         "frating" => "rating",
-        "fgammaadj" => "gammaadj",
+        "fgammaadj" => "gamma",
         "fdecay" => "decay",
         "fvideoechozoom" => "echo_zoom",
         "fvideoechoalpha" => "echo_alpha",
         "nvideoechoorientation" => "echo_orient",
         "nwavemode" => "wave_mode",
-        "badditivewaves" => "additivewave",
-        "bwavedots" => "wave_dots",
+        "badditivewaves" => "wave_additive",
+        "bwavedots" => "wave_usedots",
         "bwavethick" => "wave_thick",
         "bmodwavealphabyvolume" => "modwavealphabyvolume",
         "bmaximizewavecolor" => "wave_brighten",
@@ -166,11 +170,18 @@ fn equation_name(key: &str) -> &str {
         "fzoomexponent" => "zoomexp",
         "nmotionvectorsx" => "mv_x",
         "nmotionvectorsy" => "mv_y",
-        "thick" | "bdrawthick" => "thick",
-        "instances" | "num_instances" => "num_inst",
-        "badditive" => "additive",
-        "busedots" => "usedots",
+        "b1n" => "blur1_min",
+        "b2n" => "blur2_min",
+        "b3n" => "blur3_min",
+        "b1x" => "blur1_max",
+        "b2x" => "blur2_max",
+        "b3x" => "blur3_max",
+        "b1ed" => "blur1_edge_darken",
+        // Custom waves' and shapes' keys.
         "bspectrum" => "spectrum",
+        "busedots" => "usedots",
+        "bdrawthick" | "thickoutline" => "thick",
+        "badditive" => "additive",
         other => other,
     }
 }
@@ -194,6 +205,12 @@ impl Values {
     /// gives no default.
     #[must_use]
     pub fn get(&self, name: &str) -> f64 {
+        if name == "mv_a"
+            && !self.set.contains_key(name)
+            && std::ptr::eq(self.defaults, BASE_DEFAULTS)
+        {
+            return self.get("bmotionvectorson");
+        }
         self.set.get(name).copied().unwrap_or_else(|| {
             self.defaults
                 .iter()
@@ -248,6 +265,11 @@ pub struct Preset {
     /// The warp and composite pixel shaders (HLSL), when the preset has them.
     pub warp: Option<String>,
     pub comp: Option<String>,
+    /// The pixel shader versions the warp and composite passes are drawn with: 0 for
+    /// MilkDrop 1's fixed drawing, 2 or 3 for shaders (MilkDrop wrote one when a MilkDrop 2
+    /// preset had none).
+    pub warp_ps: u32,
+    pub comp_ps: u32,
 }
 
 impl Preset {
@@ -284,7 +306,10 @@ impl Preset {
             }),
             warp: None,
             comp: None,
+            warp_ps: 0,
+            comp_ps: 0,
         };
+        let (mut ps, mut ps_warp, mut ps_comp) = (2, 2, 2);
         let mut warp = String::new();
         let mut comp = String::new();
         for line in text.lines() {
@@ -293,9 +318,25 @@ impl Preset {
                 continue;
             };
             let key = key.trim().to_ascii_lowercase();
-            if key == "milkdrop_preset_version" {
-                p.version = value.trim().parse().unwrap_or(100);
-                continue;
+            let int = || value.trim().parse().unwrap_or(2);
+            match key.as_str() {
+                "milkdrop_preset_version" => {
+                    p.version = value.trim().parse().unwrap_or(100);
+                    continue;
+                }
+                "psversion" => {
+                    ps = int();
+                    continue;
+                }
+                "psversion_warp" => {
+                    ps_warp = int();
+                    continue;
+                }
+                "psversion_comp" => {
+                    ps_comp = int();
+                    continue;
+                }
+                _ => {}
             }
             // Shader lines are kept as written; a backquote starts each one.
             if numbered(&key, "warp_").is_some() {
@@ -338,6 +379,12 @@ impl Preset {
         }
         p.warp = (!warp.trim().is_empty()).then_some(warp);
         p.comp = (!comp.trim().is_empty()).then_some(comp);
+        // As MilkDrop's `CState::Import` chose them.
+        (p.warp_ps, p.comp_ps) = match p.version {
+            ..200 => (0, 0),
+            200 => (ps, ps),
+            _ => (ps_warp, ps_comp),
+        };
         p
     }
 }
@@ -433,7 +480,10 @@ mod tests {
         assert_eq!(p.values.get("mv_x"), 64.0);
         assert_eq!(p.values.get("rating"), 4.0);
         // Not in the file: the default.
-        assert_eq!(p.values.get("gammaadj"), 2.0);
+        assert_eq!(p.values.get("gamma"), 2.0);
+        // MilkDrop's quirks: wave colours default to 0, motion vectors to off.
+        assert_eq!(p.values.get("wave_r"), 0.0);
+        assert_eq!(p.values.get("mv_a"), 0.0);
         assert_eq!(p.init, "q1 = 0;");
         assert_eq!(p.per_frame, "zoom = zoom + 0.1*bass;rot = 0.01;");
         assert_eq!(p.per_pixel, "zoom = zoom + rad*0.1;");
@@ -454,6 +504,7 @@ mod tests {
             Some("shader_body\n{\n  ret = tex2D(sampler_main, uv).xyz;\n}\n")
         );
         assert_eq!(p.comp, None);
+        assert_eq!((p.warp_ps, p.comp_ps), (2, 2));
     }
 
     #[test]
@@ -470,6 +521,7 @@ mod tests {
         assert_eq!(p.version, 100);
         assert_eq!(p.dialect(), Dialect::Eel1);
         assert_eq!(p.values.get("decay"), 0.9);
+        assert_eq!((p.warp_ps, p.comp_ps), (0, 0));
     }
 
     #[test]
