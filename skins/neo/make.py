@@ -868,6 +868,25 @@ TITLE_FONT = {
     "S": (5.4, ["M1.9 0H5.2V1.2H2.2A0.6 0.6 0 0 0 2.2 2.4H3.5A1.8 1.8 0 0 1 3.5 6H0.2V4.8H3.2"
                 "A0.6 0.6 0 0 0 3.2 3.6H1.9A1.8 1.8 0 0 1 1.9 0Z"]),
     "T": (6.0, ["M0 0H6V1.2H4V6H2V1.2H0Z"]),
+    # The rest of the alphabet, for the titles of generic windows (gen.svg).
+    "B": (5.8, ["M0 0H3.6A1.8 1.8 0 0 1 5.4 1.8A1.5 1.5 0 0 1 4.7 3A1.6 1.6 0 0 1 5.8 4.4"
+                "A1.6 1.6 0 0 1 4.2 6H0Z"
+                "M2 1.2V2.4H3.2A0.6 0.6 0 0 0 3.2 1.2Z"
+                "M2 3.6V4.8H3.6A0.6 0.6 0 0 0 3.6 3.6Z"]),
+    "C": (5.6, ["M2 0H5.6V1.2H2.6A0.6 0.6 0 0 0 2 1.8V4.2A0.6 0.6 0 0 0 2.6 4.8H5.6V6H2"
+                "A2 2 0 0 1 0 4V2A2 2 0 0 1 2 0Z"]),
+    "D": (6.2, ["M0 0H4A2.2 2.2 0 0 1 6.2 2.2V3.8A2.2 2.2 0 0 1 4 6H0Z"
+                "M2 1.2V4.8H3.6A0.6 0.6 0 0 0 4.2 4.2V1.8A0.6 0.6 0 0 0 3.6 1.2Z"]),
+    "F": (4.6, ["M0 0H4.6V1.2H2V2.4H4.2V3.6H2V6H0Z"]),
+    "G": (6.2, ["M2 0H6V1.2H2.6A0.6 0.6 0 0 0 2 1.8V4.2A0.6 0.6 0 0 0 2.6 4.8H4.2V3.8H3.2"
+                "V2.6H6.2V6H2A2 2 0 0 1 0 4V2A2 2 0 0 1 2 0Z"]),
+    "H": (6.2, ["M0 0H2V2.4H4.2V0H6.2V6H4.2V3.6H2V6H0Z"]),
+    "J": (5.2, ["M3.2 0H5.2V4A2 2 0 0 1 3.2 6H2A2 2 0 0 1 0 4V3.4H2V4.2A0.6 0.6 0 0 0 2.6 4.8"
+                "A0.6 0.6 0 0 0 3.2 4.2Z"]),
+    "K": (6.2, ["M0 0H2V2.3L4 0H6.2L3.5 3L6.2 6H4L2 3.7V6H0Z"]),
+    "V": (6.6, ["M0 0H2.1L3.3 3.9L4.5 0H6.6L4.4 6H2.2Z"]),
+    "W": (8.8, ["M0 0H2L2.6 3.6L3.5 0H5.3L6.2 3.6L6.8 0H8.8L7.5 6H5.4L4.4 2.6L3.4 6H1.3Z"]),
+    "X": (6.4, ["M0 0H2.2L3.2 1.8L4.2 0H6.4L4.3 3L6.4 6H4.2L3.2 4.2L2.2 6H0L2.1 3Z"]),
 }
 TITLE_GAP = 1.3
 
@@ -1933,6 +1952,159 @@ def sheet_pledit():
     return svg
 
 
+# --- gen: the frame of generic windows, which MilkDrop's window wears ----------------------------
+
+# Like the playlist's frame: a rim, a groove around the picture, light pieces at the ends of the
+# title bar shading to dark behind the title.
+
+
+def gen_top(svg, y, active):
+    """The six title bar pieces, 25 x 20 each, at row `y`."""
+    pieces = [
+        (0, [(0, PL_DARK), (2, PL_DARK), (25, PL_LIGHT)]),  # top left
+        (26, [(0, PL_LIGHT), (25, PL_DARK)]),  # the left fill's end, before the title
+        (52, [(0, PL_DARK), (25, PL_DARK)]),  # behind the title
+        (78, [(0, PL_DARK), (25, PL_LIGHT)]),  # the right fill's end, after the title
+        (104, [(0, PL_LIGHT), (25, PL_LIGHT)]),  # the fills
+        (130, [(0, PL_LIGHT), (25, PL_DARK)]),  # top right, with the close button
+    ]
+    for x, stops in pieces:
+        pl_piece(svg, x, y, 25, 20, stops)
+        tint(svg, x, y, 25, 1, False)
+        tint(svg, x, y + 12, 25, 2, False)
+        tint(svg, x, y + 19, 25, 1, False)
+        tint(svg, x, y + 1, 25, 1, True)
+        tint(svg, x, y + 14, 25, 1, True)
+    # The left edge: rim, then the groove turning down the side.
+    svg.rect(0, y, 1, 20, PL_EDGE_DARK)
+    svg.rect(1, y + 1, 1, 19, PL_EDGE_LIGHT)
+    svg.rect(2, y + 12, 2, 8, PL_DARK)
+    svg.rect(4, y + 12, 2, 8, PL_EDGE_DARK)
+    svg.rect(6, y + 14, 1, 6, PL_EDGE_LIGHT)
+    svg.rect(7, y + 19, 2, 1, PL_DARK)
+    # The right edge: the groove's light line turning down, a ridge, the rim.
+    svg.rect(147, y + 14, 1, 6, PL_EDGE_LIGHT)
+    svg.rect(148, y + 15, 1, 5, PL_DARK)
+    svg.rect(149, y + 12, 2, 8, PL_DARK)
+    svg.rect(151, y + 12, 1, 8, PL_EDGE_LIGHT)
+    svg.rect(152, y + 12, 2, 8, PL_DARK)
+    svg.rect(154, y, 1, 20, PL_EDGE_DARK)
+    # Stripes either side of the title, and the close button.
+    pl_stripes(svg, 7, y + 4, 18, active, True, False)
+    pl_stripes(svg, 26, y + 4, 22, active, False, True)
+    pl_stripes(svg, 80, y + 4, 23, active, True, False)
+    pl_stripes(svg, 104, y + 4, 25, active, False, False)
+    pl_stripes(svg, 130, y + 4, 10, active, False, True)
+    close_box(svg, 145, y + 4, active)
+
+
+def gen_side(svg, x, y, w, h, columns):
+    """A side piece: one colour per column, top to bottom."""
+    for dx, c in enumerate(columns):
+        svg.rect(x + dx, y, 1, h, c)
+
+
+GEN_LEFT = [PL_EDGE_DARK, PL_EDGE_LIGHT, PL_DARK, PL_DARK, PL_EDGE_DARK, PL_EDGE_DARK,
+            PL_EDGE_LIGHT, PL_DARK, PL_DARK, PL_DARK, PL_DARK]
+GEN_RIGHT = [PL_EDGE_LIGHT, PL_DARK, PL_DARK, PL_DARK, PL_EDGE_LIGHT, PL_DARK, PL_DARK,
+             PL_EDGE_DARK]
+
+
+def gen_bottom_rows(svg, x, y, w):
+    """A bottom piece's bevels, 14 rows from (x, y)."""
+    tint(svg, x, y, w, 1, True)
+    tint(svg, x, y + 8, w, 2, False)
+    tint(svg, x, y + 10, w, 1, True)
+    tint(svg, x, y + 13, w, 1, False)
+
+
+def gen_bottom(svg):
+    """The bottom pieces: left, right with the resize grip, and the fill between them."""
+    # Bottom left, dark towards the corner.
+    y = 42
+    pl_piece(svg, 0, y, 125, 14, [(0, PL_DARK), (12, PL_DARK), (120, PL_LIGHT), (125, PL_LIGHT)])
+    gen_bottom_rows(svg, 0, y, 125)
+    svg.rect(0, y, 9, 14, PL_DARK)
+    gen_side(svg, 0, y, 11, 8, GEN_LEFT[:9])
+    svg.rect(4, y + 8, 5, 2, PL_EDGE_DARK)
+    svg.rect(5, y + 10, 4, 1, PL_EDGE_LIGHT)
+    svg.rect(0, y, 1, 14, PL_EDGE_DARK)
+    svg.rect(1, y, 1, 13, PL_EDGE_LIGHT)
+    svg.rect(0, y + 13, 9, 1, PL_EDGE_DARK)
+    # Bottom right, dark towards the corner, with the grip.
+    y = 57
+    pl_piece(svg, 0, y, 125, 14, [(0, PL_LIGHT), (5, PL_LIGHT), (113, PL_DARK), (125, PL_DARK)])
+    gen_bottom_rows(svg, 0, y, 125)
+    svg.rect(117, y, 8, 14, PL_DARK)
+    svg.rect(117, y, 4, 1, PL_EDGE_LIGHT)
+    svg.rect(117, y + 8, 4, 2, PL_EDGE_DARK)
+    svg.rect(117, y + 10, 4, 1, PL_EDGE_LIGHT)
+    svg.rect(121, y, 1, 11, PL_EDGE_LIGHT)
+    svg.rect(124, y, 1, 14, PL_EDGE_DARK)
+    svg.rect(117, y + 13, 8, 1, PL_EDGE_DARK)
+    # The grip: diagonal ridges, light, then shaded, then dark.
+    cid = svg.clip(f'<polygon points="118,{y + 1} 119,{y + 1} 119,{y + 8} 111,{y + 8}"/>')
+    svg.open(clip=cid)
+    for o in (0, 3, 6):
+        for d, c in ((0, "#5f5f71"), (1, "#403f50"), (2, "#1f1f30")):
+            svg.path(f"M{num(111.5 + o + d)} {num(y + 8.5)}L{num(120 + o + d)} {y}",
+                     stroke=c, width=1)
+    svg.close()
+    # The fill between them.
+    pl_piece(svg, 127, 72, 25, 14, [(0, PL_LIGHT), (25, PL_LIGHT)])
+    gen_bottom_rows(svg, 127, 72, 25)
+
+
+GEN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def gen_letter_cells(sheet_w=194, gap=1.0):
+    """Each letter's cell, left edge and width, from x = 1 with a column of background
+    between cells, and the narrowing that makes the alphabet fit the sheet."""
+    sx = 1.0
+    while True:
+        widths = [round(TITLE_FONT[ch][0] * sx + gap) for ch in GEN_ALPHABET]
+        if 1 + sum(widths) + len(widths) <= sheet_w:
+            break
+        sx -= 0.01
+    cells, x = [], 1
+    for w in widths:
+        cells.append((x, w))
+        x += w + 1
+    return cells, sx
+
+
+def gen_letters(svg, y, fill):
+    """The alphabet in the title capitals, one cell each, on the title's background."""
+    cells, sx = gen_letter_cells()
+    for ch, (x, w) in zip(GEN_ALPHABET, cells):
+        svg.rect(x, y, w, 7, PL_DARK)
+        adv = TITLE_FONT[ch][0] * sx
+        title_text(svg, ch, round(x + (w - adv) / 2, 2), y + 0.5, fill, sx=sx)
+
+
+def sheet_gen():
+    svg = Svg(194, 109)
+    svg.rect(0, 0, 194, 109, "#00c6ff")
+    svg.comment("title bar pieces: active, inactive")
+    gen_top(svg, 0, True)
+    gen_top(svg, 21, False)
+    svg.comment("sides, and their lowest pieces")
+    gen_side(svg, 127, 42, 11, 29, GEN_LEFT)
+    gen_side(svg, 139, 42, 8, 29, GEN_RIGHT)
+    gen_side(svg, 158, 42, 11, 24, GEN_LEFT)
+    gen_side(svg, 170, 42, 8, 24, GEN_RIGHT)
+    svg.comment("the close button pressed")
+    svg.rect(148, 42, 9, 9, "#ae9265")
+    close_box(svg, 149, 43, True, pressed=True)
+    svg.comment("bottom pieces")
+    gen_bottom(svg)
+    svg.comment("the title's letters: active, inactive")
+    gen_letters(svg, 88, "#ffffff")
+    gen_letters(svg, 96, "#909090")
+    return svg
+
+
 # --- Packing -----------------------------------------------------------------------------------
 
 SHEETS = {
@@ -1950,6 +2122,7 @@ SHEETS = {
     "eqmain": sheet_eqmain,
     "eq_ex": sheet_eq_ex,
     "pledit": sheet_pledit,
+    "gen": sheet_gen,
 }
 
 

@@ -567,8 +567,10 @@ pub mod generic {
     pub const LETTERS_Y: i32 = 96;
     pub const LETTER_H: i32 = 7;
     pub const SPACE_W: i32 = 5;
-    /// Where the title's letters start down from the top, and the gaps either side of it.
-    pub const TITLE_Y: i32 = 2;
+    /// Where the title's letters start down from the top, level with the stripes (as measured
+    /// in Webamp, where the title's box starts 2 pixels down and its letters 2 below that),
+    /// and the gaps either side of it.
+    pub const TITLE_Y: i32 = 4;
     pub const TITLE_PAD_LEFT: i32 = 4;
     pub const TITLE_PAD_RIGHT: i32 = 3;
 }

@@ -1028,8 +1028,6 @@ Where the platforms differ:
   and those presets draw with MilkDrop's plain shaders instead. A preset's
   random pictures are chosen once each time MilkDrop's window opens, rather
   than for each preset.
-- NeoAmp's own skin has no generic-window frame yet, so MilkDrop's window wears
-  the Winamp base skin's.
 - Output devices, media controls and handing files to the running NeoAmp
   have been tried on Linux only. On Windows and macOS they follow what cpal
   and souvlaki document.
