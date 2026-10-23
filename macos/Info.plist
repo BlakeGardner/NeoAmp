@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  NeoAmp.app's Info.plist. macos/build-dmg.sh copies it into the app and fills in the two
-  version strings from Cargo.toml; it also builds the program for LSMinimumSystemVersion.
+  NeoAmp.app's Info.plist. macos/build-app.sh copies it into the app and fills in the two
+  version strings from Cargo.toml, and LSMinimumSystemVersion: the oldest macOS it builds the
+  program for, which is older for Intel Macs than for Apple silicon.
 -->
 <plist version="1.0">
 <dict>
@@ -32,7 +33,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>11.0</string>
+	<string>0.0.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<!-- What macOS's permission prompts say when NeoAmp first opens a file in one of these

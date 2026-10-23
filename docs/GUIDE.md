@@ -86,12 +86,19 @@ with these differences:
 
 ### macOS
 
-Each release has NeoAmp for macOS 11 (Big Sur) or newer as a disk image
-holding `NeoAmp.app`, one for each kind of Mac (Apple menu > About This Mac
-says which, under Chip or Processor):
+Each release has NeoAmp for macOS as a disk image holding `NeoAmp.app`, one
+for each kind of Mac (Apple menu > About This Mac says which, under Chip or
+Processor):
 
-- **Apple silicon** (M1 and later): `neoamp-v<version>-macos-arm64.dmg`
-- **Intel:** `neoamp-v<version>-macos-x86_64.dmg`
+- **Apple silicon** (M1 and later), with macOS 11 (Big Sur) or newer:
+  `neoamp-v<version>-macos-arm64.dmg`
+- **Intel**, with macOS 10.12.2 (Sierra) or newer:
+  `neoamp-v<version>-macos-x86_64.dmg`
+
+On an Intel Mac with macOS 10.12 or 10.12.1, install Sierra's later updates
+first. NeoAmp draws its windows with Metal, which Macs have from 2012 on: on
+an older Mac, even one that runs Sierra or High Sierra, NeoAmp quits as it
+starts.
 
 Open the disk image and drag NeoAmp onto the Applications folder beside it.
 It then opens from Launchpad, Spotlight or the Applications folder, with its
