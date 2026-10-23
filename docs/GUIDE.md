@@ -778,7 +778,9 @@ Right-click the picture for MilkDrop's menu, whose Presets submenu (also L)
 lists every preset, the one showing marked. The preset showing, the order and
 the time between presets are remembered (see [SETTINGS.md](SETTINGS.md)).
 
-A few presets are built in. Your own `.milk` files go in the MilkDrop folder
+NeoAmp has 98 presets built in, picked from projectM's "cream of the crop"
+collection; [milkdrop/README.md](../milkdrop/README.md) says who made each.
+None of them needs pictures of its own. Your own `.milk` files go in the MilkDrop folder
 in the settings folder (`milkdrop/`, `MilkDrop\` on Windows and macOS; see
 [Saved settings](#saved-settings)), or in folders inside it; NeoAmp makes the
 folder when MilkDrop's window first opens, and lists what is in it after the
@@ -1025,9 +1027,7 @@ Where the platforms differ:
 - MilkDrop shows no song titles or other text over the picture, and has no
   preset editor, mash-ups or desktop mode. A few presets' shaders (5 of the
   15,895 in projectM's "cream of the crop" collection) cannot be translated,
-  and those presets draw with MilkDrop's plain shaders instead. A preset's
-  random pictures are chosen once each time MilkDrop's window opens, rather
-  than for each preset.
+  and those presets draw with MilkDrop's plain shaders instead.
 - Output devices, media controls and handing files to the running NeoAmp
   have been tried on Linux only. On Windows and macOS they follow what cpal
   and souvlaki document.

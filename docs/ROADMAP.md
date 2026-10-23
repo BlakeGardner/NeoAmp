@@ -245,8 +245,8 @@ converted to GLSL.
 - [x] The window: `gen.bmp` frame, docking, resizing, full screen, its
       keys and menu, the preset list, saved settings, and the user's presets
       folder with the pictures presets use.
+- [x] The built-in presets, and the guide, shortcuts and settings pages.
 - [ ] The song title drawn over the picture when a track starts.
-- [ ] The built-in presets, and the guide, shortcuts and settings pages.
 
 ## Optional
 

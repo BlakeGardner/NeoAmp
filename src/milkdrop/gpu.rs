@@ -805,7 +805,8 @@ impl Gpu {
         })
     }
 
-    /// A preset's texture, loaded once; missing ones show noise.
+    /// A preset's texture, loaded once (a random one once for each preset); missing ones show
+    /// noise.
     fn user_texture(&mut self, name: &str) -> wgpu::TextureView {
         if let Some(v) = self.user_textures.get(name) {
             return v.clone();
@@ -874,6 +875,15 @@ impl Gpu {
     /// Make sure a preset's shaders are compiled, falling back to MilkDrop 1's built-in ones
     /// for a stage the preset has no shader for, or one that does not translate.
     fn prepare(&mut self, id: PresetId, preset: &Preset) {
+        // A new preset chooses its random pictures afresh, as in MilkDrop; its two shaders
+        // share them.
+        if [Stage::Warp, Stage::Comp]
+            .iter()
+            .all(|s| !self.programs.contains_key(&(id, *s)))
+        {
+            self.user_textures
+                .retain(|name, _| !name.starts_with("rand"));
+        }
         for (stage, src, ps) in [
             (Stage::Warp, &preset.warp, preset.warp_ps),
             (Stage::Comp, &preset.comp, preset.comp_ps),

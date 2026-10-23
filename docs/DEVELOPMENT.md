@@ -272,6 +272,39 @@ souvlaki uses MPRIS on Linux, talking to D-Bus through the pure-Rust zbus, so
 building needs no `libdbus`; the System Media Transport Controls on Windows;
 and Now Playing on macOS.
 
+### MilkDrop
+
+`src/milkdrop/` follows MilkDrop 2's own source (vis_milk2, BSD-licensed, in
+WACUP's repository) where butterchurn, the WebGL port Webamp uses, leaves a
+question open. Presets' HLSL shaders are translated to WGSL by NeoAmp's own
+translator and checked with naga before wgpu compiles them, so a shader that
+does not translate falls back to MilkDrop 1's built-in one instead of
+failing on the GPU. Each MilkDrop window draws on the GPU device its `pixels`
+surface made, so the renderer is rebuilt with the window.
+
+The built-in presets are the `.milk` files in `milkdrop/presets`, each named
+in `src/milkdrop/built_in.rs`, which embeds them, and credited in
+`milkdrop/README.md`. To add one, copy the file in unchanged (it must be
+UTF-8), add its line to both, and run the tests: they compile every
+built-in preset's equations and shaders, and check that it needs no
+pictures of its own and that its file name suits every platform's file
+system.
+
+A few tests are ignored, because they need a GPU or a folder of presets, and
+are run by hand with environment variables:
+
+| Test | Variables | What it does |
+| --- | --- | --- |
+| `every_presets_equations_compile` | `NEOAMP_MILK_DIR` | Compiles the equations of every `.milk` file under the folder. |
+| `every_presets_shaders_translate` | `NEOAMP_MILK_DIR` | Translates and checks every warp and composite shader under the folder, and says why the failures fail. |
+| `one_presets_shaders` | `NEOAMP_MILK_FILE` | Says whether one preset's shaders translate, and why not. |
+| `many_presets_draw` | `NEOAMP_MILK_DIR`, `NEOAMP_MILK_EVERY` | Draws every `NEOAMP_MILK_EVERY`th preset (default 20th) for a few frames on the GPU; any wgpu error fails it. |
+| `render_a_preset_to_png` | `NEOAMP_MILK_FILE`, `NEOAMP_MILK_PNG`, `NEOAMP_MILK_FRAMES` | Draws one preset at 640x480 for `NEOAMP_MILK_FRAMES` frames (default 150) with a test signal, and saves the last as a PNG. |
+
+```bash
+NEOAMP_MILK_DIR=~/presets-cream-of-the-crop cargo test --release -- --ignored every_presets
+```
+
 ### Single instance
 
 The running copy listens on a local socket named after its config folder,
