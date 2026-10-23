@@ -25,10 +25,6 @@ on:
         description: That key's ID
       APPLE_API_ISSUER:
         description: The issuer ID of the account's App Store Connect API keys
-  # Temporary: signs and notarizes the disk images for the pull request that adds signing, so
-  # they can be tried before it merges. Removed before merging.
-  pull_request:
-    branches: [master]
 
 permissions:
   contents: read
