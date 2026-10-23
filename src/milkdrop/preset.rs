@@ -595,8 +595,15 @@ mod tests {
             for src in code {
                 blocks += 1;
                 if let Err(e) = Program::compile(src, &mut Vars::new(), p.dialect()) {
-                    let from = src.floor_char_boundary(e.at.saturating_sub(60));
-                    let to = src.ceil_char_boundary((e.at + 20).min(src.len()));
+                    // On character boundaries, around where it failed.
+                    let mut from = e.at.saturating_sub(60).min(src.len());
+                    while !src.is_char_boundary(from) {
+                        from -= 1;
+                    }
+                    let mut to = (e.at + 20).min(src.len());
+                    while !src.is_char_boundary(to) {
+                        to += 1;
+                    }
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
                     failures.push(format!("{name}: {e}: {:?}", &src[from..to]));
                 }
