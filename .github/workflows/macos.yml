@@ -25,6 +25,10 @@ on:
         description: That key's ID
       APPLE_API_ISSUER:
         description: The issuer ID of the account's App Store Connect API keys
+  # Temporary: builds the disk images for the pull request that lowers the Intel app's oldest
+  # macOS, so they can be checked and tried before it merges. Removed before merging.
+  pull_request:
+    branches: [master]
 
 permissions:
   contents: read
@@ -63,6 +67,57 @@ jobs:
         run: cargo install --locked "resvg@$RESVG_VERSION"
       - name: Build the app
         run: macos/build-app.sh ${{ matrix.arch }}
+      # Temporary: lists what the program takes from macOS and has clang check each symbol
+      # against the oldest macOS the app names. Removed before merging.
+      - name: Check what the program needs from macOS (temporary)
+        run: |
+          app=target/macos/${{ matrix.arch }}/NeoAmp.app
+          bin=$app/Contents/MacOS/NeoAmp
+          minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$app/Contents/Info.plist")
+          echo "== LSMinimumSystemVersion: $minimum"
+          echo "== The macOS the program is built for"
+          otool -l "$bin" | grep -A4 -E "LC_VERSION_MIN_MACOSX|LC_BUILD_VERSION"
+          echo "== The libraries it loads"
+          otool -L "$bin"
+          echo "== The symbols it takes from them"
+          nm -um "$bin" | tee imports.txt
+          echo "== Objective-C classes it links to"
+          grep 'OBJC_CLASS_\$_' imports.txt || echo none
+          # clang warns about each symbol newer than the minimum. Symbols no header here
+          # declares come out as errors, and are listed as not checked.
+          sdk=$(xcrun --sdk macosx --show-sdk-path)
+          {
+            for lib in $(sed -n 's/.*(from \([A-Za-z0-9_]*\))$/\1/p' imports.txt | sort -u); do
+              if [[ -f $sdk/System/Library/Frameworks/$lib.framework/Headers/$lib.h ]]; then
+                echo "#import <$lib/$lib.h>"
+              fi
+            done
+            for h in stdlib.h stdio.h string.h strings.h unistd.h fcntl.h errno.h time.h \
+                signal.h pthread.h dlfcn.h poll.h netdb.h locale.h xlocale.h termios.h \
+                copyfile.h ifaddrs.h libproc.h sys/mman.h sys/stat.h sys/socket.h \
+                sys/random.h sys/sysctl.h sys/time.h sys/uio.h sys/ioctl.h sys/event.h \
+                sys/resource.h sys/wait.h sys/un.h sys/mount.h sys/attr.h sys/clonefile.h \
+                sys/param.h net/if.h mach/mach.h mach/mach_time.h mach-o/dyld.h os/lock.h \
+                os/log.h malloc/malloc.h libkern/OSAtomic.h dispatch/dispatch.h \
+                objc/runtime.h objc/message.h CommonCrypto/CommonRandom.h; do
+              if [[ -f $sdk/usr/include/$h ]]; then
+                echo "#include <$h>"
+              fi
+            done
+            echo 'void check(void) {'
+            sed -n 's/.*external _\([A-Za-z0-9_]*\) (from .*/    (void)\&\1;/p' imports.txt
+            echo '}'
+          } >check.m
+          clang -fsyntax-only -x objective-c -isysroot "$sdk" -arch ${{ matrix.arch }} \
+            -mmacosx-version-min="$minimum" -Wunguarded-availability \
+            -Wunguarded-availability-new -Wno-deprecated-declarations -ferror-limit=0 \
+            check.m >clang.txt 2>&1 || true
+          echo "== Newer than macOS $minimum"
+          grep -E "only available on macOS" clang.txt || echo none
+          echo "== Not checked: no header declares them"
+          sed -n "s/.*use of undeclared identifier '\([^']*\)'.*/\1/p" clang.txt | sort -u
+          echo "== Other clang errors"
+          grep -E "error:" clang.txt | grep -v "undeclared identifier" || echo none
       # In a tar file, which keeps the program's executable bit; an artifact alone loses it.
       - name: Pack the app
         run: tar -cf NeoAmp-${{ matrix.arch }}.tar -C target/macos/${{ matrix.arch }} NeoAmp.app
