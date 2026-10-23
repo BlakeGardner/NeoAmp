@@ -6,7 +6,7 @@
 //!
 //! - [`audio`]: decoding (symphonia), resampling, the equalizer and the output device (cpal),
 //!   and internet radio streams, fetched by [`http`].
-//! - [`vis`]: the spectrum analyser and oscilloscope.
+//! - [`vis`]: the spectrum analyser and oscilloscope; [`milkdrop`] the MilkDrop visualization.
 //! - [`canvas`]: the RGBA framebuffer and clipped blits, and canvases addressed in skin pixels
 //!   at any pixel density.
 //! - [`sprites`]: sprite coordinates and window layout shared by every classic skin.
@@ -61,6 +61,7 @@ pub mod m3u;
 mod main_window;
 pub mod menu;
 pub mod menus;
+pub mod milkdrop;
 pub mod museum;
 pub mod museum_dialog;
 mod museum_window;

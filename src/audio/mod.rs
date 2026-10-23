@@ -6,7 +6,7 @@
 //! - A decoder thread (`decode`) reads the file, converts it to stereo `f32` at the device's
 //!   sample rate (`resample`) and keeps a lock-free ring buffer about half a second full.
 //! - The device callback (`output`) empties the ring, runs the equalizer (`eq`), volume and
-//!   balance, and copies what it plays into a second ring for the visualiser.
+//!   balance, and copies what it plays into a second ring for the visualisers.
 //!
 //! The callback must never block or allocate, so all it shares with the other threads is atomics
 //! and ring buffers. Every command the UI sends gets a new *generation* number. Before the
@@ -844,7 +844,9 @@ impl Player {
         }
     }
 
-    /// Pass every sample played since the last call to `f` (mono, at [`Player::sample_rate`]).
+    /// Pass every sample played since the last call to `f`: interleaved stereo, left first, at
+    /// [`Player::sample_rate`], after the equalizer but before volume and balance. Each slice
+    /// holds whole frames.
     pub fn drain_vis(&mut self, mut f: impl FnMut(&[f32])) {
         let n = self.vis.slots();
         if let Ok(chunk) = self.vis.read_chunk(n) {

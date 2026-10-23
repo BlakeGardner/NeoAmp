@@ -214,6 +214,38 @@ skin with NeoAmp's name and icon, shown by default.
 Sharp drawing and the SVG sheets were run on Linux (X11) and macOS; not yet
 on Windows.
 
+## Phase 9: MilkDrop
+
+In progress on the `milkdrop` branch. MilkDrop came with Winamp from 2.9 and
+5.0 on, MilkDrop 2 from 5.5; Webamp shows it through butterchurn, a port of
+MilkDrop to WebGL, which is the reference here. Before any code, the user
+chose: an engine of NeoAmp's own in Rust on wgpu, rather than binding the
+C++ projectM (OpenGL, cmake, LGPL); about a hundred presets built in, picked
+from projectM's "cream of the crop" pack and credited by author, plus a
+presets folder for the user's own `.milk` files; a window framed by the
+skin's `gen.bmp` that docks like the others, with Alt+Enter for full screen
+and no desktop-wallpaper mode; and the work on one branch, a commit per
+step, merged once presets with shaders look right.
+
+Most presets need MilkDrop 2's pixel shaders: 8,236 of the 9,795 in the
+cream pack have them. They are written in Direct3D's HLSL, so NeoAmp
+translates them to WGSL itself. Webamp sends them to a web service to be
+converted to GLSL.
+
+- [ ] Stereo samples for the visualizers, and MilkDrop's sound analysis:
+      the 512-band spectrum and bass, mid and treble with their averages.
+- [ ] MilkDrop's equation language (per-frame, per-vertex, custom wave and
+      shape code), compiled once per preset.
+- [ ] Reading `.milk` presets.
+- [ ] The renderer: the warp mesh and feedback, motion vectors, the basic
+      and custom waves, custom shapes, borders, video echo, and the
+      default warp and composite shaders.
+- [ ] HLSL to WGSL, checked by compiling every shader in the cream pack.
+- [ ] Blur, noise and preset textures, and blended changes of preset.
+- [ ] The window: `gen.bmp` frame, docking, resizing, full screen, its
+      keys and menu, the preset list and song title, saved settings.
+- [ ] The built-in presets, and the guide, shortcuts and settings pages.
+
 ## Optional
 
 - A Preferences dialog. Most settings can live in menus instead.
@@ -222,5 +254,5 @@ on Windows.
 
 ## Out of scope
 
-Media Library, the minibrowser, the video window, AVS and MilkDrop
-visualizers, a plugin system, modern `.wal` skins and CD ripping.
+Media Library, the minibrowser, the video window, the AVS visualizer, a
+plugin system, modern `.wal` skins and CD ripping.

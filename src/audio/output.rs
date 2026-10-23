@@ -18,9 +18,9 @@ use super::eq::Equalizer;
 
 /// The most frames the mixer handles per call; device buffers are split to fit.
 const MAX_FRAMES: usize = 4096;
-/// Mono samples kept for the visualiser between UI frames (a quarter second at 48 kHz). If the
-/// UI stalls, newer samples are dropped until it catches up.
-const VIS_CAPACITY: usize = 12_000;
+/// Interleaved stereo samples kept for the visualisers between UI frames (a quarter second at
+/// 48 kHz). If the UI stalls, newer samples are dropped until it catches up.
+const VIS_CAPACITY: usize = 24_000;
 /// Track boundaries the queue can hold at once. Its half second of audio rarely spans more
 /// than two tracks.
 const MARKS: usize = 16;
@@ -82,7 +82,7 @@ impl std::fmt::Debug for Output {
 pub(super) struct Opened {
     pub output: Output,
     pub queue: Queue,
-    /// Mono copies of what is played, for the visualiser.
+    /// Copies of what is played, interleaved stereo, for the visualisers.
     pub vis: rtrb::Consumer<f32>,
 }
 
@@ -233,8 +233,8 @@ pub(super) struct Mixer {
     gains: Option<(f32, f32)>,
     /// One block of stereo from the ring.
     stereo: Vec<f32>,
-    /// The same block mixed to mono for the visualiser.
-    mono: Vec<f32>,
+    /// The same block after the equalizer, before volume and balance, for the visualisers.
+    tap: Vec<f32>,
 }
 
 impl Mixer {
@@ -263,7 +263,7 @@ impl Mixer {
             eq_version: u32::MAX,
             gains: None,
             stereo: vec![0.0; MAX_FRAMES * 2],
-            mono: vec![0.0; MAX_FRAMES],
+            tap: vec![0.0; MAX_FRAMES * 2],
         }
     }
 
@@ -292,13 +292,14 @@ impl Mixer {
         let step = 1.0 / got.max(1) as f32;
         let frames_out = out.chunks_exact_mut(channels);
         let input = self.stereo.chunks_exact(2).take(got);
-        for (i, ((frame, lr), mono)) in frames_out.zip(input).zip(self.mono.iter_mut()).enumerate()
-        {
+        let tap = self.tap.chunks_exact_mut(2);
+        for (i, ((frame, lr), tapped)) in frames_out.zip(input).zip(tap).enumerate() {
             let k = (i + 1) as f32 * step;
             let gl = from.0 + (to.0 - from.0) * k;
             let gr = from.1 + (to.1 - from.1) * k;
             let (l, r) = self.eq.process(lr[0], lr[1]);
-            *mono = 0.5 * (l + r);
+            tapped[0] = l;
+            tapped[1] = r;
             let (l, r) = ((l * gl).clamp(-1.0, 1.0), (r * gr).clamp(-1.0, 1.0));
             if let [only] = frame {
                 *only = 0.5 * (l + r);
@@ -309,8 +310,10 @@ impl Mixer {
             }
         }
         out[got * channels..].fill(0.0);
-        // If the visualiser is not keeping up, its oldest view of the music is simply missed.
-        let _ = self.vis.push_partial_slice(&self.mono[..got]);
+        // If the visualisers are not keeping up, their newest view of the music is simply
+        // missed. Only whole frames go in, so left and right never swap.
+        let room = self.vis.slots().min(got * 2) & !1;
+        let _ = self.vis.push_partial_slice(&self.tap[..room]);
         self.count(got);
 
         if got < frames
@@ -450,9 +453,10 @@ mod tests {
         rig.mixer.render(&mut out, 2);
         assert_eq!(out, [0.5, -0.5, 0.25, -0.25, 0.0, 0.0, 0.0, 0.0]);
         assert_eq!(rig.shared.position.load(Ordering::Relaxed), 2);
-        // The visualiser gets the mono mix.
-        assert_eq!(rig.vis.slots(), 2);
-        assert_eq!(rig.vis.pop().unwrap(), 0.0);
+        // The visualisers get the stereo.
+        assert_eq!(rig.vis.slots(), 4);
+        assert_eq!(rig.vis.pop().unwrap(), 0.5);
+        assert_eq!(rig.vis.pop().unwrap(), -0.5);
     }
 
     #[test]

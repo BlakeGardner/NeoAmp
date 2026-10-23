@@ -391,6 +391,21 @@ impl Vis {
         self.fresh = true;
     }
 
+    /// Add interleaved stereo samples, oldest first, as they are played. The analyser and
+    /// oscilloscope show their mono mix.
+    pub fn push_stereo(&mut self, samples: &[f32]) {
+        if samples.len() < 2 {
+            return;
+        }
+        let frames = samples.len() / 2;
+        let recent = &samples[2 * frames.saturating_sub(HISTORY)..2 * frames];
+        for lr in recent.chunks_exact(2) {
+            self.history[self.head] = 0.5 * (lr[0] + lr[1]);
+            self.head = (self.head + 1) % HISTORY;
+        }
+        self.fresh = true;
+    }
+
     /// Advance one frame: analyse the latest audio while playing, and let the bars and peaks
     /// fall the way Winamp's did.
     pub fn update(&mut self, now: Instant, playing: bool) {
@@ -739,6 +754,20 @@ mod tests {
         ramp.clear();
         v.push_samples(&ramp);
         assert!(!v.fresh, "an empty push is not new audio");
+    }
+
+    #[test]
+    fn stereo_is_shown_as_its_mono_mix() {
+        let mut v = Vis::new();
+        v.push_stereo(&[1.0, 0.0, 0.25, 0.75, -1.0]);
+        // Two whole frames; the odd sample at the end is no frame.
+        assert_eq!(v.head, 2);
+        assert_eq!(&v.history[..2], &[0.5, 0.5]);
+        // A long push keeps only the newest frames.
+        let long: Vec<f32> = (0..HISTORY * 3).map(|i| (i / 2) as f32).collect();
+        v.push_stereo(&long);
+        let newest = v.history[(v.head + HISTORY - 1) % HISTORY];
+        assert_eq!(newest, (HISTORY * 3 / 2 - 1) as f32);
     }
 
     #[test]
