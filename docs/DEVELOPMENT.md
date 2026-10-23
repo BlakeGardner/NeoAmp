@@ -393,11 +393,15 @@ that into its `Info.plist` as `LSMinimumSystemVersion`: macOS 11 for Apple
 silicon, the first macOS those Macs had, and 10.12.2 for Intel. Rust builds
 for Intel Macs back to 10.12, and souvlaki links Apple's MediaPlayer
 framework, which came in 10.12.2. Anything newer that a dependency uses
-stops NeoAmp on an older macOS: a newer function, constant or framework
-keeps it from starting at all, and a newer Objective-C method crashes it
+stops NeoAmp on an older macOS: a newer function, constant or framework can
+keep it from starting at all, and a newer Objective-C method crashes it
 when called. So check a new or updated macOS dependency for any it uses
 without first checking the macOS version, as wgpu does before using newer
-Metal features.
+Metal features. `nm -um` on the built program lists every function and
+constant it takes from macOS. cpal takes one from macOS 14.2,
+`AudioHardwareDestroyProcessTap`, for recording, which NeoAmp never does:
+`build.rs` links CoreAudio weakly, so on an older macOS it is null rather
+than missing.
 
 #### Signing and notarizing
 
