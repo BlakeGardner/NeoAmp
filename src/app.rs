@@ -1620,7 +1620,7 @@ impl App {
             }
         }
         let vis = &mut self.ui.vis;
-        player.drain_vis(|samples| vis.push_samples(samples));
+        player.drain_vis(|samples| vis.push_stereo(samples));
     }
 
     /// Bring the windows back from the taskbar, and the main window to the front.
