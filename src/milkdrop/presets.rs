@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::built_in::{BuiltIn, Category};
 use super::preset::Preset;
 
 /// A preset file larger than this is not one: it is skipped rather than read.
@@ -22,6 +23,8 @@ enum Source {
 struct Entry {
     name: String,
     source: Source,
+    /// A built-in preset's category; the user's have none.
+    category: Option<Category>,
 }
 
 /// The presets in the order they are listed: the built-in ones, then the user's, each sorted
@@ -64,6 +67,7 @@ fn scan(dir: &Path, depth: usize, out: &mut Vec<Entry>) {
             out.push(Entry {
                 name,
                 source: Source::File(path),
+                category: None,
             });
         }
     }
@@ -74,14 +78,15 @@ fn sort(entries: &mut [Entry]) {
 }
 
 impl Presets {
-    /// Just `built_in`, given as name and text.
+    /// Just `built_in`.
     #[must_use]
-    pub fn new(built_in: &[(&'static str, &'static str)]) -> Presets {
+    pub fn new(built_in: &[BuiltIn]) -> Presets {
         let mut entries: Vec<Entry> = built_in
             .iter()
-            .map(|&(name, text)| Entry {
-                name: name.to_owned(),
-                source: Source::BuiltIn(text),
+            .map(|p| Entry {
+                name: p.name.to_owned(),
+                source: Source::BuiltIn(p.text),
+                category: Some(p.category),
             })
             .collect();
         sort(&mut entries);
@@ -93,7 +98,7 @@ impl Presets {
 
     /// `built_in`, then every `.milk` file under `folder`, if there is one.
     #[must_use]
-    pub fn with_folder(built_in: &[(&'static str, &'static str)], folder: &Path) -> Presets {
+    pub fn with_folder(built_in: &[BuiltIn], folder: &Path) -> Presets {
         let mut presets = Presets::new(built_in);
         let mut found = Vec::new();
         scan(folder, 0, &mut found);
@@ -122,6 +127,12 @@ impl Presets {
     #[must_use]
     pub fn name(&self, i: usize) -> Option<&str> {
         self.entries.get(i).map(|e| e.name.as_str())
+    }
+
+    /// Preset `i`'s category, if it is built in.
+    #[must_use]
+    pub fn category(&self, i: usize) -> Option<Category> {
+        self.entries.get(i).and_then(|e| e.category)
     }
 
     /// Every name, in order.
@@ -176,9 +187,17 @@ impl Presets {
 mod tests {
     use super::*;
 
-    const BUILT_IN: &[(&str, &str)] = &[
-        ("zebra", "[preset00]\nzoom=1.1\n"),
-        ("Aardvark", "[preset00]\nzoom=0.9\n"),
+    const BUILT_IN: &[BuiltIn] = &[
+        BuiltIn {
+            name: "zebra",
+            category: Category::Waveform,
+            text: "[preset00]\nzoom=1.1\n",
+        },
+        BuiltIn {
+            name: "Aardvark",
+            category: Category::Fractal,
+            text: "[preset00]\nzoom=0.9\n",
+        },
     ];
 
     #[test]
@@ -190,6 +209,8 @@ mod tests {
         assert!((p.load(0).unwrap().values.get("zoom") - 0.9).abs() < 1e-9);
         assert!(p.path(0).is_none());
         assert!(p.load(2).is_none());
+        assert_eq!(p.category(0), Some(Category::Fractal));
+        assert_eq!(p.category(2), None);
     }
 
     #[test]
@@ -209,6 +230,7 @@ mod tests {
         );
         assert_eq!(p.built_in_count(), 2);
         assert!(p.path(3).is_some());
+        assert_eq!(p.category(3), None, "the user's presets have no category");
         assert!((mine.unwrap().values.get("zoom") - 1.5).abs() < 1e-9);
         // The files are gone now, so they cannot be read.
         assert!(p.load(2).is_none());

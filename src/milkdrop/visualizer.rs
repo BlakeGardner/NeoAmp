@@ -296,13 +296,18 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::milkdrop::built_in::{BuiltIn, Category};
 
-    const BUILT_IN: &[(&str, &str)] = &[
-        ("a", "[preset00]\n"),
-        ("b", "[preset00]\n"),
-        ("c", "[preset00]\n"),
-        ("d", "[preset00]\n"),
-    ];
+    /// An empty preset called `name`.
+    const fn preset(name: &'static str) -> BuiltIn {
+        BuiltIn {
+            name,
+            category: Category::Dancer,
+            text: "[preset00]\n",
+        }
+    }
+
+    const BUILT_IN: &[BuiltIn] = &[preset("a"), preset("b"), preset("c"), preset("d")];
 
     fn vis() -> Visualizer {
         Visualizer::new(Presets::new(BUILT_IN), 7)
@@ -403,13 +408,10 @@ mod tests {
     fn a_new_list_keeps_the_preset_showing() {
         let mut v = vis();
         v.change(Change::Select(1));
-        v.set_presets(Presets::new(&[
-            ("x", "[preset00]\n"),
-            ("b", "[preset00]\n"),
-        ]));
+        v.set_presets(Presets::new(&[preset("x"), preset("b")]));
         assert_eq!(v.current_name(), Some("b"));
         assert_eq!(v.current(), Some(0));
-        v.set_presets(Presets::new(&[("x", "[preset00]\n")]));
+        v.set_presets(Presets::new(&[preset("x")]));
         assert_eq!(v.current(), None);
         assert_eq!(v.current_name(), Some("b"), "kept in case it comes back");
         // The preset to start with is still started with, once there is a list.
