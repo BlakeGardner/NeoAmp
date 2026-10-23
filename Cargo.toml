@@ -34,6 +34,9 @@ realfft = "3"
 rfd = "0.17"
 # Waits for the file dialog's future; already used by pixels.
 pollster = "0.4"
+# Checks the WGSL that MilkDrop presets' HLSL shaders are translated to (src/milkdrop/hlsl)
+# before wgpu sees it. wgpu already builds it, with the same features.
+naga = { version = "29", features = ["wgsl-in"] }
 # Saved settings (settings.toml) in the platform's config folder.
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"

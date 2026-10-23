@@ -10,10 +10,12 @@
 //! - [`state`]: a preset while it runs: its tables of variables and compiled code.
 //! - [`draw`]: the shapes, waves, borders and motion vectors drawn over each frame.
 //! - [`engine`]: time, blending between presets, and each frame's work, for the GPU.
+//! - [`hlsl`]: presets' HLSL pixel shaders translated to WGSL.
 
 pub mod draw;
 pub mod eel;
 pub mod engine;
+pub mod hlsl;
 pub mod preset;
 pub mod sound;
 pub mod state;
