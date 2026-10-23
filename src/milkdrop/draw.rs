@@ -25,14 +25,14 @@ pub struct Vertex {
 }
 
 /// How a draw call blends with what is there.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Blend {
     Alpha,
     Add,
 }
 
 /// What a draw call draws.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// One pixel wide lines, two vertices each.
     Lines,
