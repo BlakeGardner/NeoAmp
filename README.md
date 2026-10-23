@@ -5,43 +5,34 @@
 <h1 align="center">NeoAmp</h1>
 
 <p align="center">
-  <strong>A complete recreation of Winamp, with some added modern conveniences.</strong>
+  <strong>Classic Winamp, rebuilt for today's Windows, Mac and Linux.</strong>
 </p>
 
 <p align="center">
-  Runs on <strong>Windows</strong>, <strong>Linux</strong> and <strong>macOS</strong>.
+  Every button, skin and shortcut you remember, plus what Winamp never had:
+  media keys, sharp high-res screens, and Bluetooth headphones that come and go.
 </p>
 
 <p align="center">
-  <a href="https://github.com/BlakeGardner/NeoAmp/releases">Download</a> ·
-  <a href="docs/GUIDE.md">User guide</a> ·
-  <a href="docs/SHORTCUTS.md">Shortcuts</a> ·
-  <a href="docs/ROADMAP.md">Roadmap</a>
+  <a href="https://github.com/BlakeGardner/NeoAmp/releases/latest"><strong>Download NeoAmp</strong></a>
+  ·
+  <a href="docs/GUIDE.md">User guide</a>
 </p>
 
-![NeoAmp's main window, equalizer and playlist](docs/screenshot@2x.png)
+<p align="center">
+  <img src="docs/screenshot@2x.png" alt="NeoAmp's main window, equalizer and playlist">
+</p>
 
 NeoAmp is Winamp 2.x the way you remember it: the main window, the ten-band
 equalizer and the playlist editor, drawn pixel for pixel from classic `.wsz`
 skins, docked together and snapping to each other's edges. The buttons,
-sliders, menus and shortcuts work the way Winamp's did.
+sliders, menus and shortcuts work the way Winamp's did, and where Winamp's
+behaviour was never written down, [Webamp](https://webamp.org/)'s careful
+reconstruction is the reference.
 
-Underneath, it's a new native player written in Rust, and it knows a few
-things Winamp never had to: media keys, high-resolution screens, and
-Bluetooth headphones that come and go.
-
-## The goal
-
-A modern and complete recreation of Winamp, with some added modern
-conveniences, like media key controls.
-
-- **Complete.** Every window, button, menu and keyboard shortcut of the
-  classic Winamp player, acting as it did. Where Winamp's behaviour was never
-  written down, [Webamp](https://webamp.org/)'s careful reconstruction is the
-  reference.
-- **Modern.** A native app for today's desktops and screens that fits into
-  the system around it: its media keys, its "now playing" display, its sound
-  devices.
+Underneath, it's a new native player written in Rust, made to fit the
+desktop around it: its media keys, its "now playing" display, its sound
+devices.
 
 ## Features
 
@@ -93,7 +84,7 @@ conveniences, like media key controls.
 ## Download
 
 Get NeoAmp from the
-[releases page](https://github.com/BlakeGardner/NeoAmp/releases):
+[latest release](https://github.com/BlakeGardner/NeoAmp/releases/latest):
 
 | System | Download |
 | --- | --- |
