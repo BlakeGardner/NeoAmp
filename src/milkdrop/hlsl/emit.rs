@@ -41,7 +41,7 @@ impl Texture {
         }
     }
 
-    pub(super) fn is_volume(&self) -> bool {
+    pub fn is_volume(&self) -> bool {
         matches!(self, Texture::NoiseVolLq | Texture::NoiseVolHq)
     }
 }

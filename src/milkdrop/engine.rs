@@ -45,7 +45,7 @@ pub struct ShaderInputs {
 }
 
 /// How a pass combines with what is already drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PassBlend {
     Replace,
     /// By the mesh's alpha.
@@ -203,6 +203,12 @@ impl Engine {
     /// How long the current preset will run, for presets' `progress` variable.
     pub fn set_preset_length(&mut self, seconds: Option<f64>) {
         self.preset_length = seconds;
+    }
+
+    /// The frame [`Engine::render`] last worked out.
+    #[must_use]
+    pub fn frame(&self) -> &Frame {
+        &self.frame
     }
 
     /// The preset running now, if any.

@@ -11,11 +11,14 @@
 //! - [`draw`]: the shapes, waves, borders and motion vectors drawn over each frame.
 //! - [`engine`]: time, blending between presets, and each frame's work, for the GPU.
 //! - [`hlsl`]: presets' HLSL pixel shaders translated to WGSL.
+//! - [`gpu`]: drawing each frame with wgpu, with the noise textures from [`noise`].
 
 pub mod draw;
 pub mod eel;
 pub mod engine;
+pub mod gpu;
 pub mod hlsl;
+pub mod noise;
 pub mod preset;
 pub mod sound;
 pub mod state;
