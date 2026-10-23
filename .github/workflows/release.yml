@@ -9,6 +9,9 @@
 #   2. Publish a release on GitHub whose tag is that version with a leading "v" (v0.2.0),
 #      from the web page or with `gh release create v0.2.0 --generate-notes`.
 #
+# The macOS builds are signed and notarized with secrets set once on the repository: see
+# "Signing and notarizing" in docs/DEVELOPMENT.md.
+#
 # The builds are attached only once every platform has built, so a release never ends up
 # with some of them missing. A failed run can be re-run from the Actions tab; the archives
 # replace any already attached.
@@ -111,6 +114,13 @@ jobs:
     name: macOS
     needs: version
     uses: ./.github/workflows/macos.yml
+    # For signing and notarizing the disk images: see macos.yml.
+    secrets:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
   windows:
     name: Windows
@@ -131,8 +141,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # Named one by one: the run's other artifacts (the Flatpak's crate list, the Windows
-      # installer's screenshots and logs) stay behind.
+      # Named one by one: the run's other artifacts (the Flatpak's crate list, the macOS apps
+      # before signing, the Windows installer's screenshots and logs) stay behind.
       - name: Upload the archives
         env:
           GH_TOKEN: ${{ github.token }}

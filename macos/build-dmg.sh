@@ -1,82 +1,66 @@
 #!/usr/bin/env bash
-# Builds NeoAmp.app for Apple silicon (arm64) or Intel (x86_64) Macs, and puts it in a disk
-# image whose window shows it beside a link to Applications to drag it onto:
+# Puts the NeoAmp.app that macos/build-app.sh built for Apple silicon (arm64) or Intel (x86_64)
+# Macs in a disk image whose window shows it beside a link to Applications to drag it onto:
 # target/macos/<arch>/neoamp-v<version>-macos-<arch>.dmg.
 #
 #   macos/build-dmg.sh [arm64|x86_64]
 #
-# Without an argument it builds for the Mac it runs on. It runs on a Mac, from anywhere in this
-# repository, and needs Rust's target for that kind of Mac, and resvg, which draws the icon:
+# Without an argument it packs the app for the Mac it runs on. On its own it leaves the app
+# signed ad hoc, so macOS asks before opening it the first time. Given these, it signs the app
+# and the disk image with a Developer ID, has Apple notarize the disk image and staples the
+# ticket to it, so it opens like any other app downloaded from the web:
 #
-#   rustup target add aarch64-apple-darwin    (or x86_64-apple-darwin)
-#   cargo install --locked resvg
+#   SIGN_IDENTITY     a "Developer ID Application" certificate in the keychain, by its name or
+#                     its SHA-1 hash, as `security find-identity -v -p codesigning` lists it
+#   NOTARY_PROFILE    notary service credentials saved with `xcrun notarytool store-credentials`
+#   NOTARY_KEYCHAIN   the keychain they were saved in, when it is not the login keychain
 #
-# The app is signed ad hoc, not with an Apple Developer ID, so macOS asks before opening it
-# the first time (see "macOS" in docs/GUIDE.md). The Release workflow runs this for each
-# GitHub release (.github/workflows/macos.yml).
+# See "Signing and notarizing" in docs/DEVELOPMENT.md. The Release workflow runs this for each
+# GitHub release, with all three (.github/workflows/macos.yml).
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 if [[ "$(uname -s)" != Darwin ]]; then
-    echo "build-dmg.sh: it builds a macOS app, so it runs only on a Mac" >&2
+    echo "build-dmg.sh: it makes a macOS disk image, so it runs only on a Mac" >&2
     exit 1
 fi
 arch=${1:-$(uname -m)}
 case $arch in
-    arm64) target=aarch64-apple-darwin ;;
-    x86_64) target=x86_64-apple-darwin ;;
+    arm64 | x86_64) ;;
     *)
         echo "usage: macos/build-dmg.sh [arm64|x86_64]" >&2
         exit 1
         ;;
 esac
-if ! command -v resvg >/dev/null; then
-    echo "build-dmg.sh: resvg draws the icon: install it with 'cargo install --locked resvg'" >&2
+sign=${SIGN_IDENTITY:-}
+profile=${NOTARY_PROFILE:-}
+if [[ -n $profile && -z $sign ]]; then
+    echo "build-dmg.sh: Apple notarizes only what is signed with a Developer ID: set SIGN_IDENTITY too" >&2
     exit 1
 fi
 
-plist=macos/Info.plist
-icon=resources/icons/neoamp-macos.svg
-# "path+file:///…/NeoAmp#neoamp@0.2.0", or "…#0.2.0" when the folder is named neoamp.
-pkgid=$(cargo pkgid)
-version=${pkgid##*[#@]}
-# The compiler builds for the oldest macOS the Info.plist names.
-MACOSX_DEPLOYMENT_TARGET=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist")
-export MACOSX_DEPLOYMENT_TARGET
-
 out=target/macos/$arch
+app=$out/NeoAmp.app
+if [[ ! -d $app ]]; then
+    echo "build-dmg.sh: there is no $app: build it first with 'macos/build-app.sh $arch'" >&2
+    exit 1
+fi
+version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist")
 # What the disk image holds.
 stage=$out/stage
-app=$stage/NeoAmp.app
 dmg=$out/neoamp-v$version-macos-$arch.dmg
-rm -rf "$out"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
-cargo build --release --locked --target "$target"
-cp "target/$target/release/neoamp" "$app/Contents/MacOS/NeoAmp"
+if [[ -n $sign ]]; then
+    # The hardened runtime and a timestamp from Apple's server are what notarization asks for.
+    codesign --force --sign "$sign" --options runtime --timestamp "$app"
+    codesign --verify --strict --verbose=2 "$app"
+fi
 
-cp "$plist" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy \
-    -c "Set :CFBundleShortVersionString $version" \
-    -c "Set :CFBundleVersion $version" \
-    "$app/Contents/Info.plist"
-
-# The icon, drawn at each size macOS uses.
-iconset=$out/NeoAmp.iconset
-mkdir "$iconset"
-for size in 16 32 128 256 512; do
-    resvg -w "$size" -h "$size" "$icon" "$iconset/icon_${size}x${size}.png"
-    resvg -w $((size * 2)) -h $((size * 2)) "$icon" "$iconset/icon_${size}x${size}@2x.png"
-done
-iconutil -c icns -o "$app/Contents/Resources/NeoAmp.icns" "$iconset"
-
-# Apple silicon runs only signed code. An ad hoc signature, made here, needs no Apple account;
-# it also seals the Info.plist and the icon to the program.
-codesign --force --sign - "$app"
-codesign --verify --strict --verbose=2 "$app"
-
+rm -rf "$stage" "$dmg"
+mkdir -p "$stage"
+ditto "$app" "$stage/NeoAmp.app"
 ln -s /Applications "$stage/Applications"
 # hdiutil now and then fails with "Resource busy" on GitHub's Mac runners: wait and try again.
 sync
@@ -90,4 +74,43 @@ for attempt in 1 2 3 4 5; do
     fi
     sleep $((attempt * 10))
 done
+
+if [[ -n $sign ]]; then
+    codesign --sign "$sign" --timestamp "$dmg"
+fi
+
+if [[ -n $profile ]]; then
+    notary=(--keychain-profile "$profile")
+    if [[ -n ${NOTARY_KEYCHAIN:-} ]]; then
+        notary+=(--keychain "$NOTARY_KEYCHAIN")
+    fi
+    # Apple checks the disk image and everything in it, usually within a few minutes; the
+    # property list notarytool prints at the end says whether it was accepted.
+    result=$(xcrun notarytool submit "$dmg" "${notary[@]}" --wait --output-format plist) || true
+    status=$(plutil -extract status raw - <<<"$result" 2>/dev/null) || status=
+    if [[ $status != Accepted ]]; then
+        echo "$result" >&2
+        echo "build-dmg.sh: Apple did not notarize $dmg${status:+ ($status)}" >&2
+        if id=$(plutil -extract id raw - <<<"$result" 2>/dev/null); then
+            echo "build-dmg.sh: the notary service's log says why:" >&2
+            xcrun notarytool log "$id" "${notary[@]}" >&2 || true
+        fi
+        exit 1
+    fi
+    # The ticket, stapled to the disk image, lets macOS check it without asking Apple. Apple
+    # now and then takes a little while to hand the ticket out: wait and try again.
+    for attempt in 1 2 3 4 5; do
+        if xcrun stapler staple "$dmg"; then
+            break
+        fi
+        if ((attempt == 5)); then
+            echo "build-dmg.sh: stapler could not staple the notary ticket to $dmg" >&2
+            exit 1
+        fi
+        sleep $((attempt * 15))
+    done
+    spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+elif [[ -n $sign ]]; then
+    echo "build-dmg.sh: signed, but not notarized without NOTARY_PROFILE, so macOS still asks before opening it" >&2
+fi
 echo "Built $dmg"

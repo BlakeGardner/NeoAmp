@@ -101,9 +101,9 @@ Get NeoAmp from the
 | macOS 11 or newer | a disk image, for Apple silicon or Intel |
 | Linux (x86-64) | a Flatpak bundle, or the program in a `.tar.gz` |
 
-The Windows and macOS builds aren't signed yet, so the system asks before
-running them the first time. The [user guide](docs/GUIDE.md#installing)
-shows how to get past that on each.
+The Windows build isn't signed yet, so Windows asks before running it the
+first time. The [user guide](docs/GUIDE.md#windows) shows how to get past
+that.
 
 ## Getting started
 

@@ -314,10 +314,11 @@ GitHub for each release, and only then.
 
 ### macOS app
 
-The disk image is built by `macos/build-dmg.sh`, from `macos/Info.plist` and
-the icon `resources/icons/neoamp-macos.svg`. To build it yourself on a Mac,
-add Rust's target for the kind of Mac to build for (`x86_64-apple-darwin`
-for Intel), and resvg, which draws the icon:
+The app is built by `macos/build-app.sh`, from `macos/Info.plist` and the
+icon `resources/icons/neoamp-macos.svg`, and put in a disk image by
+`macos/build-dmg.sh`. To build both yourself on a Mac, add Rust's target for
+the kind of Mac to build for (`x86_64-apple-darwin` for Intel), and resvg,
+which draws the icon:
 
 ```bash
 rustup target add aarch64-apple-darwin
@@ -327,17 +328,87 @@ rustup target add aarch64-apple-darwin
 cargo install --locked resvg
 ```
 
-Then, from the top of this repository, build for `arm64` or `x86_64`
-(without either, it builds for the Mac it runs on):
+Then, from the top of this repository, build the app for `arm64` or
+`x86_64` (without either, for the Mac it runs on):
+
+```bash
+macos/build-app.sh arm64
+```
+
+It writes `target/macos/arm64/NeoAmp.app`, signed ad hoc. Then put it in a
+disk image:
 
 ```bash
 macos/build-dmg.sh arm64
 ```
 
-It writes `target/macos/arm64/neoamp-v<version>-macos-arm64.dmg`, and leaves
-the app itself in `target/macos/arm64/stage/`. The `macOS` workflow
-(`.github/workflows/macos.yml`) builds both on GitHub for each release, and
-only then.
+It writes `target/macos/arm64/neoamp-v<version>-macos-arm64.dmg`. Signed ad
+hoc, the app is one macOS asks about before opening it the first time; the
+releases' are signed and notarized (below). The `macOS` workflow
+(`.github/workflows/macos.yml`) builds, signs and notarizes both on GitHub
+for each release, and only then.
+
+#### Signing and notarizing
+
+The Release workflow signs the app and its disk image with the Apple
+Developer account's Developer ID Application certificate, with the hardened
+runtime, and has Apple's notary service check the disk image. The ticket
+Apple hands back is stapled to it, so macOS opens NeoAmp without warning that
+it cannot check it. This needs five secrets on the GitHub repository, set
+once with the GitHub CLI from the top of this repository; a release fails,
+naming the one missing, until all five are there.
+
+**The certificate.** Only the account holder can make one: in Xcode, under
+Settings > Accounts, select the team, then Manage Certificates, + and
+Developer ID Application (or on the developer site, under Certificates, IDs &
+Profiles, from a certificate signing request made with Keychain Access). In
+Keychain Access, under My Certificates, export "Developer ID Application:
+..." with its private key as a `.p12` file, with a password, and store both:
+
+```bash
+base64 -i DeveloperID.p12 | gh secret set MACOS_CERTIFICATE
+```
+
+```bash
+gh secret set MACOS_CERTIFICATE_PASSWORD
+```
+
+The certificate lasts about 13 months; Keychain Access shows when it
+expires. Releases signed with it keep opening after that, since each
+signature carries the time it was made, but new ones need a new certificate:
+make one on the developer site, choosing the G2 Sub-CA (Xcode's Manage
+Certificates may use the older one, which expires on February 1, 2027), and
+store it the same way.
+
+**A key for the notary service.** In App Store Connect, under Users and
+Access > Integrations > App Store Connect API, generate a team key with the
+Developer role and download it (Apple lets you download it only once). Store
+the file, the key's ID, and the issuer ID shown above the list of keys:
+
+```bash
+gh secret set APPLE_API_KEY < AuthKey_XXXXXXXXXX.p8
+```
+
+```bash
+gh secret set APPLE_API_KEY_ID --body XXXXXXXXXX
+```
+
+```bash
+gh secret set APPLE_API_ISSUER --body xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+To sign and notarize a disk image on your own Mac, with the certificate in
+your login keychain, save the key for `notarytool` once:
+
+```bash
+xcrun notarytool store-credentials neoamp --key AuthKey_XXXXXXXXXX.p8 --key-id XXXXXXXXXX --issuer xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+Then name the certificate and the saved key to `build-dmg.sh`:
+
+```bash
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID1234)" NOTARY_PROFILE=neoamp macos/build-dmg.sh arm64
+```
 
 ### Windows installer
 
