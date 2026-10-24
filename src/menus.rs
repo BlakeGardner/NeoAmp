@@ -107,9 +107,12 @@ pub enum AppCommand {
     Output(usize),
     /// The chosen output device, which is not connected: it stays chosen.
     KeepOutput,
+    /// Turn the check for a new release at startup on or off.
+    CheckForUpdates,
 }
 
-/// What the menus list from disk, as it was when the menu opened.
+/// What the menus list from disk, and what the window layer keeps, as it was when the menu
+/// opened.
 #[derive(Clone, Copy, Debug)]
 pub struct Library<'a> {
     pub skins: &'a [Entry],
@@ -121,6 +124,8 @@ pub struct Library<'a> {
     /// The output devices that can be chosen by name; only listed for the menus that show
     /// them.
     pub devices: &'a [OutputDevice],
+    /// NeoAmp checks for a new release at startup.
+    pub check_updates: bool,
 }
 
 impl Default for Library<'_> {
@@ -131,6 +136,7 @@ impl Default for Library<'_> {
             presets: &[],
             has_auto_preset: false,
             devices: &[],
+            check_updates: true,
         }
     }
 }
@@ -265,6 +271,12 @@ fn options(ui: &Ui, lib: &Library<'_>) -> Vec<Item<Command>> {
         key("S&huffle", KeyCmd::ToggleShuffle, Shortcut::char('S')).checked(ui.shuffle),
         Item::separator(),
         Item::submenu("&Output Device", output_devices(ui, lib)),
+        Item::separator(),
+        Item::new(
+            "Check for &Updates at Startup",
+            Command::App(AppCommand::CheckForUpdates),
+        )
+        .checked(lib.check_updates),
     ]
 }
 
@@ -757,6 +769,24 @@ mod tests {
         let items = build(MenuKind::Options, &Ui::new(), &Library::default());
         assert_eq!(submenu(&items, "&Output Device").len(), 1);
         assert!(lists_devices(MenuKind::Main) && !lists_devices(MenuKind::Skins));
+    }
+
+    #[test]
+    fn the_options_menu_turns_the_update_check_on_and_off() {
+        let label = "Check for &Updates at Startup";
+        let items = build(MenuKind::Options, &Ui::new(), &Library::default());
+        let check = find(&items, label);
+        assert_eq!(check.mark(), Mark::Check, "on by default");
+        assert_eq!(
+            check.kind(),
+            &Kind::Command(Command::App(AppCommand::CheckForUpdates))
+        );
+        let off = Library {
+            check_updates: false,
+            ..Library::default()
+        };
+        let items = build(MenuKind::Main, &Ui::new(), &off);
+        assert_eq!(find(submenu(&items, "&Options"), label).mark(), Mark::None);
     }
 
     #[test]

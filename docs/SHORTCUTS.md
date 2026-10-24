@@ -16,8 +16,9 @@ The code is `App::key_cmd`, `App::playlist_key` and `App::milkdrop_key` in
 the Skin Museum dialog's in [src/museum_dialog.rs](../src/museum_dialog.rs)
 and [src/museum_window.rs](../src/museum_window.rs),
 the Open URL dialog's in [src/url_window.rs](../src/url_window.rs), the edit
-boxes' in [src/text_box.rs](../src/text_box.rs) and the File info dialog's in
-[src/info_window.rs](../src/info_window.rs).
+boxes' in [src/text_box.rs](../src/text_box.rs), the File info dialog's in
+[src/info_window.rs](../src/info_window.rs) and the new release dialog's in
+[src/update_window.rs](../src/update_window.rs).
 
 ## Main, equalizer and playlist windows
 
@@ -232,6 +233,16 @@ The dialog only shows a file's tags and details; its one button is Close.
 | Key | macOS | Action |
 | --- | --- | --- |
 | Enter, Escape or Space | Return, Esc or Space | Close the dialog |
+
+## New release dialog
+
+It opens at startup when NeoAmp's daily check finds a newer release (see
+[New releases](GUIDE.md#new-releases)).
+
+| Key | macOS | Action |
+| --- | --- | --- |
+| Enter | Return | Download: open the release's page and close the dialog |
+| Escape | Esc | Later: close the dialog |
 
 ## macOS differences
 

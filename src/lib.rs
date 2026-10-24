@@ -28,6 +28,8 @@
 //! - [`museum_dialog`]: the Skin Museum dialog, which finds skins in the Winamp Skin Museum
 //!   through [`museum`] and tries them on NeoAmp's own windows; [`browser`] opens the
 //!   museum's web site.
+//! - [`update`]: the check for a newer release at startup, once a day, and [`update_dialog`]
+//!   the dialog that tells of one.
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
 //! - [`now_playing`]: the system's media keys and "now playing" display; [`instance`] hands
@@ -35,7 +37,7 @@
 //!   macOS Finder opens.
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
 //!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
-//!   `info_window`, `url_window` and `museum_window`), the platform's file dialogs (`file_dialog`), the
+//!   `info_window`, `url_window`, `museum_window` and `update_window`), the platform's file dialogs (`file_dialog`), the
 //!   clipboard (`clipboard`), the windows' icon on Windows (`window_icon`) and MilkDrop's picture
 //!   in its window (`milkdrop_view`).
 
@@ -85,6 +87,9 @@ pub mod sprites;
 mod svg;
 pub mod text_box;
 pub mod ui;
+pub mod update;
+pub mod update_dialog;
+mod update_window;
 mod upscale;
 pub mod url_dialog;
 mod url_window;

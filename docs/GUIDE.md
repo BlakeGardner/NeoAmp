@@ -349,6 +349,7 @@ replacing them.
 | Main menu | the options button at the left of the title bar, or right-click | Alt+F |
 | Options menu | the `O` in the clutter bar | |
 | Output device | Options > Output Device | |
+| Check for a new release at startup, or not | Options > Check for Updates at Startup | |
 | Always on top | the `A` in the clutter bar | Ctrl+A (but in the playlist, select all) |
 | Double size (doubles the zoom) | the `D` in the clutter bar | Ctrl+D |
 | Zoom in / out / back to default | Options > Zoom | Ctrl+= / Ctrl+- / Ctrl+0 |
@@ -501,7 +502,9 @@ Windows 2000 did, grey and bevelled, whatever skin is loaded:
   Playback and Visualization submenus, and Exit.
 - **Options**: the `O` in the clutter bar (also in the main menu). Time
   elapsed or remaining, always on top, double size, the zoom, repeat and
-  shuffle, and the output device (see [Output device](#output-device)).
+  shuffle, the output device (see [Output device](#output-device)), and
+  whether NeoAmp checks for a new release at startup (see
+  [New releases](#new-releases)).
 - **Visualization**: the `V` in the clutter bar, or a right-click on the
   visualizer. The mode, and Winamp's analyzer and oscilloscope styles and
   falloff speeds.
@@ -980,13 +983,38 @@ it.
   skin's pointer at its own pixel size, smaller than the system's; NeoAmp
   enlarges it by the nearest whole number. macOS enlarges it itself.
 
+## New releases
+
+Once a day, at startup, NeoAmp asks GitHub whether a newer version has been
+released. When one has, a dialog says which:
+
+- **Download** (or Enter) opens the release's page in the browser, with its
+  downloads and what is new in it. NeoAmp never downloads or installs
+  anything itself.
+- **Skip This Version** tells of that release no more, only of a later one.
+- **Later** (or Escape, or closing the dialog) tells of it again after the
+  next day's check.
+
+The check runs in the background and never holds NeoAmp up. Without a
+network, or when GitHub's answer cannot be read, it says nothing, and the
+next start tries again. A release is told of once it has a download for
+this system and processor (an Intel or an Apple silicon Mac, say), which is
+attached a while after the release is published.
+
+The check is one request to `api.github.com`, which says only that it comes
+from NeoAmp and which version; like any web request, it shows GitHub the
+computer's IP address. To turn it off, untick Options > Check for Updates at
+Startup, or set `check = false` under `[updates]` in `settings.toml` (see
+[SETTINGS.md](SETTINGS.md#updates-checking-for-a-new-release)).
+
 ## Saved settings
 
 NeoAmp starts the way it was left: volume, balance, the equalizer, shuffle,
 repeat, the time display, the visualizer and its options, which windows are
 open, where and which are shaded, the sizes of the playlist and MilkDrop,
 MilkDrop's preset and the order of its presets, the skin, the zoom, double
-size and always on top, and the playlist with its current entry. The
+size and always on top, whether to check for new releases, and the playlist
+with its current entry. The
 playlist comes back stopped, as in Winamp. NeoAmp saves within a couple of
 seconds of a change and again on exit, so a crash loses little.
 

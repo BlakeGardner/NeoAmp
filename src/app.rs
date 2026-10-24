@@ -28,6 +28,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement as _;
 use winit::window::{Cursor, CursorIcon, CustomCursor, Fullscreen, Window, WindowId, WindowLevel};
 
 use crate::audio::{self, Location, OutputDevice, Player, Scanner};
+use crate::browser;
 use crate::canvas::{Canvas, Density, Rect};
 use crate::cursor::SkinCursor;
 use crate::dock::{self, SNAP_DISTANCE};
@@ -55,7 +56,7 @@ use crate::now_playing::{self, NowPlaying};
 use crate::playlist::{Rng, SortKey};
 use crate::playlist_file;
 use crate::popup::Popups;
-use crate::settings::{Saver, Settings, SkinChoice, Store, WindowLayout};
+use crate::settings::{Saver, Settings, SkinChoice, Store, UpdateConfig, WindowLayout};
 use crate::shortcut::Shortcut;
 use crate::skin::Skin;
 use crate::sprites::pl::TRACK_H;
@@ -63,6 +64,9 @@ use crate::ui::{
     Action, CursorMove, InfoOf, KeyCmd, ListCmd, MenuRequest, MilkdropCmd, Mods, OutputChoice,
     PlayState, Track, Transport, Ui, WindowKind,
 };
+use crate::update::{self, Check, Progress, Version};
+use crate::update_dialog::Outcome as UpdateOutcome;
+use crate::update_window::UpdateWindow;
 use crate::upscale::{Upscaler, window_to_canvas};
 use crate::url_dialog::{Outcome as UrlOutcome, Purpose as UrlPurpose};
 use crate::url_window::UrlWindow;
@@ -314,6 +318,12 @@ pub fn run(opts: Options) -> Result<()> {
     }
     let loaded = store.as_ref().and_then(Store::load_settings);
     let settings = loaded.clone().unwrap_or_default();
+    // Started early, so that the answer is likely in by the time the windows are open. A
+    // NeoAmp that handed its files over, or only took a screenshot, has returned already.
+    let updates = &settings.updates;
+    let update_check = (updates.check && update::is_due(updates.last_check, update::today()))
+        .then(|| Check::start(updates.skipped))
+        .flatten();
     let shown = match custom {
         // A skin from the command line joins the Skins menu.
         Some((skin, path)) => Shown::File(Box::new(skin), install_skin(&path, store.as_ref())),
@@ -380,6 +390,9 @@ pub fn run(opts: Options) -> Result<()> {
         url: None,
         museum: None,
         museum_listings: Listings::default(),
+        updates: settings.updates.clone(),
+        update_check,
+        update: None,
         tried: None,
         menu_skins: Vec::new(),
         menu_presets: Vec::new(),
@@ -814,6 +827,13 @@ struct App {
     museum: Option<MuseumWindow>,
     /// What the Skin Museum has listed so far, kept while the dialog is closed.
     museum_listings: Listings,
+    /// The check for a new release: whether it is on, when it was last made and the release
+    /// skipped, as saved.
+    updates: UpdateConfig,
+    /// This start's check for a new release, until it answers or fails.
+    update_check: Option<Check>,
+    /// The dialog telling of a new release, while it is open.
+    update: Option<UpdateWindow>,
     /// A skin from the Skin Museum, worn to try it on, in place of `shown`; the settings
     /// still remember `shown`.
     tried: Option<Tried>,
@@ -1053,6 +1073,13 @@ impl App {
                 }
             }
             AppCommand::KeepOutput => {}
+            AppCommand::CheckForUpdates => {
+                self.updates.check = !self.updates.check;
+                if !self.updates.check {
+                    // Turned off, nothing more is said of this start's check either.
+                    self.update_check = None;
+                }
+            }
         }
     }
 
@@ -1172,6 +1199,71 @@ impl App {
         }
         let _ = self.add_tracks(tracks, play, &mut actions);
         self.handle(actions, el);
+    }
+
+    /// Take the answer of this start's check for a new release, if it is in: remember the day,
+    /// and tell of a release worth telling of. A check that failed says nothing, and is due
+    /// again at the next start.
+    fn take_update_check(&mut self, el: &ActiveEventLoop) {
+        let Some(check) = &self.update_check else {
+            return;
+        };
+        match check.poll() {
+            Progress::Waiting => return,
+            Progress::Failed => {}
+            Progress::Answered(news) => {
+                self.updates.last_check = Some(update::today());
+                if let Some(version) = news {
+                    self.open_update(version, el);
+                }
+            }
+        }
+        self.update_check = None;
+    }
+
+    /// Tell of NeoAmp `version`, a newer release, in a dialog.
+    fn open_update(&mut self, version: Version, el: &ActiveEventLoop) {
+        let scale_factor = self
+            .pane(WindowKind::Main)
+            .map_or(1.0, |p| p.window.scale_factor());
+        // Like the other dialogs, it follows the zoom but not double size.
+        let opened = UpdateWindow::open(
+            el,
+            version,
+            self.ui.zoom.factor(),
+            scale_factor,
+            self.ui.always_on_top,
+        );
+        match opened {
+            Ok(update) => self.update = Some(update),
+            Err(e) => log::warn!("cannot tell of NeoAmp {version}: {e:#}"),
+        }
+    }
+
+    /// An event for the window of the dialog telling of a new release.
+    fn update_event(&mut self, event: WindowEvent, now: Instant) {
+        let Some(update) = self.update.as_mut() else {
+            return;
+        };
+        let focus_event = matches!(event, WindowEvent::Focused(_));
+        let version = update.version();
+        match update.window_event(event) {
+            UpdateOutcome::None | UpdateOutcome::Redraw => {}
+            UpdateOutcome::Download => {
+                browser::open(&update::release_page(version));
+                self.update = None;
+            }
+            UpdateOutcome::Skip => {
+                log::info!("skipping NeoAmp {version}");
+                self.updates.skipped = Some(version);
+                self.update = None;
+            }
+            UpdateOutcome::Close => self.update = None,
+        }
+        // A closed window reports no more focus changes, so the focus it had is lost now.
+        if self.update.is_none() || focus_event {
+            self.focus_changed(now);
+        }
     }
 
     /// Show the Skin Museum dialog beside the windows, or bring it to the front if it is open.
@@ -1340,6 +1432,7 @@ impl App {
             presets: &self.menu_presets,
             has_auto_preset,
             devices: &self.menu_devices,
+            check_updates: self.updates.check,
         };
         let items = menus::build(req.kind, &self.ui, &lib);
         self.focus_lost = None;
@@ -1372,6 +1465,7 @@ impl App {
             || self.info.as_ref().is_some_and(InfoWindow::has_focus)
             || self.url.as_ref().is_some_and(UrlWindow::has_focus)
             || self.museum.as_ref().is_some_and(MuseumWindow::has_focus)
+            || self.update.as_ref().is_some_and(UpdateWindow::has_focus)
     }
 
     /// A window of ours gained or lost the focus.
@@ -1477,6 +1571,7 @@ impl App {
             }
         }
         settings.windows = windows;
+        settings.updates = self.updates.clone();
         settings
     }
 
@@ -2928,6 +3023,10 @@ impl ApplicationHandler for App {
             self.museum_event(event, now);
             return;
         }
+        if self.update.as_ref().is_some_and(|u| u.id() == id) {
+            self.update_event(event, now);
+            return;
+        }
         if self.popups.owns(id) {
             match &event {
                 WindowEvent::KeyboardInput { event, .. } => self.menu_key(event, el),
@@ -3041,6 +3140,7 @@ impl ApplicationHandler for App {
             self.popups.tick(el, now);
             self.check_menu_focus(now);
             self.take_requests(el, now);
+            self.take_update_check(el);
             self.sync_audio(el, now);
             self.sync_now_playing(el, now);
             self.ui.tick(now);

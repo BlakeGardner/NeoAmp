@@ -42,8 +42,13 @@ naga = { version = "29", features = ["wgsl-in"] }
 # Saved settings (settings.toml) in the platform's config folder.
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
-# The Winamp Skin Museum's answers (src/museum.rs). Pure Rust.
+# The Winamp Skin Museum's answers (src/museum.rs), and GitHub's about the latest release
+# (src/update.rs). Pure Rust.
 serde_json = "1"
+# Today's date in the local time zone, for checking for a new release once a day
+# (src/update.rs). Pure Rust, and already used by env_logger. It reads the system's time zone
+# database, or on Windows, which has none, a copy built in.
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform", "serde"] }
 dirs = "6"
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
 # HTTPS for internet radio (src/http.rs), the same on every platform. ring is its crypto: it

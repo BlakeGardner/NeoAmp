@@ -83,6 +83,8 @@ devices.
   playlist are saved as you go.
 - **Looks the same everywhere.** Fonts are built in, so a skin looks
   identical on Linux, Windows and macOS.
+- **Tells you of new versions.** Once a day at startup it checks GitHub for
+  a new release, unless you turn that off.
 
 ## Download
 

@@ -9,6 +9,11 @@
 #   2. Publish a release on GitHub whose tag is that version with a leading "v" (v0.2.0),
 #      from the web page or with `gh release create v0.2.0 --generate-notes`.
 #
+# NeoAmp's check for a new release (src/update.rs) reads that tag, and tells of the release
+# once this workflow has attached a package for the system and processor NeoAmp runs on:
+# keep the tags, and the packages' names as neoamp-<tag>-<system>-<processor> then "." or
+# "-" (64-bit ARM is arm64 or aarch64). See "Release packages" in docs/DEVELOPMENT.md.
+#
 # The macOS builds are signed and notarized with secrets set once on the repository: see
 # "Signing and notarizing" in docs/DEVELOPMENT.md.
 #

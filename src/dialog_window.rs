@@ -18,6 +18,8 @@ use crate::classic::FACE;
 /// A dialog's window and the surface it is drawn on.
 pub(crate) struct DialogWindow {
     surface: Surface<OwnedDisplayHandle, Arc<Window>>,
+    /// The size the surface was last given: that of the buffers it hands out.
+    size: PhysicalSize<u32>,
 }
 
 impl std::fmt::Debug for DialogWindow {
@@ -103,7 +105,7 @@ impl DialogWindow {
         surface
             .resize(dimension_u32(size.width), dimension_u32(size.height))
             .map_err(|e| anyhow!("sizing its surface: {e}"))?;
-        Ok(DialogWindow { surface })
+        Ok(DialogWindow { surface, size })
     }
 
     pub(crate) fn id(&self) -> WindowId {
@@ -116,17 +118,24 @@ impl DialogWindow {
 
     /// The window was resized to `size`.
     pub(crate) fn resized(&mut self, size: PhysicalSize<u32>) {
-        if let Err(e) = self
+        match self
             .surface
             .resize(dimension_u32(size.width), dimension_u32(size.height))
         {
-            log::warn!("cannot resize the dialog: {e}");
+            Ok(()) => self.size = size,
+            Err(e) => log::warn!("cannot resize the dialog: {e}"),
         }
     }
 
     /// Show `canvas` in the window.
     pub(crate) fn present(&mut self, canvas: &Image) {
+        // The window can end up another size than the last resize said: macOS rounds it to
+        // whole points, so a window an odd number of pixels wide at a scale of 2 is a pixel
+        // wider than asked. The buffer follows the window as it is.
         let size = self.surface.window().inner_size();
+        if size != self.size {
+            self.resized(size);
+        }
         let mut buffer = match self.surface.buffer_mut() {
             Ok(buffer) => buffer,
             Err(e) => {
@@ -135,8 +144,9 @@ impl DialogWindow {
             }
         };
         // The window manager may have sized the window differently; the rest is plain face.
+        // Rows are as wide as the buffer, whatever the window's size.
         let face = pixel(FACE);
-        let bw = usize::try_from(size.width).unwrap_or(0);
+        let bw = usize::try_from(buffer.width().get()).unwrap_or(0);
         let cw = usize::try_from(canvas.w).unwrap_or(0);
         for (y, row) in buffer.chunks_mut(bw.max(1)).enumerate() {
             let src = canvas.data.get(y * cw * 4..(y + 1) * cw * 4).unwrap_or(&[]);

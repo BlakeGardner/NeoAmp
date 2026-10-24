@@ -24,6 +24,7 @@ use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use jiff::civil::Date;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -35,6 +36,7 @@ use crate::sprites::pl as p;
 use crate::ui::{
     DEFAULT_VOLUME, MD_DEFAULT_SIZE, OutputChoice, Track, Ui, WindowKind, db_slider, slider_db,
 };
+use crate::update::Version;
 use crate::vis::{AnalyzerOptions, ScopeOptions, VisMode};
 use crate::zoom::Zoom;
 
@@ -106,6 +108,7 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub output: Option<OutputConfig>,
+    pub updates: UpdateConfig,
 }
 
 impl Default for Settings {
@@ -128,6 +131,38 @@ impl Default for Settings {
             milkdrop: MilkdropConfig::default(),
             windows: WindowLayout::default(),
             output: None,
+            updates: UpdateConfig::default(),
+        }
+    }
+}
+
+/// The check for a new release at startup (see [`crate::update`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateConfig {
+    /// Ask GitHub, once a day, whether a newer NeoAmp has been released (Options > Check for
+    /// Updates at Startup).
+    pub check: bool,
+    /// The day GitHub last answered, in the local calendar: there is no check again that day.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub last_check: Option<Date>,
+    /// The release the user chose to skip: neither it nor an older one is told of.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub skipped: Option<Version>,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        UpdateConfig {
+            check: true,
+            last_check: None,
+            skipped: None,
         }
     }
 }
@@ -401,8 +436,8 @@ impl Settings {
         ))
     }
 
-    /// The settings the interface holds. The window layer fills in the skin and where the
-    /// windows are.
+    /// The settings the interface holds. The window layer fills in the skin, where the windows
+    /// are and the update check.
     #[must_use]
     pub fn from_ui(ui: &Ui) -> Settings {
         Settings {
@@ -459,6 +494,7 @@ impl Settings {
                 device: o.id.clone(),
                 name: o.name.clone(),
             }),
+            updates: UpdateConfig::default(),
         }
     }
 
@@ -859,6 +895,11 @@ mod tests {
                 device: "pulseaudio:bluez_output.E4_58_BC_32_2C_CE.1".into(),
                 name: "Bose QC Ultra Earbuds".into(),
             }),
+            updates: UpdateConfig {
+                check: false,
+                last_check: Some(jiff::civil::date(2026, 10, 23)),
+                skipped: Some(Version::new(0, 3, 0)),
+            },
         }
     }
 
@@ -1025,6 +1066,41 @@ mod tests {
     }
 
     #[test]
+    fn the_update_check_is_on_and_remembers_its_day_and_the_skipped_release() {
+        let defaults = Settings::from_toml("").unwrap().updates;
+        assert_eq!(defaults, UpdateConfig::default());
+        assert!(defaults.check, "on unless turned off");
+        let text = Settings::default().to_toml().unwrap();
+        assert!(text.contains("[updates]\ncheck = true\n"), "{text}");
+        assert!(!text.contains("last_check"), "{text}");
+        let checked = Settings {
+            updates: UpdateConfig {
+                check: true,
+                last_check: Some(jiff::civil::date(2026, 10, 23)),
+                skipped: Some(Version::new(0, 3, 0)),
+            },
+            ..Settings::default()
+        };
+        let text = checked.to_toml().unwrap();
+        assert!(text.contains("last_check = \"2026-10-23\"\n"), "{text}");
+        assert!(text.contains("skipped = \"0.3.0\"\n"), "{text}");
+        assert_eq!(Settings::from_toml(&text).unwrap(), checked);
+        // A day or a version that cannot be read costs only itself.
+        let s = Settings::from_toml(
+            "[updates]\ncheck = false\nlast_check = \"yesterday\"\nskipped = \"0.3\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            s.updates,
+            UpdateConfig {
+                check: false,
+                last_check: None,
+                skipped: None,
+            }
+        );
+    }
+
+    #[test]
     fn broken_files_and_wrong_types_are_rejected() {
         assert!(Settings::from_toml("volume = \"loud\"").is_err());
         assert!(Settings::from_toml("volume = ").is_err());
@@ -1067,6 +1143,7 @@ mod tests {
         expected.windows.eq.offset = None;
         expected.windows.playlist.offset = None;
         expected.windows.milkdrop.offset = None;
+        expected.updates = UpdateConfig::default();
         // Decibels go through the slider and back.
         for (got, want) in back.eq.bands.iter().zip(expected.eq.bands) {
             assert!((got - want).abs() < 1e-4, "{got} vs {want}");
