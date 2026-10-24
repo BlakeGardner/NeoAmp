@@ -49,7 +49,7 @@ Each release also has NeoAmp as a Flatpak bundle for Linux (x86-64),
 `neoamp-v<version>-linux-x86_64.flatpak`. Install it with:
 
 ```bash
-flatpak install --user neoamp-v0.2.0-linux-x86_64.flatpak
+flatpak install --user neoamp-v0.3.0-linux-x86_64.flatpak
 ```
 
 It runs on the Freedesktop 26.08 runtime, which Flatpak fetches from

@@ -24,6 +24,7 @@
       <li>M3U and PLS playlists, Jump to file and File info</li>
       <li>Windows that dock and snap together, and fold down to windowshade bars</li>
       <li>Media keys and the desktop's "now playing" controls</li>
+      <li>Opens music, playlists and skins from the file manager, in the NeoAmp that's already open</li>
     </ul>
     <p>
       NeoAmp is an independent project, not affiliated with or endorsed by the makers of
@@ -56,6 +57,7 @@
 
   <!-- Each release adds its version here, newest first; the release workflow checks it. -->
   <releases>
+    <release version="0.3.0" date="2026-10-23"/>
     <release version="0.2.0" date="2026-10-23"/>
     <release version="0.1.0" date="2026-10-22"/>
   </releases>
