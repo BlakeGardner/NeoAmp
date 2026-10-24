@@ -65,7 +65,8 @@ more (see [Environment variables](#environment-variables)).
 
 ## Example
 
-A first start writes this (the window positions depend on the screen):
+A first start writes this (the window positions depend on the screen, and
+`last_check` on the day):
 
 ```toml
 # NeoAmp settings, rewritten whenever they change. Edit them while NeoAmp is closed.
@@ -124,11 +125,16 @@ size = [275, 116]
 open = false
 shade = false
 size = [275, 232]
+
+[updates]
+check = true
+last_check = "2026-10-23"
 ```
 
 `zoom`, `skin`, MilkDrop's `preset` and the `[output]` table are written
 only once they differ from the defaults, and MilkDrop's `offset` once its
-window has been open. Choosing the Winamp base skin, for one, adds this line
+window has been open. `last_check` is written once GitHub has answered a
+check for a new release, and `skipped` once a release has been skipped. Choosing the Winamp base skin, for one, adds this line
 under `always_on_top`:
 
 ```toml
@@ -373,6 +379,35 @@ name = "Bose QC Ultra Earbuds"
   default; an `[output]` that is not a table (`output = 3`) is ignored, with a
   warning in the log.
 
+## `[updates]`: checking for a new release
+
+At startup, once a day, NeoAmp asks GitHub whether a newer version has been
+released, and says so in a dialog when one has (see
+[New releases](GUIDE.md#new-releases) in the user guide).
+
+```toml
+[updates]
+check = true
+last_check = "2026-10-23"
+skipped = "0.3.0"
+```
+
+| Key | Values | Default | What it controls |
+| --- | --- | --- | --- |
+| `check` | `true` / `false` | `true` | Whether NeoAmp checks for a new release at startup (Options > Check for Updates at Startup). |
+| `last_check` | a date in quotes, `"2026-10-23"` | none | The day GitHub last answered a check, in the computer's time zone. There is no other check that day. |
+| `skipped` | a version in quotes, `"0.3.0"` | none | The release skipped with Skip This Version. Neither it nor an older one is told of. |
+
+- **Once a day** means once per calendar day: a start on any day but
+  `last_check` checks, even a few minutes after midnight. A check that
+  failed (no network, an error from GitHub, an answer NeoAmp could not read)
+  does not count, and the next start tries again.
+- **Turning the check off** in the Options menu also stops a check still
+  waiting for its answer. Turning it on takes effect at the next start.
+- **Unusable values:** a `last_check` that is not a date, or a `skipped`
+  that is not a version of three numbers, is ignored with a warning in the
+  log, as if it were missing.
+
 ## `playlist.m3u8`
 
 The playlist is an extended M3U file, which other players can open too:
@@ -489,6 +524,8 @@ stays when the cache is cleared.
   and a skin being tried on that was not installed: `skin` keeps naming the
   one chosen before, which comes back when the dialog closes and at the next
   start.
+- Closing the dialog that tells of a new release with Later: the release is
+  told of again after the next day's check.
 
 ## The command line and the settings
 
@@ -504,12 +541,14 @@ remembered like any other change:
   skins folder. `--skin` takes only a file; the two built-in skins are chosen
   from the Skins menu.
 - `--scale` replaces the saved zoom.
-- `--screenshot` neither reads nor writes any of these files.
+- `--screenshot` neither reads nor writes any of these files, and does not
+  check for a new release.
 
 While NeoAmp runs, starting it again with the same config folder hands the
 files and skin to the running copy, which takes them in the same way (files
 replace its playlist and play, or join it with `--enqueue`) and saves them as
-usual; the new start then ends. `--scale` is not handed over. A config folder
+usual; the new start then ends, without checking for a new release. `--scale`
+is not handed over. A config folder
 of its own (`NEOAMP_CONFIG_DIR`) makes a NeoAmp of its own, which runs beside
 the others.
 

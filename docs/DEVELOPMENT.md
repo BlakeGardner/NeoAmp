@@ -156,6 +156,13 @@ program does the same:
   shell's `ShellExecuteEx` on Windows (through the
   [open](https://crates.io/crates/open) crate) and the desktop portal's
   `OpenURI` over zbus on Linux, so no command line is run.
+- `src/update.rs` checks for a new release at startup, once a day by the
+  local calendar (from [jiff](https://crates.io/crates/jiff)), on a thread
+  of its own: one `GET` of GitHub's latest release through `src/http.rs`,
+  read with serde_json. Anything that goes wrong is logged at debug level
+  and nothing more (see [New releases](GUIDE.md#new-releases)).
+  `src/update_dialog.rs` is the dialog that tells of a release, and
+  `src/update_window.rs` its window.
 - `src/audio/` plays the music (see [Audio](#audio)), internet radio included
   (`src/audio/stream.rs`, fetched by `src/http.rs`; see
   [Internet radio](#internet-radio)), and `src/vis.rs` turns the samples being
@@ -176,9 +183,10 @@ program does the same:
   playlist editing and playlist files, the skin parsers, the blitter, the
   dialogs and menus, the saved settings and playlist, the audio pipeline
   (decoding, resampling, the equalizer, and the decoder and mixer threads
-  working together), and the HTTP client, internet radio and the Skin
-  Museum's requests, against small servers the tests run on the computer
-  itself. No test reaches the real museum.
+  working together), and the HTTP client, internet radio, the Skin
+  Museum's requests and the check for a new release, against small servers
+  the tests run on the computer itself. No test reaches the real museum or
+  GitHub.
 
 ### The NeoAmp skin
 
@@ -358,6 +366,23 @@ keep opening in it:
 Publishing a release on GitHub builds every package and attaches them to it;
 the steps are at the top of `.github/workflows/release.yml`. Each package
 below can also be built by hand.
+
+NeoAmp's check for a new release (`src/update.rs`) depends on how releases
+are named. It reads the latest release's tag as `v` and the version
+(`v0.3.0`), and tells of the release only once a package for the system
+and processor that NeoAmp was built for is attached:
+`neoamp-<tag>-<system>-<processor>` followed by `.` or `-`, as in
+`neoamp-v0.3.0-macos-arm64.dmg` and `neoamp-v0.3.0-windows-x86_64-setup.exe`.
+The system is `linux`, `macos` or `windows`; the processor is `x86_64`, or
+for 64-bit ARM `arm64` (as the macOS packages have it) or `aarch64`. Keep
+the tags and the packages' names that way. Drafts and pre-releases are never
+told of: GitHub's "latest release" is neither.
+
+So a NeoAmp built for ARM Linux tells of no release until one carries a
+package such as `neoamp-<tag>-linux-arm64.tar.gz`; adding those to the
+Release workflow needs no change to NeoAmp. On a system or processor that
+has no packages under these names at all (a BSD, RISC-V), any package
+attached will do.
 
 ### Linux archive
 
