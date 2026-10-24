@@ -83,7 +83,7 @@ impl Server {
 
 /// Files opened together, gathered into one request. Explorer starts a copy of NeoAmp for
 /// each file opened together, so the files arrive one request at a time, in no particular
-/// order; they are opened once [`QUIET`] has passed without another.
+/// order; they are opened once 0.4 seconds (`QUIET`) have passed without another.
 #[derive(Debug, Default)]
 pub struct Batch {
     /// Requests with files, all replacing the playlist or all joining it.
@@ -114,7 +114,8 @@ impl Batch {
         ended
     }
 
-    /// The gathered files as one request, once [`QUIET`] has passed since the last came.
+    /// The gathered files as one request, once 0.4 seconds (`QUIET`) have passed since the last
+    /// came.
     pub fn ready(&mut self, now: Instant) -> Option<Request> {
         let quiet = self
             .last
