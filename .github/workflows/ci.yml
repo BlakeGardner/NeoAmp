@@ -1,17 +1,22 @@
 # Checks every pull request against master: formatting, Clippy and the tests on Linux,
 # Windows and macOS, the docs, and that the minimum Rust version in Cargo.toml still builds.
 #
-# It also runs on pushes to master. That checks the merged result, and it is the only run
-# that saves the build cache: GitHub lets pull requests read caches saved on the default
-# branch, so new pull requests start from master's cache instead of building everything.
+# It also runs on master once a week, to keep the build cache, which only master's runs save:
+# GitHub lets pull requests read caches saved on the default branch, so new pull requests
+# start from master's cache instead of building everything, while a pull request's own cache
+# would help only that pull request. Merging runs nothing, since each pull request is already
+# checked as if merged into master. To refresh the cache sooner, say after updating
+# dependencies, run it on master from the Actions tab.
 
 name: CI
 
 on:
   pull_request:
     branches: [master]
-  push:
-    branches: [master]
+  # Mondays at 06:17 UTC: off the hour, since GitHub can delay or drop scheduled runs at the
+  # busy start of each hour.
+  schedule:
+    - cron: "17 6 * * 1"
   workflow_dispatch:
 
 permissions:
