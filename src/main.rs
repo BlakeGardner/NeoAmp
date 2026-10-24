@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use anyhow::{Result, bail};
 use neoamp::app::{self, Options};
 use neoamp::audio::{self, Location};
+use neoamp::playlist_file;
 
 const USAGE: &str = "\
 usage: neoamp [--skin <file.wsz>] [--scale <1|1.5|2|2.5|3>] [--screenshot <out.png>]
@@ -81,8 +82,19 @@ fn parse_args(args: &[OsString]) -> Result<Option<Options>> {
             Some(psn) if cfg!(target_os = "macos") && psn.starts_with("-psn_") => {}
             Some(flag) if flag.starts_with('-') => bail!("unknown option {flag}\n\n{USAGE}"),
             Some(url) if audio::is_web_url(url) => opts.files.push(Location::from_arg(url)),
-            _ if is_skin(arg) => opts.skin = Some(PathBuf::from(arg)),
-            _ => opts.files.push(Location::File(PathBuf::from(arg))),
+            _ => {
+                // The Flatpak passes the files opened in the file manager as `file://` URLs
+                // (the `%U` in the .desktop file).
+                let path = arg
+                    .to_str()
+                    .and_then(playlist_file::file_url)
+                    .unwrap_or_else(|| PathBuf::from(arg));
+                if is_skin(path.as_os_str()) {
+                    opts.skin = Some(path);
+                } else {
+                    opts.files.push(Location::File(path));
+                }
+            }
         }
     }
     Ok(Some(opts))
@@ -176,6 +188,24 @@ mod tests {
                 Location::Url("https://radio.example/skins.wsz".into()),
                 file("b.wav"),
             ]
+        );
+    }
+
+    #[test]
+    fn file_urls_from_a_file_manager_are_paths() {
+        let opts = parse_args(&args(&[
+            "file:///music/My%20Skin.wsz",
+            "file:///music/a%20b.mp3",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            opts.skin.as_deref(),
+            Some(std::path::Path::new("/music/My Skin.wsz"))
+        );
+        assert_eq!(
+            opts.files,
+            [Location::File(PathBuf::from("/music/a b.mp3"))]
         );
     }
 

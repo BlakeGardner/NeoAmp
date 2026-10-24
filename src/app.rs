@@ -338,6 +338,9 @@ pub fn run(opts: Options) -> Result<()> {
     };
     let scanner = Scanner::new()?;
     let event_loop = build_event_loop()?;
+    // After the event loop, which sets up AppKit, and before it runs, which launches the app.
+    #[cfg(target_os = "macos")]
+    let finder = crate::macos_open::Finder::listen();
     let mut app = App {
         ui,
         player,
@@ -383,6 +386,9 @@ pub fn run(opts: Options) -> Result<()> {
         menu_devices: Vec::new(),
         now_playing: None,
         instance,
+        #[cfg(target_os = "macos")]
+        finder,
+        opened: instance::Batch::default(),
         focused: false,
         focus_lost: None,
         title: crate::ui::APP_NAME.to_owned(),
@@ -395,15 +401,21 @@ pub fn run(opts: Options) -> Result<()> {
         if let Some(tracks) = &tracks {
             app.restore_playlist(tracks, settings.playlist.current);
         }
-        let _ = app.add_tracks(playlist_file::expand(files), false, &mut Vec::new());
         tracks
     } else {
-        let mut actions = Vec::new();
-        app.add_tracks(playlist_file::expand(files), true, &mut actions);
-        app.perform_audio(actions);
-        // Replaces the saved playlist at the first save.
+        // Replaced by the files at the first save.
         None
     };
+    if !files.is_empty() {
+        // Opened with the files that copies started beside this one hand over (see
+        // `take_requests`).
+        let request = instance::Request {
+            files,
+            skin: None,
+            enqueue: opts.enqueue,
+        };
+        let _ = app.opened.add(request, Instant::now());
+    }
     app.saver = store.map(|store| Saver::new(store, loaded, saved_tracks));
     event_loop
         .run_app(&mut app)
@@ -814,6 +826,11 @@ struct App {
     now_playing: Option<NowPlaying>,
     /// Where NeoAmp started again hands over what it was asked to open.
     instance: Option<instance::Server>,
+    /// Files from the Finder's Open Documents events.
+    #[cfg(target_os = "macos")]
+    finder: Option<crate::macos_open::Finder>,
+    /// Files opened together, waiting for the rest to arrive.
+    opened: instance::Batch,
     /// One of our windows, menus included, has the keyboard focus.
     focused: bool,
     /// When the last of our windows lost the focus.
@@ -1624,15 +1641,6 @@ impl App {
         }
     }
 
-    /// Carry out the audio actions in `actions` (before the event loop runs, the only kind).
-    fn perform_audio(&mut self, actions: Vec<Action>) {
-        for a in actions {
-            if let Action::Audio(t) = a {
-                self.transport(t);
-            }
-        }
-    }
-
     /// Once per frame: take in scan results and engine events, move a fade-out on, hand the
     /// engine the current settings, and read back the position, bitrate and visualiser
     /// samples.
@@ -1700,11 +1708,12 @@ impl App {
         }
     }
 
-    /// Open what a later copy of NeoAmp was started with, and handed over before closing:
-    /// files replace the playlist and play (or join it, with `--enqueue`), and a skin is
-    /// shown. Started again with nothing to open, it brings this one to the front.
-    fn take_requests(&mut self, el: &ActiveEventLoop) {
-        while let Some(request) = self.instance.as_ref().and_then(instance::Server::poll) {
+    /// Open what a later copy of NeoAmp was started with, and handed over before closing, or
+    /// what the Finder opened: files replace the playlist and play (or join it, with
+    /// `--enqueue`), and a skin is shown. Started again with nothing to open, it brings this
+    /// one to the front. Files opened together are gathered first (see [`instance::Batch`]).
+    fn take_requests(&mut self, el: &ActiveEventLoop, now: Instant) {
+        while let Some(request) = self.next_request() {
             if let Some(skin) = &request.skin {
                 let path = install_skin(skin, self.store.as_ref());
                 self.load_skin(&path);
@@ -1715,18 +1724,50 @@ impl App {
                 }
                 continue;
             }
-            let tracks = playlist_file::expand(request.files);
-            if tracks.is_empty() {
-                log::info!("nothing playable there");
-                continue;
+            if let Some(ended) = self.opened.add(request, now) {
+                self.open_files(ended, el);
             }
-            let mut actions = Vec::new();
-            if !request.enqueue {
-                self.ui.clear_playlist(&mut actions);
-            }
-            let _ = self.add_tracks(tracks, !request.enqueue, &mut actions);
-            self.handle(actions, el);
         }
+        if let Some(batch) = self.opened.ready(now) {
+            self.open_files(batch, el);
+        }
+    }
+
+    /// The next request from a later copy of NeoAmp, or from the Finder.
+    fn next_request(&self) -> Option<instance::Request> {
+        self.instance
+            .as_ref()
+            .and_then(instance::Server::poll)
+            .or_else(|| self.finder_request())
+    }
+
+    /// The files the Finder opened next, if some have come.
+    #[cfg(target_os = "macos")]
+    fn finder_request(&self) -> Option<instance::Request> {
+        self.finder
+            .as_ref()
+            .and_then(crate::macos_open::Finder::poll)
+    }
+
+    /// Only macOS has a Finder.
+    #[cfg(not(target_os = "macos"))]
+    fn finder_request(&self) -> Option<instance::Request> {
+        None
+    }
+
+    /// Replace the playlist with `request`'s files and play them, or add them to it.
+    fn open_files(&mut self, request: instance::Request, el: &ActiveEventLoop) {
+        let tracks = playlist_file::expand(request.files);
+        if tracks.is_empty() {
+            log::info!("nothing playable there");
+            return;
+        }
+        let mut actions = Vec::new();
+        if !request.enqueue {
+            self.ui.clear_playlist(&mut actions);
+        }
+        let _ = self.add_tracks(tracks, !request.enqueue, &mut actions);
+        self.handle(actions, el);
     }
 
     /// Carry out what the system's media controls ask, and show them what plays.
@@ -2999,7 +3040,7 @@ impl ApplicationHandler for App {
             self.finish_dialog(el);
             self.popups.tick(el, now);
             self.check_menu_focus(now);
-            self.take_requests(el);
+            self.take_requests(el, now);
             self.sync_audio(el, now);
             self.sync_now_playing(el, now);
             self.ui.tick(now);

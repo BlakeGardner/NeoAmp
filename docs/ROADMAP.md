@@ -167,11 +167,26 @@ add them.
 - [x] Single instance: a file opened from the file manager while NeoAmp runs
       goes to the running copy instead of starting a second one
       ([src/instance.rs](../src/instance.rs)).
+- [x] File associations, as Winamp's installer set up: the Flatpak, the
+      macOS app and the Windows installer offer NeoAmp for audio files and
+      playlists (and skins, on macOS and Windows), with Play and Enqueue in
+      NeoAmp in Explorer's right-click menus and folders on the Dock icon
+      (see [From the file manager](GUIDE.md#from-the-file-manager)). The
+      Finder's Apple Events are taken in
+      [src/macos_open.rs](../src/macos_open.rs), and the files Explorer
+      opens one copy at a time are gathered into one playlist by
+      [src/instance.rs](../src/instance.rs). The user chose: NeoAmp offered
+      everywhere but the default only where nothing else opens a type, users
+      making it the default through the system's own settings; the macOS
+      handler's unsafe code in that one file; and all three extras (folders'
+      Play and Enqueue, files' Enqueue, the Dock icon).
 
-Left out: cover art in the "now playing" display, and files opened from the
-macOS Finder (they arrive as an Apple Event that winit does not pass on, so
-the app claims no file types). Output devices, media controls and the single
-instance were tried on Linux only.
+Left out: cover art in the "now playing" display, and Winamp's File Types
+preferences, which made Winamp the default player: Windows 10 and later and
+macOS leave that to the user. Output devices, media controls and the single
+instance were tried on Linux only; files from the Finder, and files opened
+together, on macOS only (the Windows workflow checks the installer's
+associations and files opened together, but not Explorer itself).
 
 ## Phase 8: Sharp drawing and NeoAmp's own skin
 

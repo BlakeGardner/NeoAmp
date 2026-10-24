@@ -17,7 +17,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{ListenerOptions, Name};
@@ -35,6 +35,12 @@ const MAX_ITEMS: u32 = 1 << 20;
 const MAX_ITEM: u32 = 1 << 16;
 /// How long a later copy waits for the running one before starting on its own.
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the running copy waits after a request for more to follow before opening what it
+/// has: Windows' Explorer starts a copy of NeoAmp for each of the files opened together.
+const QUIET: Duration = Duration::from_millis(400);
+/// A request this soon after the last of a batch that several copies sent joins its playlist
+/// rather than replacing it: one of the same files, later than the others.
+const LATE: Duration = Duration::from_secs(1);
 
 /// What a later copy asks of the running one: its command line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -72,6 +78,69 @@ impl Server {
     /// The next request from a later copy, if one has come.
     pub fn poll(&self) -> Option<Request> {
         self.requests.try_recv().ok()
+    }
+}
+
+/// Files opened together, gathered into one request. Explorer starts a copy of NeoAmp for
+/// each file opened together, so the files arrive one request at a time, in no particular
+/// order; they are opened once [`QUIET`] has passed without another.
+#[derive(Debug, Default)]
+pub struct Batch {
+    /// Requests with files, all replacing the playlist or all joining it.
+    requests: Vec<Request>,
+    /// When the last request came.
+    last: Option<Instant>,
+    /// Until when a request that would replace the playlist joins it instead, after a batch
+    /// from several copies.
+    late_until: Option<Instant>,
+}
+
+impl Batch {
+    /// Gather `request`'s files, at `now`; its skin is not kept. A request that joins the
+    /// playlist where the others replace it, or the other way round, first ends the batch,
+    /// returned to be opened at once.
+    pub fn add(&mut self, mut request: Request, now: Instant) -> Option<Request> {
+        request.skin = None;
+        if self.requests.is_empty() && self.late_until.is_some_and(|until| now < until) {
+            request.enqueue = true;
+            self.late_until = Some(now + LATE);
+        }
+        let ended = match self.requests.first() {
+            Some(first) if first.enqueue != request.enqueue => self.finish(),
+            _ => None,
+        };
+        self.requests.push(request);
+        self.last = Some(now);
+        ended
+    }
+
+    /// The gathered files as one request, once [`QUIET`] has passed since the last came.
+    pub fn ready(&mut self, now: Instant) -> Option<Request> {
+        let quiet = self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) >= QUIET);
+        if quiet { self.finish() } else { None }
+    }
+
+    /// The gathered files as one request. Requests from several copies came in no order, so
+    /// they are sorted by the path of their first file, ignoring case, the way Explorer
+    /// usually lists them.
+    fn finish(&mut self) -> Option<Request> {
+        let mut requests = std::mem::take(&mut self.requests);
+        let enqueue = requests.first()?.enqueue;
+        if requests.len() > 1 {
+            self.late_until = self.last.map(|last| last + LATE);
+            requests.sort_by_cached_key(|r| match r.files.first() {
+                Some(Location::File(path)) => path.to_string_lossy().to_lowercase(),
+                Some(Location::Url(url)) => url.to_lowercase(),
+                None => String::new(),
+            });
+        }
+        Some(Request {
+            files: requests.into_iter().flat_map(|r| r.files).collect(),
+            skin: None,
+            enqueue,
+        })
     }
 }
 
@@ -448,6 +517,66 @@ mod tests {
         let mut cut = encode(&request());
         cut.truncate(cut.len() - 3);
         assert!(decode(&mut cut.as_slice()).is_err());
+    }
+
+    fn opened(paths: &[&str], enqueue: bool) -> Request {
+        Request {
+            files: paths
+                .iter()
+                .map(|p| Location::File(PathBuf::from(p)))
+                .collect(),
+            skin: None,
+            enqueue,
+        }
+    }
+
+    #[test]
+    fn files_opened_together_are_one_playlist_in_name_order() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut batch = Batch::default();
+        assert_eq!(batch.add(opened(&["/m/02.mp3"], false), at(0)), None);
+        assert_eq!(batch.add(opened(&["/m/03.mp3"], false), at(150)), None);
+        assert_eq!(batch.add(opened(&["/M/01.mp3"], false), at(300)), None);
+        // Each arrival puts it off again.
+        assert_eq!(batch.ready(at(500)), None);
+        assert_eq!(
+            batch.ready(at(700)),
+            Some(opened(&["/M/01.mp3", "/m/02.mp3", "/m/03.mp3"], false))
+        );
+        assert_eq!(batch.ready(at(800)), None);
+        // One copy late with its file joins the playlist instead of replacing it.
+        assert_eq!(batch.add(opened(&["/m/04.mp3"], false), at(1100)), None);
+        assert_eq!(batch.ready(at(1500)), Some(opened(&["/m/04.mp3"], true)));
+    }
+
+    #[test]
+    fn one_request_keeps_its_order_and_the_next_replaces_it() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut batch = Batch::default();
+        let mut request = opened(&["/m/b.mp3", "/m/a.mp3"], false);
+        request.skin = Some(PathBuf::from("/s/a.wsz"));
+        assert_eq!(batch.add(request, at(0)), None);
+        assert_eq!(
+            batch.ready(at(400)),
+            Some(opened(&["/m/b.mp3", "/m/a.mp3"], false))
+        );
+        assert_eq!(batch.add(opened(&["/m/c.mp3"], false), at(500)), None);
+        assert_eq!(batch.ready(at(900)), Some(opened(&["/m/c.mp3"], false)));
+    }
+
+    #[test]
+    fn enqueueing_ends_a_batch_that_replaces() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut batch = Batch::default();
+        assert_eq!(batch.add(opened(&["/m/a.mp3"], false), at(0)), None);
+        assert_eq!(
+            batch.add(opened(&["/m/b.mp3"], true), at(100)),
+            Some(opened(&["/m/a.mp3"], false))
+        );
+        assert_eq!(batch.ready(at(500)), Some(opened(&["/m/b.mp3"], true)));
     }
 
     #[test]

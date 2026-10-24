@@ -130,6 +130,15 @@ pub(crate) fn entry_location(raw: &[u8], base: &Path) -> Option<Location> {
     entry_path(raw, base).map(Location::File)
 }
 
+/// The file a `file:` URL names, the way the Flatpak passes the files opened in the file
+/// manager (the `%U` in NeoAmp's `.desktop` file): `file:///music/a%20b.mp3` gives
+/// `/music/a b.mp3`. `None` for anything else, and for a network share outside Windows
+/// (logged).
+#[must_use]
+pub fn file_url(text: &str) -> Option<PathBuf> {
+    strip_prefix_ignore_case(text.as_bytes(), b"file:").and_then(file_url_path)
+}
+
 /// The file a playlist entry that is not a URL names, with relative paths taken from `base`.
 fn entry_path(raw: &[u8], base: &Path) -> Option<PathBuf> {
     let path = local_path(raw, base);

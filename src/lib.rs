@@ -31,7 +31,8 @@
 //! - [`settings`]: what is remembered between runs (`settings.toml`), with the playlist kept as
 //!   an extended M3U file ([`m3u`]), and the skins and presets folders ([`library`]).
 //! - [`now_playing`]: the system's media keys and "now playing" display; [`instance`] hands
-//!   files opened while NeoAmp runs to the running copy.
+//!   files opened while NeoAmp runs to the running copy, and `macos_open` takes the files the
+//!   macOS Finder opens.
 //! - [`app`]: the winit + pixels desktop windows, presented through `upscale`, the windows of
 //!   the menus (`popup`) and of the dialogs (`dialog_window`, with `jump_window`,
 //!   `info_window`, `url_window` and `museum_window`), the platform's file dialogs (`file_dialog`), the
@@ -61,6 +62,8 @@ mod jump_window;
 pub mod library;
 pub mod list_box;
 pub mod m3u;
+#[cfg(target_os = "macos")]
+mod macos_open;
 mod main_window;
 pub mod menu;
 pub mod menus;
