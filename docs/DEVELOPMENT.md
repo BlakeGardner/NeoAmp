@@ -161,9 +161,10 @@ program does the same:
   [Internet radio](#internet-radio)), and `src/vis.rs` turns the samples being
   played into the spectrum analyzer and oscilloscope.
 - `src/now_playing.rs` joins the system's media controls through
-  [souvlaki](https://crates.io/crates/souvlaki), and `src/instance.rs` hands
+  [souvlaki](https://crates.io/crates/souvlaki), `src/instance.rs` hands
   files to a NeoAmp that is already running (see
-  [Single instance](#single-instance)).
+  [Single instance](#single-instance)), and `src/macos_open.rs` takes the
+  files the macOS Finder opens (see [File associations](#file-associations)).
 - `src/font.rs` draws text in the built-in fonts with
   [fontdue](https://crates.io/crates/fontdue), not through the system, so the
   same font gives the same pixels everywhere.
@@ -312,6 +313,45 @@ The running copy listens on a local socket named after its config folder,
 through [interprocess](https://crates.io/crates/interprocess): a Unix domain
 socket in `$XDG_RUNTIME_DIR` on Linux (the config folder without one), in
 the user's own temporary folder on macOS, and a named pipe on Windows.
+
+What arrives goes through `instance::Batch`, which gathers files opened close
+together into one request: it waits until 0.4 seconds pass with nothing more,
+sorts the requests by their first file's path when several copies sent them
+(Explorer starts one per file, and they arrive in no order), and makes a
+request within a second after such a batch join its playlist rather than
+replace it. The first copy's own files go through it too, so files from
+copies started beside it join them.
+
+### File associations
+
+Each package tells its platform which files NeoAmp opens: `MimeType` in
+`resources/io.github.BlakeGardner.NeoAmp.desktop` (the Flatpak),
+`CFBundleDocumentTypes` and `UTImportedTypeDeclarations` in
+`macos/Info.plist`, and the `[Registry]` section of `windows/neoamp.iss`. A new
+format goes into all three. On Linux and Windows the files come on the
+command line; Flatpak passes them as `file://` URLs, which `src/main.rs`
+turns into paths. The Finder instead sends an Open Documents Apple Event, to
+a running app and to one it launches for the purpose. winit 0.30 passes no
+such event on, and panics if its application delegate is replaced, so
+`src/macos_open.rs` installs a handler with `NSAppleEventManager` when
+AppKit posts `NSApplicationWillFinishLaunchingNotification`, as Apple says to.
+That needs an Objective-C class and two calls naming its methods by
+selector: NeoAmp's only unsafe code, and why `unsafe_code` is `deny` rather
+than `forbid` in `Cargo.toml`, so that this one file can allow it.
+
+To try the macOS side, build the app and open files with it, which sends the
+same event a double-click does (and registers the app with Launch Services):
+
+```bash
+open -a target/macos/arm64/NeoAmp.app ~/Music/some-album
+```
+
+Take the build out of Launch Services again afterwards, so that skins do not
+keep opening in it:
+
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u target/macos/arm64/NeoAmp.app
+```
 
 ## Release packages
 
@@ -483,4 +523,6 @@ powershell -ExecutionPolicy Bypass -File windows\package.ps1
 It writes the installer and the zip to `target\windows\`. The `Windows`
 workflow (`.github/workflows/windows.yml`) builds them on GitHub for each
 release, and only then. It also tries the installer there: installs it,
-starts NeoAmp, takes a screenshot, and uninstalls it.
+checks the file associations' registry keys, starts NeoAmp, takes a
+screenshot, opens three files together the way Explorer does, and uninstalls
+it, checking that a skin opener set by another program meanwhile is kept.

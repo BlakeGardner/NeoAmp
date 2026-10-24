@@ -36,6 +36,137 @@
 	<string>0.0.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- The files the Finder offers to open with NeoAmp (src/macos_open.rs takes them). It
+	     opens audio and playlists only when chosen, under Open With or as the default, and
+	     skins whenever nothing else claims them. Folders it never opens, but takes when
+	     dropped onto its Dock icon. MP4 files are left out, being mostly films, and MP1
+	     files, which macOS has no type for. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Audio file</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.mp3</string>
+				<string>public.mp2</string>
+				<string>public.aac-audio</string>
+				<string>com.apple.m4a-audio</string>
+				<string>com.apple.protected-mpeg-4-audio-b</string>
+				<string>com.microsoft.waveform-audio</string>
+				<string>public.aiff-audio</string>
+				<string>public.aifc-audio</string>
+				<string>org.xiph.flac</string>
+				<string>org.xiph.ogg-audio</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Playlist</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.m3u-playlist</string>
+				<string>public.pls-playlist</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Winamp classic skin</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.nullsoft.winamp-skin</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Folder</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>None</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.folder</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Types macOS may not know: skins always, FLAC and Ogg before recent versions. Where
+	     macOS (or another app) declares one already, its declaration wins. -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.nullsoft.winamp-skin</string>
+			<key>UTTypeDescription</key>
+			<string>Winamp classic skin</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>wsz</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.xiph.flac</string>
+			<key>UTTypeDescription</key>
+			<string>FLAC audio</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.audio</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>flac</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>audio/flac</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>org.xiph.ogg-audio</string>
+			<key>UTTypeDescription</key>
+			<string>Ogg audio</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.audio</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ogg</string>
+					<string>oga</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>audio/ogg</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 	<!-- What macOS's permission prompts say when NeoAmp first opens a file in one of these
 	     places, or connects to a server on the local network. -->
 	<key>NSDesktopFolderUsageDescription</key>

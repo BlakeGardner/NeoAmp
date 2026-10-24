@@ -75,6 +75,10 @@ devices.
 - **Follows your headphones.** Pick any output device. When it goes away,
   playback moves to the default and comes back when it returns, without
   losing its place.
+- **Opens from your file manager.** Double-click music, playlists and skins,
+  or choose NeoAmp under Open With, and they play in the NeoAmp that's
+  already open. Explorer gets Winamp's Play and Enqueue in NeoAmp, the Mac
+  its Dock icon.
 - **Remembers everything.** Volume, equalizer, skin, window positions and the
   playlist are saved as you go.
 - **Looks the same everywhere.** Fonts are built in, so a skin looks

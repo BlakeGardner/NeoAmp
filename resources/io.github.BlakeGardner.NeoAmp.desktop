@@ -8,6 +8,6 @@ Icon=io.github.BlakeGardner.NeoAmp
 Terminal=false
 Categories=AudioVideo;Audio;Player;
 Keywords=music;audio;player;mp3;flac;playlist;radio;shoutcast;icecast;skin;
-MimeType=audio/mpeg;audio/mp2;audio/aac;audio/mp4;audio/x-m4b;audio/vnd.wave;audio/x-aiff;audio/flac;audio/ogg;audio/x-vorbis+ogg;audio/x-mpegurl;application/vnd.apple.mpegurl;audio/x-scpls;
+MimeType=audio/mpeg;audio/mp2;audio/aac;audio/mp4;audio/x-m4b;audio/vnd.wave;audio/x-wav;audio/x-aiff;audio/x-aifc;audio/flac;audio/ogg;audio/x-vorbis+ogg;audio/x-mpegurl;application/vnd.apple.mpegurl;audio/x-scpls;
 StartupWMClass=neoamp
 SingleMainWindow=true

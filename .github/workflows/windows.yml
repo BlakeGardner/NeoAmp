@@ -1,6 +1,7 @@
 # Builds NeoAmp for Windows with windows/package.ps1: the installer (Inno Setup, from
 # windows/neoamp.iss) and a zip of the program. It then tries the installer: installs it
-# silently, starts NeoAmp, takes a screenshot of the desktop, and uninstalls it again.
+# silently, checks its file associations, starts NeoAmp, takes a screenshot of the desktop,
+# opens three files together the way Explorer does, and uninstalls it again.
 #
 # It runs only for releases: release.yml calls it for every GitHub release and attaches the
 # installer and the zip to the release with the other builds.
@@ -60,6 +61,9 @@ jobs:
           $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/LOG=$shots\install.log" -PassThru -Wait
           if ($p.ExitCode -ne 0) { throw "the installer failed with code $($p.ExitCode)" }
           foreach ($path in $exe, $uninstallKey, 'HKCU:\Software\Classes\NeoAmp.wsz\shell\open\command',
+                   'HKCU:\Software\Classes\NeoAmp.mp3\shell\open\command', 'HKCU:\Software\Classes\.flac\OpenWithProgids',
+                   'HKCU:\Software\NeoAmp\Capabilities\FileAssociations', 'HKCU:\Software\Classes\Directory\shell\NeoAmp.play\command',
+                   'HKCU:\Software\Classes\SystemFileAssociations\.mp3\shell\NeoAmp.enqueue\command',
                    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\NeoAmp.lnk')) {
             if (-not (Test-Path $path)) { throw "the installer did not make $path" }
           }
@@ -126,6 +130,31 @@ jobs:
           '@
           $windows = @([NeoAmpWindows]::Describe($p.Id))
 
+          # Files opened together, as Explorer opens them: a copy of NeoAmp for each, all at
+          # once, which the running one gathers into one playlist in the order of their names.
+          function New-Wav([string] $path) {
+            # A second of silence: 8000 Hz, 16-bit, mono.
+            $data = [byte[]]::new(16000)
+            $w = [IO.BinaryWriter]::new([IO.File]::Create($path))
+            $w.Write([Text.Encoding]::ASCII.GetBytes('RIFF')); $w.Write([int](36 + $data.Length))
+            $w.Write([Text.Encoding]::ASCII.GetBytes('WAVEfmt ')); $w.Write([int]16)
+            $w.Write([int16]1); $w.Write([int16]1); $w.Write([int]8000); $w.Write([int]16000)
+            $w.Write([int16]2); $w.Write([int16]16)
+            $w.Write([Text.Encoding]::ASCII.GetBytes('data')); $w.Write([int]$data.Length); $w.Write($data)
+            $w.Close()
+          }
+          $music = (New-Item -ItemType Directory (Join-Path $env:RUNNER_TEMP 'music') -Force).FullName
+          $names = '03 Three.wav', '01 One.wav', '02 Two.wav'
+          foreach ($name in $names) { New-Wav (Join-Path $music $name) }
+          $copies = foreach ($name in $names) { Start-Process $exe -ArgumentList ('"' + (Join-Path $music $name) + '"') -PassThru }
+          # Each hands its file over and ends; the playlist is saved within two seconds.
+          foreach ($copy in $copies) { $null = $copy.WaitForExit(30000) }
+          Start-Sleep -Seconds 4
+          $playlistFile = Join-Path $env:APPDATA 'NeoAmp\playlist.m3u8'
+          $opened = if (Test-Path $playlistFile) {
+            (Get-Content $playlistFile | Where-Object { $_ -and $_ -notmatch '^#' } | ForEach-Object { Split-Path $_ -Leaf }) -join ', '
+          }
+
           $running = -not $p.HasExited
           if ($running) { Stop-Process -Id $p.Id -Force; $p.WaitForExit() }
           Get-Content "$shots\neoamp.log"
@@ -134,12 +163,34 @@ jobs:
           if (Select-String -Path "$shots\neoamp.log" -Pattern '^Error:' -Quiet) { throw 'NeoAmp could not start' }
           if ($windows.Count -eq 0) { throw 'NeoAmp showed no windows' }
           if ($windows -match 'False') { throw 'a NeoAmp window has no icon' }
+          Write-Output "Files opened together became the playlist: $opened"
+          if ($opened -ne '01 One.wav, 02 Two.wav, 03 Three.wav') { throw 'the files opened together are not one playlist, in order' }
+
+          # The extensions NeoAmp opens on a double-click, having found no other program for
+          # them: skins among them, since GitHub's machines have no Winamp. Another program then
+          # takes skins over, as one installed later would: uninstalling must leave it that,
+          # and take NeoAmp off the rest.
+          $classes = 'HKCU:\Software\Classes'
+          $ours = @((Get-Item 'HKCU:\Software\NeoAmp\Capabilities\FileAssociations').Property | Where-Object {
+            (Get-ItemProperty "$classes\$_" -ErrorAction SilentlyContinue).'(default)' -like 'NeoAmp.*'
+          })
+          Write-Output "NeoAmp opens these on a double-click: $($ours -join ' ')"
+          if ($ours -notcontains '.wsz') { throw 'the installer did not make NeoAmp open skins' }
+          Set-ItemProperty "$classes\.wsz" -Name '(default)' -Value 'Other.wsz'
 
           # The uninstaller hands over to a copy of itself and returns at once: wait for that.
           Start-Process (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           for ($i = 0; $i -lt 60 -and (Test-Path $app); $i++) { Start-Sleep -Seconds 1 }
-          foreach ($path in $app, $uninstallKey, 'HKCU:\Software\Classes\NeoAmp.wsz') {
+          foreach ($path in $app, $uninstallKey, 'HKCU:\Software\Classes\NeoAmp.wsz', 'HKCU:\Software\Classes\NeoAmp.mp3',
+                   'HKCU:\Software\NeoAmp', 'HKCU:\Software\Classes\Directory\shell\NeoAmp.play',
+                   'HKCU:\Software\Classes\SystemFileAssociations\.mp3\shell\NeoAmp.enqueue') {
             if (Test-Path $path) { throw "the uninstaller left $path" }
+          }
+          $skinOpener = (Get-ItemProperty "$classes\.wsz" -ErrorAction SilentlyContinue).'(default)'
+          if ($skinOpener -ne 'Other.wsz') { throw "the uninstaller took skins from the program that opens them now (left: $skinOpener)" }
+          Remove-Item "$classes\.wsz" -Recurse
+          foreach ($ext in $ours | Where-Object { $_ -ne '.wsz' }) {
+            if ((Get-ItemProperty "$classes\$ext" -ErrorAction SilentlyContinue).'(default)') { throw "the uninstaller left NeoAmp opening $ext files" }
           }
           Write-Output 'Installed, ran and uninstalled NeoAmp'
       - name: Keep the screenshots and logs

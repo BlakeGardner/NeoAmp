@@ -110,10 +110,10 @@ from the internet.
 
 The app works as NeoAmp does otherwise, with these differences:
 
-- **Files from the Finder** (double-clicked, Open With, or dropped onto the
-  Dock icon) do not reach NeoAmp, so the app offers to open no file types
-  (see [Limitations](#limitations)). Drop them onto one of its windows, pick
-  them with Eject, or name them on the command line.
+- **Files from the Finder.** The Finder offers NeoAmp under Open With for
+  audio files and playlists, and opens skins in it, and files and folders
+  dropped onto its Dock icon play (see
+  [From the file manager](#from-the-file-manager)).
 - **Permission prompts.** macOS asks once before NeoAmp reads files on the
   Desktop, in Documents or Downloads, or on a removable or network drive, and
   before it first connects to a server on the local network.
@@ -145,21 +145,28 @@ administrator and puts NeoAmp in `%LOCALAPPDATA%\Programs\NeoAmp\`, or for
 everyone using the computer, in `C:\Program Files\NeoAmp\`. It then:
 
 - adds NeoAmp to the Start menu, and to the desktop if asked;
-- opens classic skins (`.wsz`) in NeoAmp when they are double-clicked, unless
-  another program (Winamp, say) opens them already, and lists NeoAmp under
-  Open with for them;
+- lists NeoAmp under Open with, and in Settings > Apps > Default apps, for
+  audio files, playlists and classic skins (`.wsz`), and opens them on a
+  double-click where no other program does already (see
+  [From the file manager](#from-the-file-manager));
+- adds **Play in NeoAmp** and **Enqueue in NeoAmp** to folders' right-click
+  menus, and **Enqueue in NeoAmp** to audio files' and playlists', unless that
+  box is unticked;
 - adds NeoAmp to Settings > Apps > Installed apps, to uninstall it from.
 
 A later release's installer installs over it, closing NeoAmp if it is
-running. Uninstalling leaves the settings, skins and presets in
-`%APPDATA%\NeoAmp\`; delete that folder to remove them too.
+running. Uninstalling removes NeoAmp from Open with, Default apps and the
+right-click menus, and stops it opening files on a double-click, except where
+another program has taken a kind of file over since, which keeps it. A
+default chosen in Windows' own settings is Windows' to keep: it asks again
+the next time such a file is opened. Uninstalling leaves the settings, skins
+and presets in `%APPDATA%\NeoAmp\`; delete that folder to remove them too.
 
 NeoAmp works on Windows as it does otherwise, with these differences:
 
-- **Audio files and folders from Explorer** are not offered to NeoAmp yet.
-  Explorer starts the program once for each file opened together, and NeoAmp
-  would keep only the last of them. Drop them onto one of its windows, pick
-  them with Eject, or name them on the command line.
+- **Files opened together.** Explorer starts `neoamp.exe` once for each of
+  them, up to 100, and the running NeoAmp gathers them into one playlist (see
+  [NeoAmp already running](#neoamp-already-running)).
 - **The command line.** `neoamp.exe` is a windowed program, so it opens no
   console window, and a terminal neither waits for it nor shows what it
   writes. `--help`, and any error that stops it starting, show in a message
@@ -174,9 +181,10 @@ NeoAmp works on Windows as it does otherwise, with these differences:
 ## Opening music
 
 Drop files, folders or playlists onto any window to add them to the
-playlist; they start playing if nothing is. Eject, **L**, or a file given on
-the command line replaces the playlist instead, as Winamp's "Open file(s)"
-did. Without any, the playlist from last time comes back.
+playlist; they start playing if nothing is. Eject, **L**, a file given on
+the command line, or one opened from the file manager replaces the playlist
+instead, as Winamp's "Open file(s)" did. Without any, the playlist from last
+time comes back.
 
 ### Opening files
 
@@ -258,6 +266,36 @@ neoamp --scale 2
 `neoamp --help` lists every option. The Flatpak, the macOS app and the
 Windows program take the same options (see [Installing](#installing)).
 
+### From the file manager
+
+The Flatpak, the macOS app and the Windows installer make NeoAmp known to the
+file manager for audio files (MP3, MP2, AAC, M4A and M4B, WAV, AIFF, FLAC,
+Ogg Vorbis, and MP1 on Windows), playlists (M3U, M3U8, PLS) and, on macOS and
+Windows, classic skins (`.wsz`). Opened in NeoAmp, by a double-click or with
+Open With, audio files and playlists replace the playlist and play, as on
+the command line, and a skin is worn. MP4 files are not offered, being
+mostly films.
+
+NeoAmp opens a kind of file on a double-click only where no other program
+does already, as for skins on a computer without Winamp. Where another
+program opens them, it stays the default until you choose NeoAmp:
+
+- **Windows:** right-click a file, choose Open with > Choose another app,
+  pick NeoAmp and choose to always use it; or go to Settings > Apps >
+  Default apps, then NeoAmp, to choose it for each type. Windows may also ask the
+  next time such a file is opened. **Play in NeoAmp** and **Enqueue in
+  NeoAmp** on folders' right-click menu, and **Enqueue in NeoAmp** on audio
+  files' and playlists', work whichever program opens them (on Windows 11
+  they are under Show more options); Enqueue adds to the end of the playlist
+  without interrupting what plays.
+- **macOS:** select a file, choose File > Get Info, pick NeoAmp under "Open
+  with" and click Change All. Files and folders dropped onto NeoAmp's Dock
+  icon play too; the Finder never opens folders in NeoAmp otherwise.
+- **Linux:** the Flatpak's desktop file lists the audio and playlist types,
+  so the file manager offers NeoAmp under Open With, and its Open With dialog
+  can make NeoAmp the default. The Linux archive holds only the program, so
+  the file manager does not know about it.
+
 ### NeoAmp already running
 
 Only one NeoAmp runs at a time, as with Winamp: a file opened from the file
@@ -270,6 +308,14 @@ nothing to open brings the running one to the front. NeoAmps with different
 config folders (`NEOAMP_CONFIG_DIR`) run side by side. If the running copy
 does not answer within five seconds, the new one starts anyway. File names
 travel byte for byte, so names that are not valid Unicode arrive intact.
+
+Files that arrive close together are opened together: NeoAmp waits until
+0.4 seconds pass with nothing more, then plays them as one playlist. Windows'
+Explorer starts a copy of NeoAmp for each file of a selection, and they hand
+their files over in no particular order, so files from several copies are
+put in the order of their paths, ignoring case. A copy arriving within a
+second after that, later than the rest, adds its file to the end instead of
+replacing them.
 
 ## Controls
 
@@ -1025,15 +1071,8 @@ Where the platforms differ:
   open.
 - Gapless playback leaves out streams and files shorter than half a second
   (see [Gapless playback](#gapless-playback)).
-- On macOS, files opened from the Finder (double-clicked, Open With, or
-  dropped onto the Dock icon) do not reach NeoAmp: macOS sends them to the
-  running app as an Apple Event, which winit does not pass on, so the app
-  offers to open no file types (see [macOS](#macos)). Dropping files
-  onto its windows and opening them from the command line work.
-- On Windows, the installer does not offer NeoAmp for audio files and
-  folders in Explorer, only for skins: Explorer starts the program once for
-  each file opened together, and NeoAmp would keep only the last (see
-  [Windows](#windows)).
+- Explorer opens at most 100 files together in NeoAmp. The Linux Flatpak is
+  not offered for skins, which have no standard file type there.
 - The "now playing" display shows no cover art.
 - MilkDrop shows no song titles or other text over the picture, and has no
   preset editor, mash-ups or desktop mode. A few presets' shaders (5 of the
